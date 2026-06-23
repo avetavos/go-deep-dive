@@ -1,6 +1,27 @@
 ---
 title: Go Deep Dive
-description: Master the Go language from the ground up.
+description: "เชี่ยวชาญภาษา Go — ตั้งแต่ goroutine แรกไปจนถึง production patterns"
 template: splash
 ---
-Coming soon.
+
+## ยินดีต้อนรับสู่ Go Deep Dive
+
+คอร์สนี้สอน Go ในเชิงลึก — บนพื้นฐานของภาษา Go เอง ไม่ใช่การเปรียบเทียบกับภาษาอื่น คุณจะเรียนรู้โมเดล concurrency แบบ CSP, type system ที่เข้มแข็ง, และ toolchain ที่ครบครัน ซึ่งทำให้ Go เป็นภาษาที่เลือกใช้สำหรับระบบ production ที่ต้องการประสิทธิภาพสูง
+
+### วิธีใช้คอร์สนี้
+
+เรียนเป็นลำดับตามโมดูล แต่ละบทเรียนมี snippet ที่รันได้ใน browser, quiz ตรวจสอบความเข้าใจ, และปุ่มทำเครื่องหมายเสร็จสิ้น เริ่มจาก **Basics & Syntax** แล้วไล่ขึ้นไปจนถึง **Concurrency** และ **Testing & Tooling**
+
+## ภาพรวมโมดูล
+
+| โมดูล | หัวข้อ | สถานะ |
+|-------|-------|-------|
+| **Basics & Syntax** | Variables, types, control flow, functions, packages | เร็ว ๆ นี้ |
+| **Types & Data** | Arrays, slices, maps, structs, pointers | เร็ว ๆ นี้ |
+| **Methods & Interfaces** | Methods บน types, interface design, composition, embedding | เร็ว ๆ นี้ |
+| **Concurrency** | Goroutines, channels, select, sync, context, patterns | **พร้อมใช้งานแล้ว** |
+| **Errors & Generics** | Error wrapping, custom errors, generics กับ type parameters | เร็ว ๆ นี้ |
+| **Standard Library** | fmt, strings, io, net/http, encoding/json, time | เร็ว ๆ นี้ |
+| **Testing & Tooling** | go test, table-driven tests, benchmarks, race detector, go vet | เร็ว ๆ นี้ |
+
+> เริ่มต้นกับโมดูล **Concurrency** ที่พร้อมใช้งานแล้วในตอนนี้

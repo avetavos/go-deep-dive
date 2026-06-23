@@ -1,0 +1,12 @@
+---
+title: 'Errors & Generics'
+description: 'Error wrapping, custom error types, errors.Is/As, และ generics กับ type parameters ใน Go'
+sidebar:
+  order: 1
+---
+
+## Errors และ Generics ใน Go
+
+โมดูลนี้ครอบคลุมแนวทาง error handling แบบ idiomatic ของ Go — การ wrap errors ด้วย `fmt.Errorf("%w", err)`, การสร้าง custom error types, และการใช้ `errors.Is` กับ `errors.As` สำหรับ error inspection นอกจากนี้ยังสอน generics ที่เพิ่มเข้ามาใน Go 1.18 ซึ่งช่วยให้เขียน reusable algorithms และ data structures ที่ type-safe ได้โดยไม่ต้องพึ่ง `interface{}`
+
+> โมดูลนี้กำลังจะมาเร็ว ๆ นี้ คอยติดตามบทเรียนเกี่ยวกับ error wrapping, custom errors, และ generics
