@@ -126,7 +126,7 @@ func Filter[T any](slice []T, pred func(T) bool) []T {
 
 func main() {
 	fmt.Println(Max(3, 7))
-	fmt.Println(Max(3.14, 2.71))
+	fmt.Println(Max[float64](3.14, 2.71))
 
 	nums := []int{1, 2, 3, 4, 5}
 	doubled := Map(nums, func(n int) int { return n * 2 })

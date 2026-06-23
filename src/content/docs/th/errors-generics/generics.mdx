@@ -126,7 +126,7 @@ func Filter[T any](slice []T, pred func(T) bool) []T {
 
 func main() {
 \tfmt.Println(Max(3, 7))
-\tfmt.Println(Max(3.14, 2.71))
+\tfmt.Println(Max[float64](3.14, 2.71))
 
 \tnums := []int{1, 2, 3, 4, 5}
 \tdoubled := Map(nums, func(n int) int { return n * 2 })
