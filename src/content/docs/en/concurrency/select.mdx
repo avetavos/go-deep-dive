@@ -91,18 +91,19 @@ func main() {
 \t\tfmt.Println("no value ready, default taken")
 \t}
 
-\t// Fan-in: merge two result channels into one
+\t// Fan-in: select from whichever of two channels has a value
+\t// (use separate selects for deterministic playground output)
 \tr1 := make(chan int, 1)
 \tr2 := make(chan int, 1)
 \tr1 <- 10
 \tr2 <- 20
-\tfor i := 0; i < 2; i++ {
-\t\tselect {
-\t\tcase v := <-r1:
-\t\t\tfmt.Println("r1:", v)
-\t\tcase v := <-r2:
-\t\t\tfmt.Println("r2:", v)
-\t\t}
+\tselect {
+\tcase v := <-r1:
+\t\tfmt.Println("r1:", v)
+\t}
+\tselect {
+\tcase v := <-r2:
+\t\tfmt.Println("r2:", v)
 \t}
 
 \tfmt.Println("done")
