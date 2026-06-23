@@ -1,0 +1,183 @@
+---
+title: Pointers
+description: 'The & and * operators, pointers vs values, mutation through pointers, nil pointers, and why Go has no pointer arithmetic.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a pointer?
+
+A **pointer** is a variable that holds the memory address of another variable. The type of a pointer to `T` is written `*T`.
+
+```go
+x := 42
+p := &x   // & takes the address of x; p has type *int
+```
+
+To read or write through a pointer, **dereference** it with `*`:
+
+```go
+fmt.Println(*p) // 42 — read through p
+*p = 100        // write through p — x is now 100
+fmt.Println(x)  // 100
+```
+
+## `&` and `*` are inverse operations
+
+| Operator | Reads as | Effect |
+|----------|----------|--------|
+| `&x` | "address of x" | produces a `*T` pointing to `x` |
+| `*p` | "value at p" | dereferences `p`, reads or writes `T` |
+
+## When to use pointers
+
+**1. Mutation across function boundaries.** Go passes all arguments by value. If a function needs to modify the caller's variable, pass a pointer:
+
+```go
+func double(n *int) {
+    *n = *n * 2
+}
+x := 5
+double(&x)
+fmt.Println(x) // 10
+```
+
+**2. Large structs.** Copying a large struct on every call is wasteful. Pass `*Config` instead of `Config` when the struct has many fields.
+
+**3. Optional values.** A `*T` can be `nil` to represent "not set", similar to `null` in other languages.
+
+## Struct pointer shorthand
+
+When you have a pointer to a struct, Go automatically dereferences it for field access. You do not need to write `(*cfg).Debug`:
+
+```go
+cfg := &Config{Workers: 4}
+cfg.Debug = true   // shorthand for (*cfg).Debug = true
+```
+
+## `new` allocates a zeroed value
+
+The built-in `new(T)` allocates a zero value of type `T` and returns `*T`:
+
+```go
+n := new(int)   // *int pointing to 0
+*n = 7
+```
+
+## Nil pointers
+
+The zero value of any pointer type is `nil`. Dereferencing a nil pointer causes a runtime panic:
+
+```go
+var p *int
+fmt.Println(p == nil) // true
+// *p = 1 would panic: nil pointer dereference
+```
+
+Always check a pointer for `nil` before dereferencing when it might not have been set.
+
+## No pointer arithmetic
+
+Go deliberately omits pointer arithmetic. You cannot do `p++` or `p + 4` to walk through memory. This eliminates an entire class of memory-safety bugs. The `unsafe` package provides pointer arithmetic as an escape hatch, but it is almost never needed in application code.
+
+export const pointersCode = `package main
+
+import "fmt"
+
+type Config struct {
+\tDebug   bool
+\tWorkers int
+}
+
+func enableDebug(cfg *Config) {
+\tcfg.Debug = true // mutates the caller's Config
+}
+
+func double(n *int) {
+\t*n = *n * 2
+}
+
+func main() {
+\t// & takes the address; * dereferences
+\tx := 42
+\tp := &x
+\tfmt.Println(*p) // 42
+\t*p = 100
+\tfmt.Println(x)  // 100 -- x was mutated through p
+
+\t// Pointer for mutation across function boundary
+\tdouble(&x)
+\tfmt.Println(x) // 200
+
+\t// Pointer to struct
+\tcfg := Config{Debug: false, Workers: 4}
+\tenableDebug(&cfg)
+\tfmt.Println(cfg.Debug) // true
+
+\t// new() allocates a zeroed value and returns a pointer
+\tn := new(int)
+\t*n = 7
+\tfmt.Println(*n) // 7
+
+\t// nil pointer
+\tvar ptr *int
+\tfmt.Println(ptr == nil) // true
+}`;
+
+<Playground client:visible code={pointersCode} />
+
+<Callout title="Go has pointers but no pointer arithmetic">
+Go gives you full pointer capability — take addresses, dereference, pass pointers to functions — but deliberately removes pointer arithmetic. You cannot add an integer to a pointer to step through memory. This single design decision eliminates buffer overflows, off-by-one memory walks, and use-after-free bugs at the language level. If you need low-level memory operations, the `unsafe` package exists, but it should be reserved for FFI and runtime-level work.
+</Callout>
+
+export const quizPointers = [
+  {
+    q: "You pass `x` (an int) to `func add(n int)` which sets `n = n + 1`. After the call, what is `x`?",
+    options: [
+      "x is incremented — Go passes by reference",
+      "x is unchanged — Go passes by value; n is a copy",
+      "A compile error — you must pass &x",
+      "x becomes 0 — function arguments are zeroed"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does `&x` produce?",
+    options: [
+      "A copy of x",
+      "The value stored at x",
+      "A pointer (*T) holding the memory address of x",
+      "A bitwise AND of x with itself"
+    ],
+    answer: 2
+  },
+  {
+    q: "What happens if you dereference a nil pointer in Go?",
+    options: [
+      "You read the zero value for the type",
+      "The compiler rejects the program",
+      "A runtime panic: nil pointer dereference",
+      "You get undefined behavior, like C"
+    ],
+    answer: 2
+  },
+  {
+    q: "Given `cfg := &Config{Workers: 4}`, how do you set the Debug field?",
+    options: [
+      "cfg->Debug = true (C-style arrow operator)",
+      "(*cfg).Debug = true, or equivalently cfg.Debug = true",
+      "cfg[Debug] = true",
+      "deref(cfg).Debug = true"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="types-data/pointers" questions={quizPointers} />
+
+<ProgressTracker client:visible id="types-data/pointers" />

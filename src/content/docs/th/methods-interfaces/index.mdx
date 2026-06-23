@@ -1,12 +1,105 @@
 ---
 title: 'Methods & Interfaces'
-description: 'Methods บน types, interface design, composition, และ embedding ใน Go'
+description: 'Methods บน types, implicit interface satisfaction, type assertions, และ composition ผ่าน embedding — polymorphism ของ Go โดยไม่ต้องใช้ inheritance'
 sidebar:
   order: 1
 ---
 
-## Methods และ Interfaces ใน Go
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-โมดูลนี้สอนวิธีแนบ behaviour ให้กับ types ด้วย methods (value receiver vs pointer receiver), การออกแบบ interfaces แบบ implicit satisfaction ที่เป็นเอกลักษณ์ของ Go, การประกอบ interfaces ขนาดเล็กเป็น interfaces ขนาดใหญ่, และการใช้ struct embedding เพื่อแชร์ implementation โดยไม่ต้องใช้ inheritance
+## แนวคิด polymorphism ของ Go
 
-> โมดูลนี้กำลังจะมาเร็ว ๆ นี้ คอยติดตามบทเรียนเกี่ยวกับ methods, interfaces, composition, และ embedding
+ภาษาเชิงวัตถุส่วนใหญ่ผูก polymorphism ไว้กับลำดับชั้นของ class: คุณต้องประกาศว่า type หนึ่ง *implements* interface ใด, ต้อง *extends* base class, และ compiler จะบังคับโครงสร้างสายเลือดนั้น Go ตัดทิ้งลำดับชั้นทั้งหมด
+
+ใน Go **named type ใดก็ตามสามารถมี method ได้** และ **type ใดที่มี method ถูกต้องก็ตอบสนอง interface โดยอัตโนมัติ** — ไม่ต้องประกาศ นี่คือ *implicit interface satisfaction* ซึ่งเป็นการตัดสินใจออกแบบที่สำคัญที่สุดของภาษา
+
+การผสม methods และ interfaces ให้คุณได้:
+
+- **Polymorphism** โดยไม่มีต้นไม้ inheritance
+- **Dependency inversion** โดยไม่ต้องพึ่ง framework — รับ interface, คืน struct
+- **Composition** โดยไม่ต้องใช้ `extends` — embed types เพื่อยกระดับ fields และ methods
+
+## แผนที่โมดูล
+
+| บทเรียน | สิ่งที่คุณจะเรียนรู้ |
+|---------|----------------------|
+| [Methods](./methods) | ประกาศ methods บน named type ใดก็ได้; value vs pointer receiver; method sets |
+| [Interfaces](./interfaces) | นิยามและตอบสนอง interface โดยนัย; small interfaces; empty interface `any` |
+| [Type Assertions](./type-assertions) | `x.(T)`, comma-ok form, และ `switch v := x.(type)` |
+| [Embedding](./embedding) | Struct embedding, promoted fields/methods, interface embedding, composition แทน inheritance |
+
+## ตัวอย่างแรกที่รันได้
+
+โค้ดด้านล่างนิยาม method บน struct, ประกาศ interface หนึ่ง method, และเรียก method ผ่าน interface — ทั้งหมดในไม่ถึง 20 บรรทัด
+
+export const indexCode = `package main
+
+import "fmt"
+
+type Rectangle struct {
+\tWidth, Height float64
+}
+
+func (r Rectangle) Area() float64 {
+\treturn r.Width * r.Height
+}
+
+type Sizer interface {
+\tArea() float64
+}
+
+func printArea(s Sizer) {
+\tfmt.Printf("area = %.2f\\n", s.Area())
+}
+
+func main() {
+\tr := Rectangle{Width: 4, Height: 3}
+\tfmt.Println(r.Area())
+\tprintArea(r)
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="ข้อคิดสำคัญ">
+`Rectangle` ไม่เคยพูดว่า `implements Sizer` — มันแค่มี method ที่ชื่อและ signature ถูกต้อง นั่นคือทั้งหมดที่ Go ต้องการ ถ้า method set ตรงกัน interface ก็ถูกตอบสนองโดยอัตโนมัติ ณ compile time
+</Callout>
+
+export const quizMethodsInterfaces = [
+  {
+    q: "type ใน Go ประกาศว่าตอบสนอง interface อย่างไร?",
+    options: [
+      "โดยใช้ keyword `implements`",
+      "โดย embed interface ไว้ใน struct",
+      "โดยมี method ที่ถูกต้อง — ไม่ต้องประกาศใด ๆ",
+      "โดยลงทะเบียนกับ interface registry ตอน runtime"
+    ],
+    answer: 2
+  },
+  {
+    q: "อะไรที่สามารถมี methods ใน Go ได้?",
+    options: [
+      "เฉพาะ structs เท่านั้น",
+      "เฉพาะ pointer types เท่านั้น",
+      "named type ใด ๆ ที่นิยามใน package เดียวกัน",
+      "เฉพาะ types ที่ implement อย่างน้อยหนึ่ง interface"
+    ],
+    answer: 2
+  },
+  {
+    q: "อะไรคือทางเลือกของ Go แทน class inheritance?",
+    options: [
+      "keyword `extends`",
+      "Struct embedding และ small interfaces",
+      "Pointer receivers บน base struct",
+      "Interface `any`"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/index" questions={quizMethodsInterfaces} />
+
+<ProgressTracker client:visible id="methods-interfaces/index" />

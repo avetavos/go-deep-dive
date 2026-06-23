@@ -1,0 +1,225 @@
+---
+title: 'Control Flow'
+description: 'if พร้อม init statement, for ในทุกรูปแบบ, range, switch, และ switch-true pattern'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## if — พร้อม Init Statement
+
+`if` statement ใน Go คล้ายกับภาษาอื่น แต่มีความสามารถพิเศษ: สามารถมี **init statement** ก่อน condition ได้ ตัวแปรที่ประกาศใน init statement มี scope แค่ภายใน `if` block นั้น:
+
+```go
+// รูปแบบปกติ
+if x > 10 {
+    fmt.Println("big")
+}
+
+// พร้อม init statement — err มี scope แค่ใน if/else block
+if err := doSomething(); err != nil {
+    fmt.Println("error:", err)
+}
+```
+
+Pattern นี้ใช้บ่อยมากกับ error handling ใน Go เพราะ scope ของ `err` ถูกจำกัดให้แคบที่สุด
+
+## for — Loop Keyword เดียวของ Go
+
+Go มี loop keyword เดียวคือ `for` ซึ่งรองรับสามรูปแบบ:
+
+**รูปแบบที่ 1: C-style (init; condition; post)**
+
+```go
+for i := 0; i < 5; i++ {
+    fmt.Println(i)
+}
+```
+
+**รูปแบบที่ 2: Condition-only (เทียบเท่า `while`)**
+
+```go
+n := 1
+for n < 100 {
+    n *= 2
+}
+```
+
+**รูปแบบที่ 3: Infinite loop**
+
+```go
+for {
+    // ออกด้วย break หรือ return
+    if done {
+        break
+    }
+}
+```
+
+## for range
+
+`for range` ใช้สำหรับ iterate ผ่าน collections:
+
+```go
+// range over slice: ได้ index และ value
+nums := []int{10, 20, 30}
+for i, v := range nums {
+    fmt.Println(i, v)
+}
+
+// ต้องการเฉพาะ value: ใช้ _ สำหรับ index
+for _, v := range nums {
+    fmt.Println(v)
+}
+
+// range over string: ได้ rune (Unicode code point) ไม่ใช่ byte
+for i, r := range "Go!" {
+    fmt.Printf("%d: %c\n", i, r)
+}
+```
+
+`range` ยังใช้กับ map (key, value) และ channel (value จนกว่าปิด) ได้ด้วย
+
+## switch
+
+`switch` ใน Go ไม่มี **automatic fallthrough** ต่างจาก C/Java ทุก case หยุดโดยอัตโนมัติ ถ้าต้องการ fallthrough ต้องระบุ `fallthrough` keyword อย่างชัดเจน:
+
+```go
+day := "Monday"
+switch day {
+case "Saturday", "Sunday":   // หลาย value ในหนึ่ง case ได้
+    fmt.Println("weekend")
+case "Monday":
+    fmt.Println("start of week")
+default:
+    fmt.Println("weekday")
+}
+```
+
+**Switch-true pattern** ใช้แทน if-else chain ที่ซับซ้อน:
+
+```go
+switch {
+case score >= 90:
+    fmt.Println("A")
+case score >= 80:
+    fmt.Println("B")
+case score >= 70:
+    fmt.Println("C")
+default:
+    fmt.Println("F")
+}
+```
+
+เมื่อ `switch` ไม่มี expression (switch บน `true`) แต่ละ case เป็น boolean expression ที่ evaluate ตามลำดับ
+
+export const controlFlowCode = `package main
+
+import "fmt"
+
+func classify(n int) string {
+\tswitch {
+\tcase n < 0:
+\t\treturn "negative"
+\tcase n == 0:
+\t\treturn "zero"
+\tcase n < 10:
+\t\treturn "small"
+\tdefault:
+\t\treturn "large"
+\t}
+}
+
+func main() {
+\t// C-style for loop
+\tfmt.Println("-- C-style loop --")
+\tfor i := 1; i <= 3; i++ {
+\t\tfmt.Println(i)
+\t}
+
+\t// Condition-only loop (while equivalent)
+\tfmt.Println("-- condition-only loop --")
+\tn := 1
+\tfor n < 10 {
+\t\tn *= 2
+\t}
+\tfmt.Println("n =", n)
+
+\t// for range over slice
+\tfmt.Println("-- range over slice --")
+\tfruits := []string{"apple", "banana", "cherry"}
+\tfor i, v := range fruits {
+\t\tfmt.Println(i, v)
+\t}
+
+\t// switch
+\tfmt.Println("-- switch classify --")
+\tfor _, val := range []int{-5, 0, 7, 42} {
+\t\tfmt.Println(val, "->", classify(val))
+\t}
+
+\t// if with init statement
+\tfmt.Println("-- if with init --")
+\tif x := 16; x%2 == 0 {
+\t\tfmt.Println(x, "is even")
+\t} else {
+\t\tfmt.Println(x, "is odd")
+\t}
+}`;
+
+<Playground client:visible code={controlFlowCode} />
+
+<Callout title="`for` คือ Loop Keyword เดียวของ Go">
+Go ไม่มี `while`, `do-while`, หรือ `loop` ทุกการวนซ้ำใช้ `for` สามรูปแบบ ได้แก่ C-style (init; condition; post), condition-only (เทียบเท่า while), และ infinite loop (`for` เปล่า) ครอบคลุมทุก iteration pattern ที่คุณต้องการ
+</Callout>
+
+export const quizControlFlow = [
+  {
+    q: "อะไรคือ Go equivalent ของ while loop ในภาษาอื่น?",
+    options: [
+      "while condition { }",
+      "for condition { }",
+      "loop condition { }",
+      "for ; condition ; { }"
+    ],
+    answer: 1
+  },
+  {
+    q: "ใน Go switch statement เมื่อ case ตรงกันและไม่มี fallthrough keyword จะเกิดอะไร?",
+    options: [
+      "execution ต่อไป case ถัดไปอัตโนมัติ",
+      "เกิด compile error",
+      "execution หยุดที่สิ้นสุด case ที่ตรงและออกจาก switch",
+      "default case ทำงานเสมอหลัง case ที่ตรง"
+    ],
+    answer: 2
+  },
+  {
+    q: "ตัวแปรที่ประกาศใน if init statement มี scope อย่างไร?",
+    options: [
+      "Package scope",
+      "File scope",
+      "ทั้ง function ที่ครอบอยู่",
+      "เฉพาะ if/else block รวมทุก branch"
+    ],
+    answer: 3
+  },
+  {
+    q: "เมื่อ range over string ด้วย `for i, r := range s` ตัวแปร r มี type อะไร?",
+    options: [
+      "byte (uint8)",
+      "rune (int32) — Unicode code point",
+      "string",
+      "int"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="basics/control-flow" questions={quizControlFlow} />
+
+<ProgressTracker client:visible id="basics/control-flow" />

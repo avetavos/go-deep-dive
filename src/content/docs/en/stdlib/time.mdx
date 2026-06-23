@@ -1,0 +1,166 @@
+---
+title: time
+description: 'time.Time, time.Duration, formatting with the reference layout, parsing, and arithmetic (Add/Sub) using fixed deterministic times.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## time.Time and time.Duration
+
+The `time` package provides two central types:
+
+- **`time.Time`** — an instant in time with nanosecond precision, always carrying a location (timezone).
+- **`time.Duration`** — a signed 64-bit integer representing a length of time in nanoseconds. Duration constants like `time.Hour`, `time.Minute`, `time.Second`, and `time.Millisecond` make arithmetic readable.
+
+```go
+d := 2*time.Hour + 30*time.Minute + 15*time.Second
+fmt.Println(d) // 2h30m15s
+```
+
+## Constructing a time.Time
+
+In production code you call `time.Now()` to get the current instant. For tests and deterministic examples, use `time.Date`:
+
+```go
+t := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
+// year, month, day, hour, min, sec, nanosec, location
+```
+
+`time.Month` values (`time.January` through `time.December`) are typed constants; you can also pass integer literals (1–12) because they are assignable to `time.Month`.
+
+## Formatting — the reference layout
+
+Go uses a concrete reference time instead of abstract format codes like `YYYY-MM-DD`. The reference moment is:
+
+```
+Mon Jan 2 15:04:05 MST 2006
+```
+
+To format a time, write out the reference moment in the shape you want:
+
+```go
+t.Format("2006-01-02")             // "2024-01-02"
+t.Format("15:04:05")               // "15:04:05"
+t.Format("02 Jan 2006 15:04 MST")  // "02 Jan 2024 15:04 UTC"
+t.Format(time.RFC3339)             // "2024-01-02T15:04:05Z"
+```
+
+## Parsing
+
+`time.Parse` is the inverse of `Format` — it takes a layout and a string:
+
+```go
+parsed, err := time.Parse("2006-01-02", "2024-06-15")
+// parsed is midnight UTC on June 15, 2024
+```
+
+The layout string must match the reference time components you used — the same characters in the same positions.
+
+## Arithmetic — Add and Sub
+
+```go
+deadline := t.Add(72 * time.Hour)        // 3 days later
+diff     := deadline.Sub(t)              // time.Duration: 72h0m0s
+before   := deadline.Before(t)          // false
+after    := deadline.After(t)           // true
+```
+
+`Add` takes a `Duration` and returns a `Time`. `Sub` takes two `Time` values and returns the `Duration` between them.
+
+export const timeCode = `package main
+
+import (
+\t"fmt"
+\t"time"
+)
+
+func main() {
+\t// Fixed time — deterministic in any interpreter
+\tt := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
+\tfmt.Println(t)
+
+\t// Formatting with the reference layout
+\tfmt.Println(t.Format("2006-01-02"))
+\tfmt.Println(t.Format("15:04:05"))
+\tfmt.Println(t.Format("Mon, 02 Jan 2006 15:04:05 MST"))
+\tfmt.Println(t.Format(time.RFC3339))
+
+\t// Parsing
+\tparsed, err := time.Parse("2006-01-02", "2024-06-15")
+\tif err == nil {
+\t\tfmt.Println(parsed.Format("January 2, 2006"))
+\t}
+
+\t// Arithmetic
+\tdeadline := t.Add(72 * time.Hour)
+\tfmt.Println(deadline.Format("2006-01-02 15:04:05"))
+
+\tdiff := deadline.Sub(t)
+\tfmt.Println(diff)
+
+\t// Duration construction
+\td := 2*time.Hour + 30*time.Minute
+\tfmt.Println(d)
+
+\t// Accessing date parts
+\tfmt.Println(t.Year(), t.Month(), t.Day())
+\tfmt.Println(t.Hour(), t.Minute(), t.Second())
+}`;
+
+<Playground client:visible code={timeCode} />
+
+<Callout title="Go's reference time — Mon Jan 2 15:04:05 MST 2006">
+The reference moment is not arbitrary. Each component is a distinct number: month=1, day=2, hour=15 (3 PM), minute=4, second=5, year=2006. In 12-hour clock order: 1/2/3:4:5 PM '06. This makes the layout self-documenting — you write what you want the output to look like using those exact digits. A common mistake is using `YYYY` or `DD` from other languages; those are just the letters Y, M, D to Go and will appear literally in the output.
+</Callout>
+
+export const quizTime = [
+  {
+    q: "What is Go's reference time used for formatting?",
+    options: [
+      "Mon Jan 1 00:00:00 UTC 2000",
+      "Mon Jan 2 15:04:05 MST 2006",
+      "Fri Dec 31 23:59:59 UTC 1999",
+      "Thu Jan 1 00:00:00 UTC 1970"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which call returns a new time.Time exactly 24 hours after t?",
+    options: [
+      "t.Sub(24 * time.Hour)",
+      "t.Add(24 * time.Hour)",
+      "time.Add(t, 24)",
+      "t.Plus(time.Day)"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does t.Sub(other) return?",
+    options: [
+      "A time.Time",
+      "An int64 in seconds",
+      "A time.Duration",
+      "A float64 in hours"
+    ],
+    answer: 2
+  },
+  {
+    q: "Why should you avoid time.Now() in playground / test snippets?",
+    options: [
+      "time.Now() is not available in Go 1.22+",
+      "time.Now() panics in a WASM runtime",
+      "It produces non-deterministic output that changes on every run",
+      "It always returns midnight UTC"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="stdlib/time" questions={quizTime} />
+
+<ProgressTracker client:visible id="stdlib/time" />

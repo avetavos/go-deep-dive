@@ -1,0 +1,191 @@
+---
+title: Structs
+description: 'การนิยาม struct, การเข้าถึง field, struct literal, anonymous struct, การเปรียบเทียบ, และ embedding เพื่อ composition'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การนิยาม struct
+
+**Struct** คือการรวม field ที่เกี่ยวข้องกันไว้ภายใต้ชื่อ type เดียว แต่ละ field มีชื่อและ type:
+
+```go
+type Point struct {
+    X, Y int
+}
+
+type User struct {
+    Name  string
+    Email string
+    Age   int
+}
+```
+
+Field ที่ขึ้นต้นด้วยตัวพิมพ์ใหญ่จะถูก **export** (มองเห็นได้จากภายนอก package) ส่วน field ที่ขึ้นต้นด้วยตัวพิมพ์เล็กจะเป็น unexported
+
+## Struct literals
+
+คุณสามารถสร้างค่า struct ได้สองแบบ:
+
+```go
+// Positional — ต้องเรียงตามลำดับ field ที่ประกาศไว้
+p := Point{3, 4}
+
+// Named fields — ลำดับไม่สำคัญ; field ที่ไม่ได้กำหนดจะได้ zero value
+u := User{Name: "Alice", Email: "alice@example.com"}
+```
+
+รูปแบบ named-field เป็นที่นิยมมากกว่า เพราะอ่านง่ายและทนต่อการเปลี่ยนลำดับ field
+
+## การเข้าถึง field
+
+ใช้จุด (dot) เพื่ออ่านหรือเขียน field:
+
+```go
+fmt.Println(u.Name)   // อ่าน
+u.Age = 30            // เขียน
+```
+
+## Anonymous structs
+
+สำหรับ shape ที่ใช้ครั้งเดียว — configuration, test fixture, หรือการจัดกลุ่มภายใน — คุณสามารถนิยาม struct type แบบ inline โดยไม่ตั้งชื่อ:
+
+```go
+cfg := struct {
+    Host string
+    Port int
+}{Host: "localhost", Port: 8080}
+```
+
+## การเปรียบเทียบ struct
+
+ค่า struct สองค่าสามารถเปรียบเทียบด้วย `==` ได้ ถ้า **ทุก** field เป็น comparable type การเปรียบเทียบจะทำทีละ field:
+
+```go
+a := Point{1, 2}
+b := Point{1, 2}
+fmt.Println(a == b) // true
+```
+
+Struct ที่มี field เป็น slice, map, หรือ function **ไม่สามารถ** เปรียบเทียบด้วย `==`
+
+## Struct embedding (composition)
+
+Go ไม่มี class inheritance แต่ใช้การ **embed** struct type หนึ่งไว้ภายในอีก struct เพื่อ promote field และ method:
+
+```go
+type Address struct {
+    City    string
+    Country string
+}
+
+type Person struct {
+    Name    string
+    Age     int
+    Address          // embedded — City และ Country ถูก promote
+}
+```
+
+หลังจาก embed แล้ว `person.City` คือ shorthand ของ `person.Address.City` นี่คือ **composition** ไม่ใช่ inheritance — embedded type ไม่รู้ว่าตัวเองถูก embed และ outer type ไม่ใช่ subtype ของ inner type
+
+export const structsCode = `package main
+
+import "fmt"
+
+type Address struct {
+\tCity    string
+\tCountry string
+}
+
+type Person struct {
+\tName    string
+\tAge     int
+\tAddress // embedded struct
+}
+
+func main() {
+\t// Named-field literal
+\tp1 := Person{
+\t\tName: "Alice",
+\t\tAge:  30,
+\t\tAddress: Address{City: "Bangkok", Country: "Thailand"},
+\t}
+\tfmt.Println(p1.Name, p1.Age)
+\tfmt.Println(p1.City)    // promoted from Address
+\tfmt.Println(p1.Country) // promoted from Address
+
+\t// Struct copy: p2 is an independent value
+\tp2 := p1
+\tp2.Name = "Bob"
+\tfmt.Println(p1.Name, p2.Name) // Alice Bob
+
+\t// Anonymous struct
+\tcfg := struct {
+\t\tHost string
+\t\tPort int
+\t}{Host: "localhost", Port: 8080}
+\tfmt.Printf("%s:%d\\n", cfg.Host, cfg.Port)
+
+\t// Struct comparison (all fields comparable)
+\ta1 := Address{City: "Bangkok", Country: "Thailand"}
+\ta2 := Address{City: "Bangkok", Country: "Thailand"}
+\tfmt.Println(a1 == a2) // true
+}`;
+
+<Playground client:visible code={structsCode} />
+
+<Callout title="Struct เป็น value type — การ assign จะ copy">
+การเขียน `p2 := p1` จะสร้าง copy ของ struct ที่เป็นอิสระอย่างสมบูรณ์ ทุก field ถูก copy การแก้ไข `p2.Name` ไม่กระทบ `p1` เลย นี่แตกต่างจาก slice และ map ที่การ assign จะ copy เฉพาะ header เท่านั้น ทำให้ตัวแปรทั้งสองแชร์ข้อมูลชุดเดียวกัน หากต้องการแชร์ struct ข้ามหลาย goroutine หรือหลีกเลี่ยงการ copy struct ขนาดใหญ่ ให้ใช้ pointer (`*Person`)
+</Callout>
+
+export const quizStructs = [
+  {
+    q: "คุณเขียน `p2 := p1` โดยที่ p1 เป็น struct `Person` แล้วกำหนด `p2.Name = \"Bob\"` ค่าของ p1.Name คืออะไร?",
+    options: [
+      "\"Bob\" — struct เป็น reference type ตัวแปรทั้งสองเห็นการเปลี่ยนแปลง",
+      "\"Alice\" — struct เป็น value type ดังนั้น p2 คือ copy ที่เป็นอิสระ",
+      "เป็น empty string — การ copy จะ zero ทุก field",
+      "Compile error — struct ไม่สามารถ assign โดยตรงได้"
+    ],
+    answer: 1
+  },
+  {
+    q: "รูปแบบ struct literal แบบใดที่เป็น idiomatic Go?",
+    options: [
+      "Positional: `Point{3, 4}`",
+      "Named-field: `Point{X: 3, Y: 4}`",
+      "ทั้งสองแบบมีความเป็น idiomatic เท่ากัน",
+      "ควรสร้าง struct ด้วย `new(Point)` เสมอ"
+    ],
+    answer: 1
+  },
+  {
+    q: "การ embed `Address` ไว้ใน `Person` ให้ประโยชน์อะไร?",
+    options: [
+      "Person สืบทอดจาก Address; Person คือ subtype ของ Address",
+      "Field และ method ของ Address ถูก promote ขึ้นมาใน Person เข้าถึงได้ด้วย person.City เป็นต้น",
+      "Compile error — Go ไม่รองรับ embedding",
+      "Person และ Address แชร์ memory layout เดียวกัน"
+    ],
+    answer: 1
+  },
+  {
+    q: "สามารถเปรียบเทียบ struct `User` สองตัวด้วย `==` ได้หรือไม่ ถ้า User มี field เป็น `[]string`?",
+    options: [
+      "ได้ — Go เปรียบเทียบ slice ทีละ element",
+      "ได้ — แต่เฉพาะเมื่อ slice มีความยาวเท่ากัน",
+      "ไม่ได้ — struct ที่มี field เป็น slice ไม่สามารถเปรียบเทียบด้วย == ได้",
+      "ได้ — การเปรียบเทียบจะข้าม field ที่เป็น slice"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="types-data/structs" questions={quizStructs} />
+
+<ProgressTracker client:visible id="types-data/structs" />

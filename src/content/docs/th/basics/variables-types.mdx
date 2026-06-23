@@ -1,0 +1,200 @@
+---
+title: 'Variables และ Types'
+description: 'var, :=, zero values, ประเภทพื้นฐาน, constants, iota, และการแปลงประเภท'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การประกาศตัวแปร
+
+Go มีสองวิธีในการประกาศตัวแปร:
+
+**`var` declaration** — รูปแบบเต็ม สามารถใช้ได้ทั้งใน package level และใน function:
+
+```go
+var name string          // ประกาศพร้อม zero value
+var age  int = 30        // ประกาศพร้อมกำหนดค่าและระบุ type
+var pi       = 3.14159   // ประกาศพร้อมกำหนดค่า Go อนุมาน type ให้
+```
+
+**Short declaration `:=`** — ใช้ได้เฉพาะใน function เหมาะสำหรับใช้งานทั่วไป:
+
+```go
+name := "gopher"   // Go อนุมาน type เป็น string
+age  := 30         // Go อนุมาน type เป็น int
+pi   := 3.14159    // Go อนุมาน type เป็น float64
+```
+
+`:=` ต้องมีตัวแปรใหม่อย่างน้อยหนึ่งตัวทางซ้าย ถ้าทุกตัวมีอยู่แล้วต้องใช้ `=`
+
+## Zero Values
+
+ตัวแปรที่ประกาศโดยไม่กำหนดค่าจะได้รับ **zero value** โดยอัตโนมัติ ไม่มี uninitialized memory ใน Go:
+
+| Type | Zero Value |
+|------|-----------|
+| `int`, `int8`, `int16`, `int32`, `int64` | `0` |
+| `uint`, `uint8`, `uint16`, `uint32`, `uint64` | `0` |
+| `float32`, `float64` | `0.0` |
+| `bool` | `false` |
+| `string` | `""` (string ว่าง) |
+| `rune` (alias สำหรับ `int32`) | `0` |
+| `byte` (alias สำหรับ `uint8`) | `0` |
+| pointer, slice, map, channel, function | `nil` |
+
+## Types พื้นฐาน
+
+Go มี numeric types ที่หลากหลายพร้อมขนาดที่ชัดเจน:
+
+```go
+var i   int     // ขนาดขึ้นกับ platform (32 หรือ 64 bit)
+var i64 int64   // 64-bit signed integer เสมอ
+var u   uint32  // 32-bit unsigned integer
+var f   float64 // double precision floating point
+var b   bool    // true หรือ false
+var s   string  // sequence ของ UTF-8 bytes
+var r   rune    // Unicode code point (int32)
+var bt  byte    // raw byte (uint8)
+```
+
+ใช้ `int` เป็น default สำหรับ integers ยกเว้นมีเหตุผลเฉพาะที่ต้องใช้ขนาดอื่น
+
+## Constants และ iota
+
+Constants ใน Go ไม่มี type เสมอไปจนกว่าจะถูกใช้ (untyped constants) ทำให้ใช้ได้ยืดหยุ่น:
+
+```go
+const Pi    = 3.14159   // untyped float constant
+const Limit = 100       // untyped integer constant
+const Greeting = "hi"   // untyped string constant
+```
+
+**`iota`** คือ counter พิเศษใน `const` block ที่เริ่มจาก 0 และ increment ทีละ 1 ทุก constant:
+
+```go
+type Direction int
+
+const (
+    North Direction = iota   // 0
+    East                     // 1
+    South                    // 2
+    West                     // 3
+)
+```
+
+## การแปลงประเภท (Type Conversion)
+
+Go ไม่มี implicit type conversion คุณต้องแปลงอย่างชัดเจนด้วย `T(value)`:
+
+```go
+var x int     = 10
+var y float64 = float64(x) + 0.5   // ต้องแปลง x ก่อน
+var z int     = int(y)              // ตัดทศนิยมออก ไม่ปัดเศษ
+
+s := strconv.Itoa(x)    // int → string
+n, _ := strconv.Atoi(s) // string → int (พร้อม error ที่ ignore ด้วย _)
+```
+
+export const variablesCode = `package main
+
+import "fmt"
+
+type Weekday int
+
+const (
+\tMonday Weekday = iota + 1
+\tTuesday
+\tWednesday
+\tThursday
+\tFriday
+\tSaturday
+\tSunday
+)
+
+func main() {
+\t// Zero values
+\tvar i int
+\tvar s string
+\tvar b bool
+\tfmt.Println("Zero int:", i)
+\tfmt.Println("Zero string:", s == "")
+\tfmt.Println("Zero bool:", b)
+
+\t// Short declaration
+\tname := "Go"
+\tversion := 1.22
+\tfmt.Println("Language:", name, "Version:", version)
+
+\t// iota enum
+\tfmt.Println("Monday =", Monday)
+\tfmt.Println("Wednesday =", Wednesday)
+\tfmt.Println("Sunday =", Sunday)
+
+\t// Explicit type conversion
+\tmeters := 100
+\tkilometers := float64(meters) / 1000.0
+\tfmt.Println("100 meters =", kilometers, "km")
+
+\t// rune vs byte
+\tch := 'Z'
+\tfmt.Println("rune 'Z' as int32:", int32(ch))
+\tfmt.Println("byte value:", byte(ch))
+}`;
+
+<Playground client:visible code={variablesCode} />
+
+<Callout title="ไม่มีการแปลงตัวเลขแบบ Implicit">
+ใน Go คุณไม่สามารถบวก `int` กับ `float64` ได้โดยตรง ต้องแปลงอย่างชัดเจน เช่น `float64(x)` หรือ `int(y)` ซึ่งป้องกัน bug ที่เกิดจาก precision loss และทำให้ code บอกความตั้งใจได้ชัดเจนกว่า หากพยายาม compile โดยไม่แปลง compiler จะ error ทันที
+</Callout>
+
+export const quizVariables = [
+  {
+    q: "อะไรคือ zero value ของตัวแปร `string` ใน Go?",
+    options: [
+      "nil",
+      "0",
+      "\"\" (string ว่าง)",
+      "undefined"
+    ],
+    answer: 2
+  },
+  {
+    q: "กำหนด `const ( A = iota; B; C )` ค่าของ C คือเท่าไร?",
+    options: [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    answer: 2
+  },
+  {
+    q: "ข้อใดแปลง int เป็น float64 ได้ถูกต้องใน Go?",
+    options: [
+      "(float64) x",
+      "float64(x)",
+      "x as float64",
+      "cast(x, float64)"
+    ],
+    answer: 1
+  },
+  {
+    q: "ตรงไหนที่ **ไม่สามารถ** ใช้ short declaration `:=` ได้?",
+    options: [
+      "ใน for loop initialiser",
+      "ใน if init statement",
+      "ที่ package scope",
+      "ใน function body"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="basics/variables-types" questions={quizVariables} />
+
+<ProgressTracker client:visible id="basics/variables-types" />

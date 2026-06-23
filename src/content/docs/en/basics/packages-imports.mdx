@@ -1,0 +1,174 @@
+---
+title: 'Packages & Imports'
+description: 'package main, func main, single and grouped imports, exported vs unexported identifiers, and the standard library.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The package declaration
+
+Every Go source file begins with a `package` declaration. The package name groups related files together and controls what identifiers are visible to the outside world.
+
+```go
+package main
+```
+
+The special package name `main` tells the Go toolchain that this package produces an executable binary. Every executable must have exactly one `func main()` inside `package main` — that is where execution begins.
+
+```go
+package main
+
+func main() {
+    // execution starts here
+}
+```
+
+Any other package name (for example `package mathutil`) produces a library that other packages can import.
+
+## Importing packages
+
+The `import` statement brings other packages into scope. You can import a single package or group multiple imports together in parentheses — Go style strongly prefers the grouped form whenever you need more than one:
+
+```go
+// single import
+import "fmt"
+
+// grouped import — preferred
+import (
+    "fmt"
+    "strings"
+    "strconv"
+)
+```
+
+The import path is a string that identifies the package. Standard library packages use short paths like `"fmt"`, `"strings"`, `"math/rand"`. Third-party packages use a full module path like `"github.com/user/repo/pkg"`.
+
+## The blank import
+
+Occasionally you import a package solely for its side effects — typically to register a driver or handler during `init()`. In that case, use the blank identifier `_` to suppress the "imported and not used" compile error:
+
+```go
+import _ "database/sql/driver" // registers a driver; name not used directly
+```
+
+## Exported vs unexported identifiers
+
+Go's visibility rule is simple and enforced by the compiler: **an identifier that starts with an uppercase letter is exported** (visible to other packages); one that starts with a lowercase letter is unexported (package-private).
+
+```go
+package mathutil
+
+// Add is exported — other packages can call mathutil.Add
+func Add(a, b int) int { return a + b }
+
+// helper is unexported — invisible outside this package
+func helper() {}
+```
+
+This applies to functions, types, variables, constants, struct fields, and interface methods alike.
+
+## The standard library
+
+Go ships with a rich standard library. A few packages you will use constantly:
+
+| Package | Purpose |
+|---------|---------|
+| `fmt` | Formatted I/O: `Println`, `Printf`, `Sprintf`, `Errorf` |
+| `strings` | String manipulation: `Contains`, `Split`, `ToUpper`, `TrimSpace` |
+| `strconv` | String ↔ number conversions: `Itoa`, `Atoi`, `FormatFloat` |
+| `errors` | Error creation: `errors.New`, `errors.Is`, `errors.As` |
+| `sort` | Sorting slices and custom types |
+| `math` | Math functions: `math.Abs`, `math.Sqrt`, `math.Pi` |
+| `time` | Time values, durations, and formatting |
+
+export const packagesCode = `package main
+
+import (
+\t"fmt"
+\t"strconv"
+\t"strings"
+)
+
+func main() {
+\t// fmt: formatted output
+\tfmt.Println("Go packages demo")
+
+\t// strings: manipulating text
+\tsentence := "the quick brown fox"
+\twords := strings.Split(sentence, " ")
+\tfmt.Println("Word count:", len(words))
+\tfmt.Println("Uppercase:", strings.ToUpper(sentence))
+\tfmt.Println("Contains 'fox':", strings.Contains(sentence, "fox"))
+
+\t// strconv: converting between strings and numbers
+\tn := 42
+\ts := strconv.Itoa(n)
+\tfmt.Println("int to string:", s)
+
+\tparsed, err := strconv.Atoi("123")
+\tif err == nil {
+\t\tfmt.Println("string to int:", parsed)
+\t}
+
+\t// Combining packages together
+\tparts := []string{"Go", strconv.Itoa(1), strconv.Itoa(22)}
+\tfmt.Println("Joined:", strings.Join(parts, "."))
+}`;
+
+<Playground client:visible code={packagesCode} />
+
+<Callout title="Capitalization controls visibility">
+An identifier that starts with an **uppercase** letter (`Add`, `Client`, `MaxRetries`) is exported and accessible from other packages. A **lowercase** identifier (`add`, `client`, `maxRetries`) is package-private. The compiler enforces this — there is no `public` or `private` keyword. When you design a package, deliberately choose which identifiers to capitalize; unexported identifiers are free to change without breaking callers.
+</Callout>
+
+export const quizPackages = [
+  {
+    q: "Which package name marks a Go file as producing an executable binary?",
+    options: [
+      "package exe",
+      "package run",
+      "package main",
+      "package binary"
+    ],
+    answer: 2
+  },
+  {
+    q: "What does an identifier starting with a lowercase letter mean in Go?",
+    options: [
+      "It is a constant",
+      "It is package-private and not accessible from other packages",
+      "It is a pointer type",
+      "It is deprecated"
+    ],
+    answer: 1
+  },
+  {
+    q: "When would you use a blank import `import _ \"pkg\"`?",
+    options: [
+      "When you want to import a package but rename it to nothing",
+      "To silence a linter warning about an unused package",
+      "To import a package solely for its side effects such as registering a driver",
+      "To import all exported identifiers into the current namespace"
+    ],
+    answer: 2
+  },
+  {
+    q: "Which of the following is the idiomatic Go style when importing multiple packages?",
+    options: [
+      "One import statement per package on separate lines",
+      "A single grouped import block with parentheses",
+      "A comma-separated list: import \"fmt\", \"strings\"",
+      "Import order does not matter; gofmt handles it"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="basics/packages-imports" questions={quizPackages} />
+
+<ProgressTracker client:visible id="basics/packages-imports" />

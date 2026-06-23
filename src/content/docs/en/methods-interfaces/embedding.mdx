@@ -1,0 +1,179 @@
+---
+title: Embedding
+description: 'Compose types through struct embedding, promote fields and methods, and build larger interfaces from smaller ones.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Composition over inheritance
+
+Go has no `extends`, no base class, and no virtual dispatch. Instead it has **embedding**: you place one type inside another without a field name, and the outer type gains all of the inner type's fields and methods as if they were its own.
+
+```go
+type Named struct {
+    Name string
+}
+
+func (n Named) Describe() string { return "Name: " + n.Name }
+
+type Employee struct {
+    Named              // embedded — no field name
+    Department string
+}
+```
+
+Now `Employee` has a `Name` field and a `Describe()` method promoted from `Named`:
+
+```go
+e := Employee{Named: Named{Name: "Alice"}, Department: "Engineering"}
+fmt.Println(e.Name)       // promoted field
+fmt.Println(e.Describe()) // promoted method
+```
+
+## How promotion works
+
+When you access `e.Name`, Go looks for a field or method named `Name` directly on `Employee` first. If none is found, it descends into each embedded type in order. This lookup is purely syntactic sugar — the long form `e.Named.Name` is always valid too.
+
+You can **override** a promoted method by declaring a method with the same name on the outer type:
+
+```go
+func (e Employee) Describe() string {
+    return fmt.Sprintf("%s in %s", e.Name, e.Department)
+}
+```
+
+Now `e.Describe()` calls the outer method. The inner method is still reachable via `e.Named.Describe()`.
+
+## Interface embedding
+
+Interfaces can also embed other interfaces:
+
+```go
+type Stringer interface {
+    String() string
+}
+
+type Describer interface {
+    Stringer            // embeds Stringer
+    Describe() string
+}
+```
+
+Any type that satisfies `Describer` also satisfies `Stringer` automatically. The standard library uses this extensively: `io.ReadWriter` embeds `io.Reader` and `io.Writer`.
+
+## Embedding is not inheritance
+
+A critical distinction:
+
+| Inheritance (Java/C++) | Embedding (Go) |
+|------------------------|----------------|
+| Virtual dispatch: method call on outer type can dispatch to inner's override | No virtual dispatch: calling the inner method always calls *that* method, regardless of what is on the outer type |
+| `instanceof` / type hierarchy | No hierarchy — types are unrelated |
+| Base class can reference derived class via virtual methods | Embedded type has no knowledge of the outer type |
+
+Because there is no virtual dispatch, embedding does not allow polymorphism on the outer type. To get polymorphism, you still need an interface.
+
+export const embeddingCode = `package main
+
+import "fmt"
+
+type Named struct {
+\tName string
+}
+
+func (n Named) Describe() string {
+\treturn "Name: " + n.Name
+}
+
+type Employee struct {
+\tNamed
+\tDepartment string
+}
+
+// Interface embedding
+type Stringer interface {
+\tString() string
+}
+
+type Describer interface {
+\tStringer
+\tDescribe() string
+}
+
+func (e Employee) String() string {
+\treturn fmt.Sprintf("%s (Dept: %s)", e.Name, e.Department)
+}
+
+func print(d Describer) {
+\tfmt.Println(d.String())
+\tfmt.Println(d.Describe())
+}
+
+func main() {
+\te := Employee{
+\t\tNamed:      Named{Name: "Alice"},
+\t\tDepartment: "Engineering",
+\t}
+\t// promoted field and method
+\tfmt.Println(e.Name)
+\tfmt.Println(e.Describe())
+\tprint(e)
+}`;
+
+<Playground client:visible code={embeddingCode} />
+
+<Callout title="Embedding is composition, not inheritance">
+There is no virtual dispatch on the outer type. If `Employee` embeds `Named` and you call `e.Named.Describe()`, you always call `Named`'s `Describe` — the compiler does not look at `Employee` for an override. This is intentional: Go's embedding is a code-reuse mechanism, not a polymorphism mechanism. For polymorphism, define an interface and let both types satisfy it independently.
+</Callout>
+
+export const quizEmbedding = [
+  {
+    q: "An `Employee` embeds `Named`. How do you access the promoted `Name` field?",
+    options: [
+      "`e.Named().Name` — you must call the embedded type as a method first",
+      "`e.Name` (short form) or `e.Named.Name` (explicit form) — both work",
+      "Only `e.Named.Name` — the short form is not available for embedded fields",
+      "`e.Get(\"Name\")` — promoted fields use a generic accessor"
+    ],
+    answer: 1
+  },
+  {
+    q: "You embed `Named` in `Employee` and also declare `func (e Employee) Describe() string`. Which method does `e.Describe()` call?",
+    options: [
+      "Named's Describe — embedded methods always take precedence",
+      "Employee's Describe — the outer type's method shadows the promoted one",
+      "Both are called and the results are concatenated",
+      "A compile error — you cannot override a promoted method"
+    ],
+    answer: 1
+  },
+  {
+    q: "Interface `io.ReadWriter` embeds `io.Reader` and `io.Writer`. A type that satisfies `io.ReadWriter` automatically satisfies…",
+    options: [
+      "Neither io.Reader nor io.Writer — it must declare them separately",
+      "io.Reader only",
+      "io.Writer only",
+      "Both io.Reader and io.Writer"
+    ],
+    answer: 3
+  },
+  {
+    q: "What is the main difference between Go embedding and Java inheritance?",
+    options: [
+      "Go embedding is slower because it uses reflection internally",
+      "Go embedding provides virtual dispatch; Java inheritance does not",
+      "Go embedding is composition with promoted methods; there is no virtual dispatch or type hierarchy",
+      "Go embedding requires the outer type to list every promoted method explicitly"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/embedding" questions={quizEmbedding} />
+
+<ProgressTracker client:visible id="methods-interfaces/embedding" />

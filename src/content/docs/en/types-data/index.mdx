@@ -1,12 +1,121 @@
 ---
 title: 'Types & Data'
-description: 'Arrays, slices, maps, structs, and pointers — how Go represents and organises data in memory.'
+description: 'Value types, composite types, and a first runnable struct + slice program — the landscape of Go data.'
 sidebar:
   order: 1
 ---
 
-## Types & Data
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-This module digs into Go's composite types. You will learn the difference between arrays and slices, how slice headers work under the hood (`len`, `cap`, backing array), how maps are hash tables with a simple API, how structs group related fields, and how pointers give you control over value vs reference semantics. Understanding these types deeply is the key to writing efficient, correct Go.
+## The Go type landscape
 
-> This module is coming soon. Check back for lessons on arrays, slices, maps, structs, and pointers.
+Every value in Go has a static type known at compile time. Go divides its types into two broad families:
+
+**Value types** — variables hold the data directly. Assigning one variable to another copies the data. The primitive value types are booleans, numeric types (`int`, `int64`, `float64`, `uint8`, …), and `string`. Composite value types are **arrays** and **structs**.
+
+**Reference-like types** — the variable holds a small header that points to a backing data structure allocated elsewhere. **Slices**, **maps**, **channels**, **functions**, and **pointers** all fall into this family. Assigning copies the header, not the underlying data, so two variables can observe the same data.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Go Type Taxonomy                                                │
+│                                                                  │
+│  Value types (copy on assign)    Reference-like (header copied) │
+│  ─────────────────────────────   ──────────────────────────────  │
+│  bool, int, float64, string      *T  (pointer)                  │
+│  [N]T  (array)                   []T (slice)                     │
+│  struct { … }                    map[K]V                         │
+│                                  chan T, func(…)                 │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## Module map
+
+| Lesson | Topic |
+|--------|-------|
+| This page | Type landscape and a first program |
+| Structs | Defining structs, embedding, comparison |
+| Slices | Arrays vs slices, `make`, `append`, `copy` |
+| Maps | `make(map[K]V)`, comma-ok, delete, iteration |
+| Pointers | `&` and `*`, mutation, nil pointers |
+
+## Your first composite-type program
+
+The program below defines a `Point` struct, builds a `[]Point` slice, then looks up a name in a `map[string]int`. It demonstrates value types (`Point` is copied), slice literals, and map access with the zero-value default.
+
+export const indexCode = `package main
+
+import "fmt"
+
+type Point struct {
+\tX, Y int
+}
+
+func main() {
+\t// Struct literal with named fields
+\tp := Point{X: 3, Y: 4}
+\tfmt.Println(p.X, p.Y)
+
+\t// Slice of structs
+\tpoints := []Point{
+\t\t{X: 0, Y: 0},
+\t\t{X: 1, Y: 2},
+\t\t{X: 3, Y: 4},
+\t}
+\tfor _, pt := range points {
+\t\tfmt.Printf("(%d, %d)\\n", pt.X, pt.Y)
+\t}
+
+\t// Map: string -> int
+\tscore := map[string]int{
+\t\t"Alice": 95,
+\t\t"Bob":   87,
+\t}
+\tfmt.Println(score["Alice"])
+\tfmt.Println(score["Charlie"]) // missing key -> zero value (0)
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="Value types are copied; reference-like types share data">
+When you assign a struct to a new variable — `p2 := p1` — you get an independent copy. Modifying `p2` never affects `p1`. Slices and maps behave differently: assigning copies the header, so two variables can point at the same underlying data. This distinction drives most of the design decisions you will encounter throughout this module.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: "Which of the following is a value type in Go — meaning assignment copies the data?",
+    options: [
+      "[]int (slice)",
+      "map[string]int",
+      "struct { X, Y int }",
+      "*int (pointer)"
+    ],
+    answer: 2
+  },
+  {
+    q: "What does Go print when you read a map key that has never been set?",
+    options: [
+      "A runtime panic",
+      "nil",
+      "An error value",
+      "The zero value for the map's value type"
+    ],
+    answer: 3
+  },
+  {
+    q: "A `[]Point` slice and a `[3]Point` array both store Point values. What is the key difference?",
+    options: [
+      "Arrays can hold any type; slices only hold structs",
+      "Slices have a fixed size set at compile time; arrays grow dynamically",
+      "Arrays have a fixed size set at compile time; slices can grow dynamically",
+      "They are identical — the brackets are just syntax sugar"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="types-data/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="types-data/index" />

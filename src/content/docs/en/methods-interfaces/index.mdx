@@ -1,12 +1,105 @@
 ---
 title: 'Methods & Interfaces'
-description: 'Methods on types, implicit interface satisfaction, composition via embedding, and the io.Reader/io.Writer contract.'
+description: 'Methods on types, implicit interface satisfaction, type assertions, and composition via embedding — Go polymorphism without inheritance.'
 sidebar:
   order: 1
 ---
 
-## Methods & Interfaces
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-This module covers one of Go's most powerful design ideas: interfaces are satisfied implicitly. You will learn to define methods on any named type, design small focused interfaces (the Go proverb: "the bigger the interface, the weaker the abstraction"), use struct embedding for composition instead of inheritance, and work with the standard `io.Reader` and `io.Writer` interfaces that underpin almost all I/O in Go.
+## Go's approach to polymorphism
 
-> This module is coming soon. Check back for lessons on methods, interface design, composition, and embedding.
+Most object-oriented languages bolt polymorphism onto a class hierarchy: you declare that a type *implements* an interface, you *extends* a base class, and the compiler enforces the lineage. Go throws away the hierarchy entirely.
+
+In Go, **any named type can have methods**, and **any type that has the right methods automatically satisfies an interface** — no declaration required. This is called *implicit interface satisfaction*, and it is the single most important design decision in the language.
+
+The combination of methods and interfaces gives you:
+
+- **Polymorphism** without inheritance trees.
+- **Dependency inversion** without frameworks — accept an interface, return a struct.
+- **Composition** without `extends` — embed types to promote their fields and methods.
+
+## Module map
+
+| Lesson | What you will learn |
+|--------|---------------------|
+| [Methods](./methods) | Declare methods on any named type; value vs pointer receivers; method sets. |
+| [Interfaces](./interfaces) | Define and satisfy interfaces implicitly; small interfaces; the empty interface `any`. |
+| [Type Assertions](./type-assertions) | `x.(T)`, the comma-ok form, and `switch v := x.(type)`. |
+| [Embedding](./embedding) | Struct embedding, promoted fields/methods, interface embedding, composition over inheritance. |
+
+## A first runnable example
+
+The snippet below defines a method on a struct, declares a one-method interface, and calls the method through the interface — all in under 20 lines.
+
+export const indexCode = `package main
+
+import "fmt"
+
+type Rectangle struct {
+\tWidth, Height float64
+}
+
+func (r Rectangle) Area() float64 {
+\treturn r.Width * r.Height
+}
+
+type Sizer interface {
+\tArea() float64
+}
+
+func printArea(s Sizer) {
+\tfmt.Printf("area = %.2f\\n", s.Area())
+}
+
+func main() {
+\tr := Rectangle{Width: 4, Height: 3}
+\tfmt.Println(r.Area())
+\tprintArea(r)
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="The key insight">
+`Rectangle` never says `implements Sizer`. It just has a method with the right name and signature. That is all Go needs. If the method set matches, the interface is satisfied — automatically, at compile time.
+</Callout>
+
+export const quizMethodsInterfaces = [
+  {
+    q: "How does a Go type declare that it satisfies an interface?",
+    options: [
+      "By using the `implements` keyword",
+      "By embedding the interface inside the struct",
+      "By having the correct methods — no declaration is needed",
+      "By registering with an interface registry at runtime"
+    ],
+    answer: 2
+  },
+  {
+    q: "Which of the following can have methods in Go?",
+    options: [
+      "Only structs",
+      "Only pointer types",
+      "Any named type defined in the same package",
+      "Only types that implement at least one interface"
+    ],
+    answer: 2
+  },
+  {
+    q: "What is the idiomatic Go substitute for class inheritance?",
+    options: [
+      "The `extends` keyword",
+      "Struct embedding and small interfaces",
+      "Pointer receivers on a base struct",
+      "The `any` interface"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/index" questions={quizMethodsInterfaces} />
+
+<ProgressTracker client:visible id="methods-interfaces/index" />

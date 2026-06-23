@@ -1,0 +1,152 @@
+---
+title: Benchmarks
+description: 'func BenchmarkXxx(b *testing.B), รูปแบบ b.Loop() และ b.N, go test -bench=. -benchmem, และการอ่านผลลัพธ์ benchmark'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Benchmark คืออะไร?
+
+**benchmark** วัดว่าโค้ดใช้เวลานานเท่าไร Go benchmarks อยู่ในไฟล์ `_test.go` เคียงข้าง unit tests และรันด้วยคำสั่ง `go test` เดียวกัน — เพียงแต่ใช้ flags ต่างกัน
+
+ฟังก์ชัน benchmark มี signature ดังนี้:
+
+```go
+func BenchmarkXxx(b *testing.B) {
+    // ... setup code (ไม่ถูกวัด) ...
+    for b.Loop() {   // Go 1.24+ รูปแบบที่แนะนำ
+        // โค้ดที่ต้องการวัด
+    }
+}
+```
+
+ค่า `testing.B` ขับเคลื่อน loop framework จะเริ่มด้วยค่า `b.N` ขนาดเล็กและเพิ่มขึ้นเรื่อยๆ จนกว่า benchmark จะรันนานพอที่จะให้การวัดที่เสถียร คุณไม่ต้องกำหนด `b.N` เอง
+
+## รูปแบบ loop สองแบบ
+
+Go 1.24 แนะนำ `b.Loop()` เป็นทางเลือกที่ดีกว่า classic `b.N` counter loop:
+
+```go
+// รูปแบบ classic — ใช้ได้กับ Go ทุกเวอร์ชัน
+func BenchmarkFibClassic(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        Fibonacci(20)
+    }
+}
+
+// รูปแบบ modern — Go 1.24+
+func BenchmarkFib(b *testing.B) {
+    for b.Loop() {
+        Fibonacci(20)
+    }
+}
+```
+
+ทั้งสองรูปแบบถูกต้อง `b.Loop()` แนะนำใน Go 1.24+ เพราะจัดการ timer reset ภายในเองและมีโอกาสผิดพลาดน้อยกว่า
+
+## Setup ภายนอก loop
+
+หาก benchmark ต้องการ setup ที่ซับซ้อน (เปิดไฟล์, สร้าง slice ขนาดใหญ่) ให้ทำก่อน loop และเรียก `b.ResetTimer()` เพื่อไม่ให้เวลา setup ถูกนับ:
+
+```go
+func BenchmarkIsPrimeList(b *testing.B) {
+    numbers := make([]int, 1000)
+    for i := range numbers {
+        numbers[i] = i + 2
+    }
+    b.ResetTimer() // เริ่มวัดจากจุดนี้
+
+    for b.Loop() {
+        for _, n := range numbers {
+            IsPrime(n)
+        }
+    }
+}
+```
+
+## การรัน benchmarks
+
+Unit tests **ไม่** รัน benchmarks โดยค่าเริ่มต้น ใช้ flag `-bench`:
+
+```bash
+# รัน benchmarks ทั้งหมด แสดง memory allocations
+go test -bench=. -benchmem ./...
+
+# รันเฉพาะ benchmarks ที่ชื่อตรงกับ pattern
+go test -bench=BenchmarkFib -benchmem ./...
+
+# รัน benchmarks อย่างน้อย 5 วินาทีต่อฟังก์ชัน
+go test -bench=. -benchtime=5s ./...
+```
+
+## การอ่านผลลัพธ์
+
+```
+BenchmarkFib-8        5000000      234 ns/op
+BenchmarkFibClassic-8 5000000      236 ns/op     0 B/op    0 allocs/op
+```
+
+| คอลัมน์ | ความหมาย |
+|--------|---------|
+| suffix `-8` | ค่า GOMAXPROCS (8 logical CPUs) |
+| `5000000` | จำนวน iterations ที่ `b.N` รัน |
+| `234 ns/op` | nanoseconds ต่อ operation |
+| `0 B/op` | bytes ที่ allocate ต่อ operation (ต้องใช้ `-benchmem`) |
+| `0 allocs/op` | heap allocations ต่อ operation (ต้องใช้ `-benchmem`) |
+
+`Fibonacci` ไม่ allocate อะไรเลยเพราะใช้แค่ stack variables — นั่นคือเหตุผลที่ทั้งสองคอลัมน์ alloc เป็นศูนย์ ฟังก์ชันที่สร้าง `[]string` จะแสดงค่าที่ไม่ใช่ศูนย์
+
+<Callout title="ให้ b.N เป็นตัวกำหนด iterations — อย่ากำหนดเอง">
+benchmark framework ควบคุม `b.N` เพื่อให้ได้การวัดที่เสถียรทางสถิติ หากคุณกำหนด `b.N` โดยตรงหรือใช้ loop count ที่ตายตัว ผลลัพธ์จะไม่น่าเชื่อถือ นอกจากนี้ให้ใช้ `-benchmem` เป็นนิสัย: แม้แต่ฟังก์ชันที่ดูเหมือนไม่ allocate บางครั้งก็ทำให้คุณประหลาดใจ และการตรวจพบ heap allocations ที่ไม่จำเป็นตั้งแต่เนิ่นๆ ถูกกว่าการ profile ใน production มาก
+</Callout>
+
+export const quizBenchmarks = [
+  {
+    q: "benchmark framework ทำอะไรกับ b.N ระหว่างการรัน benchmark?",
+    options: [
+      "มันถูกกำหนดเป็น 1000 เสมอ",
+      "คุณกำหนดครั้งเดียวก่อน loop",
+      "framework เพิ่มค่ามันจนกว่าการวัดจะเสถียร",
+      "มันเท่ากับจำนวน test cases ในไฟล์"
+    ],
+    answer: 2
+  },
+  {
+    q: "flag ใดทำให้ go test รายงาน bytes ที่ allocate ต่อ operation?",
+    options: [
+      "-memprofile",
+      "-benchmem",
+      "-allocs",
+      "-trace"
+    ],
+    answer: 1
+  },
+  {
+    q: "ควรเรียก b.ResetTimer() เมื่อใดใน benchmark?",
+    options: [
+      "ที่จุดเริ่มต้นของทุก benchmark function",
+      "หลังจาก for b.Loop() block สิ้นสุด",
+      "หลัง setup ที่ซับซ้อนซึ่งไม่ควรนับในการวัด",
+      "ก่อนเรียก b.N"
+    ],
+    answer: 2
+  },
+  {
+    q: "รูปแบบ benchmark loop ที่แนะนำใน Go 1.24+ คืออะไร?",
+    options: [
+      "for i := 0; i < b.N; i++",
+      "for b.Loop()",
+      "for b.Next()",
+      "for range b.N"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="testing-tooling/benchmarks" questions={quizBenchmarks} />
+
+<ProgressTracker client:visible id="testing-tooling/benchmarks" />

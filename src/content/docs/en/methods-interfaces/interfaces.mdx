@@ -1,0 +1,169 @@
+---
+title: Interfaces
+description: 'Define interface types, satisfy them implicitly, design small focused interfaces, and work with the empty interface any.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is an interface?
+
+An **interface** is a named collection of method signatures. Any type that has all of those methods satisfies the interface — without saying so explicitly.
+
+```go
+type Shape interface {
+    Area()      float64
+    Perimeter() float64
+}
+```
+
+Any type with an `Area() float64` method and a `Perimeter() float64` method automatically satisfies `Shape`.
+
+## Implicit satisfaction — no `implements`
+
+This is the defining feature of Go interfaces. Compare:
+
+| Language | How you declare satisfaction |
+|----------|------------------------------|
+| Java / C# | `class Circle implements Shape` |
+| Go | Just have the right methods |
+
+The result is *decoupled* code. A type in package `geometry` can satisfy an interface in package `renderer` without either package knowing about the other. This makes Go interfaces composable across package boundaries without any import dependency on the interface definition.
+
+## Small interfaces
+
+Go's standard library is built on tiny, focused interfaces:
+
+```go
+type Reader interface { Read(p []byte) (n int, err error) }
+type Writer interface { Write(p []byte) (n int, err error) }
+type Stringer interface { String() string }
+```
+
+The Go proverb: *"The bigger the interface, the weaker the abstraction."* A two-method interface is satisfied by far more types than a ten-method interface, making it dramatically more reusable.
+
+## The empty interface — `any`
+
+An interface with no methods is satisfied by every type. Since Go 1.18 it has the alias `any`:
+
+```go
+var v any = 42
+v = "hello"
+v = []int{1, 2, 3}
+```
+
+Use `any` sparingly — it surrenders type safety. The typical use cases are generic containers (before generics were added), JSON unmarshalling into unknown shapes, and variadic logging functions.
+
+## Accept interfaces, return structs
+
+The idiomatic Go guideline:
+
+- **Function parameters** should be interfaces — accept the broadest type that covers what you actually call.
+- **Return values** should be concrete structs — callers get the full API of the real type; they can narrow it themselves.
+
+```go
+// Good: accepts an interface, returns a concrete type
+func NewBuffer(r io.Reader) *bytes.Buffer { ... }
+```
+
+export const interfacesCode = `package main
+
+import (
+\t"fmt"
+\t"math"
+)
+
+type Shape interface {
+\tArea()      float64
+\tPerimeter() float64
+}
+
+type Circle struct {
+\tRadius float64
+}
+
+func (c Circle) Area() float64 {
+\treturn math.Pi * c.Radius * c.Radius
+}
+
+func (c Circle) Perimeter() float64 {
+\treturn 2 * math.Pi * c.Radius
+}
+
+type Rect struct {
+\tW, H float64
+}
+
+func (r Rect) Area() float64      { return r.W * r.H }
+func (r Rect) Perimeter() float64 { return 2 * (r.W + r.H) }
+
+func describe(s Shape) {
+\tfmt.Printf("area=%.2f perimeter=%.2f\\n", s.Area(), s.Perimeter())
+}
+
+func main() {
+\tshapes := []Shape{
+\t\tCircle{Radius: 5},
+\t\tRect{W: 4, H: 3},
+\t}
+\tfor _, s := range shapes {
+\t\tdescribe(s)
+\t}
+}`;
+
+<Playground client:visible code={interfacesCode} />
+
+<Callout title="Interfaces are satisfied implicitly">
+Neither `Circle` nor `Rect` ever mentions `Shape`. They satisfy it because they have `Area()` and `Perimeter()` with the right signatures. This means you can define an interface *after* the types that satisfy it — the types do not need to change at all. Retroactive interface satisfaction is one of Go's most powerful refactoring tools.
+</Callout>
+
+export const quizInterfaces = [
+  {
+    q: "How does a Go type declare that it implements an interface?",
+    options: [
+      "With the `implements` keyword in the type declaration",
+      "By embedding the interface inside the struct",
+      "By having all the methods the interface requires — no keyword needed",
+      "By calling `register(myType, MyInterface)` at init time"
+    ],
+    answer: 2
+  },
+  {
+    q: "You define an interface `Printer` with one method in package `ui`. A struct `Document` in package `doc` has that method. What import is needed?",
+    options: [
+      "`doc` must import `ui` to declare it implements `Printer`",
+      "`ui` must import `doc` to reference `Document`",
+      "No additional import is needed — satisfaction is implicit",
+      "Both packages must import a shared `contracts` package"
+    ],
+    answer: 2
+  },
+  {
+    q: "What does `any` mean in Go 1.18+?",
+    options: [
+      "A union type that holds exactly two possible types",
+      "An alias for `interface{}` — an interface with no methods",
+      "A constraint used only in generic type parameters",
+      "A pointer to an unknown type"
+    ],
+    answer: 1
+  },
+  {
+    q: "Your function needs to write bytes. Which parameter type is most idiomatic?",
+    options: [
+      "`*os.File` — the most common writer",
+      "`*bytes.Buffer` — the fastest in-memory writer",
+      "`io.Writer` — an interface that any writer satisfies",
+      "`any` — accept anything and type-assert inside"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/interfaces" questions={quizInterfaces} />
+
+<ProgressTracker client:visible id="methods-interfaces/interfaces" />

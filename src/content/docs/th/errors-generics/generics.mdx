@@ -1,0 +1,191 @@
+---
+title: Generics
+description: 'Type parameters, constraints, built-in any และ comparable, และการเขียน generic functions และ types ใน Go 1.18+'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทำไมต้องใช้ Generics?
+
+ก่อน Go 1.18 การเขียนฟังก์ชันที่ทำงานกับหลาย type ต้องการ code ซ้ำหรือใช้ `interface{}` + type assertion ที่ runtime ซึ่งสูญเสีย type safety Generics แก้ปัญหานี้: เขียนครั้งเดียว compiler สร้าง code เฉพาะ type และตรวจสอบการใช้งานที่ compile time
+
+ตัวอย่างเช่น ฟังก์ชัน `Max` ที่ทำงานได้ทั้ง `int` และ `float64` ก่อนหน้านี้ต้องเขียนสองฟังก์ชันที่เหมือนกัน หรือใช้ `interface{}` parameter ที่ยอมรับ type ผิดอย่างเงียบ ๆ ด้วย generics ฟังก์ชันเดียวครอบคลุมทั้งสอง — และ compiler ปฏิเสธทุก call ที่ใช้ type ที่ไม่รองรับ
+
+## Type Parameters
+
+syntax ของ generic function คือ `func FuncName[T Constraint](args) returnType` โดย `[T Constraint]` เรียกว่า **type parameter list** `T` เป็น placeholder ที่ compiler แทนด้วย concrete type ที่แต่ละ call site
+
+```go
+func Max[T Number](a, b T) T {
+    if a > b {
+        return a
+    }
+    return b
+}
+```
+
+ที่ call site Go มักจะ **อนุมาน** T จาก argument types ได้ เขียน `Max(3, 7)` แล้ว compiler อนุมานว่า T เป็น `int` — ไม่ต้องเขียน `Max[int](3, 7)` อย่างชัดเจน ต้องระบุ type argument อย่างชัดเจนเฉพาะเมื่อการอนุมานคลุมเครือหรือเมื่อ call โดยไม่มี argument
+
+## Constraints
+
+**constraint** คือ interface ที่จำกัดว่า type ใดสามารถแทน type parameter ได้ constraints จะปรากฏหลังชื่อ type parameter ใน list `[T Constraint]`
+
+- **`any`** — constraint ที่กว้างที่สุด; เทียบเท่ากับ `interface{}` อนุญาต type ใดก็ได้ แต่จำกัด operations ที่ทำได้กับค่าของ type `T` (เฉพาะ operations ที่ valid กับทุก type: การ assign, การส่งไปยังฟังก์ชัน เป็นต้น)
+- **`comparable`** — type ใดก็ตามที่รองรับ `==` และ `!=` ใช้เมื่อ generic function ต้องเปรียบเทียบค่าเพื่อความเท่าเทียม
+
+เขียน **custom constraints** โดยใช้ interface union syntax ได้:
+
+```go
+type Number interface {
+    ~int | ~float64
+}
+```
+
+prefix `~` หมายถึง "type ใดก็ตามที่มี underlying type เป็น `int` หรือ `float64`" นี่คือ **tilde operator**: หากไม่มี `~` เฉพาะ named type นั้นเท่านั้นที่ตรงกัน; เมื่อมี `~` custom types เช่น `type Celsius float64` ก็ satisfy `~float64` ได้เช่นกัน ทำให้ constraints ทำงานได้ตามธรรมชาติกับ domain-specific type aliases
+
+## Built-in constraints จาก cmp
+
+Go 1.21 นำเสนอ package `cmp` ซึ่ง export `cmp.Ordered` — constraint แบบ idiomatic สำหรับ type ที่รองรับ `<`, `<=`, `>`, `>=`, `==` ครอบคลุม integer, float, และ string ทุกชนิด การใช้ `cmp.Ordered` สะอาดกว่าการเขียน union เต็มรูปแบบ `~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ... | ~float64 | ~string` ด้วยตัวเอง
+
+```go
+import "cmp"
+
+func Min[T cmp.Ordered](a, b T) T {
+    if a < b {
+        return a
+    }
+    return b
+}
+```
+
+สำหรับ playground snippet ด้านล่าง `cmp.Ordered` ถูกแทนที่ด้วย local `Number` interface เพื่อหลีกเลี่ยงการ import package ภายนอก — yaegi (in-browser interpreter) รองรับ generics บางส่วนและทำงานได้น่าเชื่อถือที่สุดกับ inline constraints
+
+## Generic Types
+
+**struct** ก็สามารถ parameterize ได้เช่นกันเหมือนกับฟังก์ชัน ประกาศ type parameter หลังชื่อ type:
+
+```go
+type Stack[T any] struct {
+    items []T
+}
+
+func (s *Stack[T]) Push(v T) {
+    s.items = append(s.items, v)
+}
+
+func (s *Stack[T]) Pop() (T, bool) {
+    if len(s.items) == 0 {
+        var zero T
+        return zero, false
+    }
+    last := s.items[len(s.items)-1]
+    s.items = s.items[:len(s.items)-1]
+    return last, true
+}
+```
+
+methods บน generic type ใช้ type parameter ซ้ำใน receiver — `(s *Stack[T])` — แต่ไม่เพิ่ม constraint ใหม่ constraint ถูกกำหนดไว้แล้วครั้งเดียวตอนประกาศ type
+
+export const genericsCode = `package main
+
+import "fmt"
+
+type Number interface {
+\t~int | ~float64
+}
+
+func Max[T Number](a, b T) T {
+\tif a > b {
+\t\treturn a
+\t}
+\treturn b
+}
+
+func Map[T, U any](slice []T, f func(T) U) []U {
+\tresult := make([]U, len(slice))
+\tfor i, v := range slice {
+\t\tresult[i] = f(v)
+\t}
+\treturn result
+}
+
+func Filter[T any](slice []T, pred func(T) bool) []T {
+\tvar result []T
+\tfor _, v := range slice {
+\t\tif pred(v) {
+\t\t\tresult = append(result, v)
+\t\t}
+\t}
+\treturn result
+}
+
+func main() {
+\tfmt.Println(Max(3, 7))
+\tfmt.Println(Max(3.14, 2.71))
+
+\tnums := []int{1, 2, 3, 4, 5}
+\tdoubled := Map(nums, func(n int) int { return n * 2 })
+\tfmt.Println(doubled)
+
+\twords := []string{"go", "generics", "fun", "code"}
+\tlong := Filter(words, func(s string) bool { return len(s) > 3 })
+\tfmt.Println(long)
+}`;
+
+<Playground client:visible code={genericsCode} />
+
+<Callout title="Generics เพิ่ม type safety โดยไม่ต้องใช้ interface{} + assertions">
+ก่อน generics container หรือ algorithm แบบ generic ต้องใช้ `interface{}` parameter และ runtime type assertion — error แสดงเฉพาะที่ runtime เท่านั้น ด้วย type parameters compiler ตรวจสอบความถูกต้องของ type ที่ compile time ใช้ generics เมื่อพบว่าตัวเองเขียน algorithm เดิมสำหรับหลาย type หรือเมื่อต้องการ container ที่รักษา element type ไว้
+</Callout>
+
+export const quizGenerics = [
+  {
+    q: "ใน func Max[T Number](a, b T) T ส่วน [T Number] หมายความว่าอะไร?",
+    options: [
+      "T เป็นตัวแปรชื่อ Number",
+      "T เป็น type parameter ที่ต้องตรงกับ constraint Number",
+      "T ต้องเป็น type Number เท่านั้น",
+      "Number เป็นฟังก์ชันที่คืน T"
+    ],
+    answer: 1
+  },
+  {
+    q: "prefix ~ ใน constraint เช่น ~int หมายความว่าอะไร?",
+    options: [
+      "เฉพาะ type int เท่านั้น",
+      "type ใด ๆ ที่มี underlying type เป็น int (รวม custom types เช่น type MyID int)",
+      "ประมาณ int (fuzzy matching)",
+      "pointer ชี้ไปที่ int"
+    ],
+    answer: 1
+  },
+  {
+    q: "constraint ใดที่อนุญาต type ที่รองรับ == และ !=?",
+    options: [
+      "any",
+      "comparable",
+      "ordered",
+      "equatable"
+    ],
+    answer: 1
+  },
+  {
+    q: "ที่ call site Max(3, 7) จำเป็นต้องเขียน Max[int](3, 7) หรือไม่?",
+    options: [
+      "ใช่ ต้องระบุเสมอ",
+      "ไม่ Go อนุมาน type parameter จาก arguments ได้",
+      "เฉพาะเมื่อ arguments ทั้งสองเป็น type เดียวกัน",
+      "เฉพาะใน Go 1.21+"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="errors-generics/generics" questions={quizGenerics} />
+
+<ProgressTracker client:visible id="errors-generics/generics" />

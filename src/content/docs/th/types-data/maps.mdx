@@ -1,0 +1,173 @@
+---
+title: Maps
+description: 'make(map[K]V), set/get/delete, comma-ok idiom, zero value สำหรับ key ที่ไม่มีอยู่, ลำดับ iteration แบบสุ่ม, และ map เป็น reference type'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การสร้าง map
+
+Map คือ hash table ที่ map key ชนิด `K` ไปยัง value ชนิด `V` สร้างด้วย `make` หรือ composite literal:
+
+```go
+// make — เหมาะเมื่อเพิ่ม entry แบบทีละตัว
+scores := make(map[string]int)
+
+// composite literal — เหมาะเมื่อรู้ entry ล่วงหน้า
+scores := map[string]int{
+    "Alice": 95,
+    "Bob":   87,
+}
+```
+
+Key type ต้องเป็น **comparable** (รองรับ `==`) type ที่ใช้เป็น key ได้คือ `string`, `int`, ตัวเลขทุกชนิด, boolean, pointer, และ struct ที่ field ทุกตัวเป็น comparable แต่ slice, map, และ function ไม่สามารถใช้เป็น key ได้
+
+## Set, get, delete
+
+```go
+scores["Charlie"] = 72        // set
+fmt.Println(scores["Alice"])  // get → 95
+delete(scores, "Bob")         // delete (ไม่มีผลถ้า key ไม่มีอยู่)
+```
+
+## Zero value สำหรับ key ที่ไม่มีอยู่
+
+การอ่าน key ที่ไม่มีอยู่ **ไม่ panic** เลย — จะคืน zero value ของ value type:
+
+```go
+fmt.Println(scores["Dave"]) // 0 — ไม่ใช่ panic
+```
+
+แม้จะสะดวก แต่ก็ซ่อนบั๊กได้: คุณไม่รู้ว่า key map ไปที่ `0` หรือไม่เคยถูก set ใช้ comma-ok idiom เพื่อแยกแยะ
+
+## Comma-ok idiom
+
+การ lookup map แบบสอง result คืนค่าและ boolean ที่บอกว่า key มีอยู่หรือไม่:
+
+```go
+v, ok := scores["Dave"]
+if !ok {
+    fmt.Println("Dave not found")
+}
+```
+
+## Map เป็น reference type
+
+การ assign map จะ copy แค่ header ไม่ใช่ข้อมูล ตัวแปรทั้งสองชี้ไปยัง hash table เดียวกัน:
+
+```go
+a := map[string]int{"x": 1}
+b := a
+b["x"] = 99
+fmt.Println(a["x"]) // 99 — a และ b แชร์ map เดียวกัน
+```
+
+## ลำดับ iteration แบบสุ่ม
+
+Go จงใจสุ่มลำดับ map iteration ทุกครั้งที่รันโปรแกรม เพื่อป้องกันโค้ดที่พึ่งพาลำดับที่ไม่ได้นิยาม หากต้องการ print entry ของ map แบบ deterministic ให้ sort key ก่อน:
+
+```go
+import "sort"
+
+keys := make([]string, 0, len(scores))
+for k := range scores {
+    keys = append(keys, k)
+}
+sort.Strings(keys)
+for _, k := range keys {
+    fmt.Printf("%s: %d\n", k, scores[k])
+}
+```
+
+export const mapsCode = `package main
+
+import (
+\t"fmt"
+\t"sort"
+)
+
+func main() {
+\t// make a map and add entries
+\tscores := make(map[string]int)
+\tscores["Alice"] = 95
+\tscores["Bob"] = 87
+\tscores["Charlie"] = 72
+
+\t// Comma-ok idiom
+\tv, ok := scores["Bob"]
+\tfmt.Println(v, ok) // 87 true
+
+\tv2, ok2 := scores["Dave"]
+\tfmt.Println(v2, ok2) // 0 false
+
+\t// Delete an entry
+\tdelete(scores, "Charlie")
+
+\t// Sort keys for deterministic output
+\tkeys := make([]string, 0, len(scores))
+\tfor k := range scores {
+\t\tkeys = append(keys, k)
+\t}
+\tsort.Strings(keys)
+\tfor _, k := range keys {
+\t\tfmt.Printf("%s: %d\\n", k, scores[k])
+\t}
+}`;
+
+<Playground client:visible code={mapsCode} />
+
+<Callout title="ลำดับ map iteration แบบสุ่ม — ควร sort เสมอสำหรับ output ที่ deterministic">
+Go จงใจสุ่มลำดับ map iteration ทุกครั้งที่รันโปรแกรม เพื่อป้องกันบั๊กที่พึ่งพา hash ordering แบบเงียบๆ ถ้าต้องการ output ที่คงที่ — สำหรับ test, log, หรือ user-facing data — ให้รวบรวม key ลงใน `[]string` แล้วเรียก `sort.Strings` แล้วค่อย range ผ่าน slice ที่เรียงแล้ว อย่าพึ่งพาลำดับของ `for k, v := range myMap`
+</Callout>
+
+export const quizMaps = [
+  {
+    q: "คุณอ่าน `scores[\"Dave\"]` แต่ไม่เคยเพิ่ม \"Dave\" เข้าไป Go คืนค่าอะไร?",
+    options: [
+      "Runtime panic",
+      "nil",
+      "Zero value ของ value type (0 สำหรับ int)",
+      "Error value"
+    ],
+    answer: 2
+  },
+  {
+    q: "ค่า return ที่สองใน `v, ok := scores[\"Alice\"]` บอกอะไร?",
+    options: [
+      "ว่า value เป็น non-zero หรือไม่",
+      "ว่า key มีอยู่ใน map หรือไม่",
+      "ว่า map มี capacity เหลืออีกไหม",
+      "ว่า key เป็น string ที่ valid หรือไม่"
+    ],
+    answer: 1
+  },
+  {
+    q: "คุณ assign `b := a` โดยที่ a คือ `map[string]int` แล้วกำหนด `b[\"x\"] = 99` ค่าของ `a[\"x\"]` คืออะไร?",
+    options: [
+      "0 — b คือ copy ที่เป็นอิสระของ a",
+      "99 — map เป็น reference type; a และ b ชี้ไป hash table เดียวกัน",
+      "Panic — ไม่สามารถ assign map โดยตรงได้",
+      "ค่าเดิมของ a[\"x\"] ก่อน assign"
+    ],
+    answer: 1
+  },
+  {
+    q: "ทำไม Go ถึงสุ่มลำดับ map iteration?",
+    options: [
+      "เพื่อปรับปรุง hash table performance",
+      "เพื่อป้องกันโปรแกรมจากการพึ่งพาลำดับที่ไม่ได้นิยามโดยไม่ตั้งใจ",
+      "เพื่อลดการใช้ memory",
+      "ไม่ได้สุ่ม — ลำดับจะเรียงตาม key ตัวอักษรเสมอ"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="types-data/maps" questions={quizMaps} />
+
+<ProgressTracker client:visible id="types-data/maps" />

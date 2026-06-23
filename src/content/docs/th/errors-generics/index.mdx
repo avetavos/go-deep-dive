@@ -1,12 +1,133 @@
 ---
 title: 'Errors & Generics'
-description: 'Error wrapping, custom error types, errors.Is/As, และ generics กับ type parameters ใน Go'
+description: 'แนวทาง error model ของ Go, การ wrap ด้วย fmt.Errorf, sentinel errors, errors.Is/As และ generics พร้อม type parameters'
 sidebar:
   order: 1
 ---
 
-## Errors และ Generics ใน Go
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-โมดูลนี้ครอบคลุมแนวทาง error handling แบบ idiomatic ของ Go — การ wrap errors ด้วย `fmt.Errorf("%w", err)`, การสร้าง custom error types, และการใช้ `errors.Is` กับ `errors.As` สำหรับ error inspection นอกจากนี้ยังสอน generics ที่เพิ่มเข้ามาใน Go 1.18 ซึ่งช่วยให้เขียน reusable algorithms และ data structures ที่ type-safe ได้โดยไม่ต้องพึ่ง `interface{}`
+## การจัดการ Error ใน Go
 
-> โมดูลนี้กำลังจะมาเร็ว ๆ นี้ คอยติดตามบทเรียนเกี่ยวกับ error wrapping, custom errors, และ generics
+ภาษาส่วนใหญ่จัดการกับความล้มเหลวผ่าน exceptions — กลไกพิเศษที่ควบคุมการไหลของโปรแกรมโดยการ unwind call stack จนกว่า `catch` block จะดักจับปัญหาไว้ได้ Go เลือกแนวทางที่แตกต่างอย่างสิ้นเชิง: **errors คือค่าธรรมดา**
+
+ฟังก์ชันที่อาจล้มเหลวจะคืนค่าสองค่า: ผลลัพธ์และ `error` caller รับทั้งคู่และตัดสินใจว่าจะทำอะไร ไม่มี hidden control flow ไม่มี stack unwinding ไม่มี unchecked exceptions ทุก callsite ที่อาจเกิด error มองเห็นได้ในโค้ด ทำให้โปรแกรมตรวจสอบและทำความเข้าใจได้ง่ายขึ้น
+
+รูปแบบ canonical ที่คุณจะเห็นทุกที่ใน Go:
+
+```go
+result, err := doSomething()
+if err != nil {
+    // จัดการความล้มเหลว — return, log, wrap, หรือ recover
+}
+// err เป็น nil: ใช้ result ได้อย่างปลอดภัย
+```
+
+`nil` หมายถึงสำเร็จ error ที่ไม่ใช่ nil หมายถึงมีบางอย่างผิดพลาดและไม่ควรเชื่อถือ `result`
+
+## interface error
+
+type `error` ของ Go นิยามไว้เป็น interface ที่มีเพียงหนึ่ง method ใน standard library:
+
+```go
+type error interface {
+    Error() string
+}
+```
+
+type ใดก็ตามที่ implement `Error() string` จะ satisfy interface `error` ได้ ซึ่งหมายความว่าคุณสามารถส่งผ่าน error แบบ string ธรรมดา, error ที่มีโครงสร้างซับซ้อน และทุกอย่างที่อยู่ระหว่างนั้น — ทั้งหมดผ่าน interface เดียวกัน `nil` เป็นค่า `error` ที่ถูกต้องและหมายถึงไม่มี error ใด ๆ เกิดขึ้น
+
+## สิ่งที่จะได้เรียนในโมดูลนี้
+
+| บทเรียน | หัวข้อ |
+|---------|--------|
+| หน้านี้ | ภาพรวมแนวคิดและตัวอย่างแรกที่รันได้ |
+| Error Values | `errors.New`, `fmt.Errorf`, sentinel errors, `errors.Is` |
+| Wrapping & Custom Errors | `%w`, `errors.As`, custom error types |
+| Panic & Recover | เมื่อไหรควร panic, `recover`, การ defer cleanup |
+| Generics | Type parameters, constraints, `~T`, union types |
+
+## ตัวอย่างแรก
+
+ฟังก์ชันเล็ก ๆ ที่คืนค่า `(string, error)` เพื่อแสดงรูปแบบพื้นฐานของการจัดการ error ใน Go:
+
+```go
+package main
+
+import (
+    "errors"
+    "fmt"
+)
+
+func greet(name string) (string, error) {
+    if name == "" {
+        return "", errors.New("name must not be empty")
+    }
+    return fmt.Sprintf("Hello, %s!", name), nil
+}
+
+func main() {
+    msg, err := greet("Gopher")
+    if err != nil {
+        fmt.Println("error:", err)
+        return
+    }
+    fmt.Println(msg) // Hello, Gopher!
+
+    _, err = greet("")
+    if err != nil {
+        fmt.Println("error:", err) // error: name must not be empty
+    }
+}
+```
+
+`errors.New` สร้าง error value ธรรมดาจาก string คงที่ ฟังก์ชันคืนค่า `nil` เป็น error ในเส้นทางปกติ และคืนค่า error ที่ไม่ใช่ nil ในเส้นทางที่ล้มเหลว caller ตรวจสอบ `if err != nil` ทันทีหลังการเรียก — นี่คือ idiom ที่คุณจะเขียนนับร้อยครั้งใน Go
+
+export const quizErrorsGenericsOverview = [
+  {
+    q: "ใน Go เมื่อฟังก์ชันคืนค่า error ที่ไม่ใช่ nil หมายความว่าอะไร?",
+    options: [
+      "เกิด panic พร้อมข้อความ error",
+      "โยน exception ที่ caller ต้องจับ",
+      "คืนค่าที่ caller สามารถตรวจสอบและจัดการได้",
+      "บันทึก log และคืน zero value"
+    ],
+    answer: 2
+  },
+  {
+    q: "interface error ในตัว (built-in) นิยามว่าอย่างไร?",
+    options: [
+      "interface{ Err() string }",
+      "interface{ Error() string }",
+      "interface{ Message() string }",
+      "interface{ String() error }"
+    ],
+    answer: 1
+  },
+  {
+    q: "package ใดที่ให้ errors.New และ errors.Is?",
+    options: [
+      "fmt",
+      "log",
+      "errors",
+      "io"
+    ],
+    answer: 2
+  },
+  {
+    q: "Generics ถูกเพิ่มเข้ามาใน Go เวอร์ชันใด?",
+    options: [
+      "1.16",
+      "1.17",
+      "1.18",
+      "1.21"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="errors-generics/index" questions={quizErrorsGenericsOverview} />
+
+<ProgressTracker client:visible id="errors-generics/index" />

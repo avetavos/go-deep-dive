@@ -1,0 +1,183 @@
+---
+title: encoding/json
+description: 'json.Marshal and Unmarshal, struct tags, nested structs, and map[string]any for flexible JSON handling.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## JSON in Go
+
+The `encoding/json` package converts Go values to JSON text (marshaling) and JSON text back to Go values (unmarshaling). The two central functions are:
+
+```go
+data, err := json.Marshal(v)       // Go value → []byte (JSON)
+err        = json.Unmarshal(data, &v) // []byte (JSON) → Go value
+```
+
+`Marshal` takes any value and returns a `[]byte`. `Unmarshal` writes into the value pointed to by the second argument — always pass a pointer so the function can modify the variable.
+
+## Struct tags
+
+A **struct tag** is a raw-string literal on a struct field that provides metadata. The `encoding/json` package reads `json:"name"` tags to control serialization:
+
+```go
+type User struct {
+    Name  string `json:"name"`
+    Email string `json:"email,omitempty"`
+    Age   int    `json:"age"`
+}
+```
+
+The tag syntax is `` `json:"<name>[,options]"` ``. Common options:
+
+| Tag | Effect |
+|-----|--------|
+| `json:"name"` | Use `name` as the JSON key instead of the field name |
+| `json:"name,omitempty"` | Omit this field from the output when its value is the zero value |
+| `json:"-"` | Always omit this field |
+
+## Nested structs
+
+Struct fields can themselves be structs. `json.Marshal` recurses into them automatically:
+
+```go
+type Address struct {
+    City    string `json:"city"`
+    Country string `json:"country"`
+}
+
+type User struct {
+    Name    string  `json:"name"`
+    Age     int     `json:"age"`
+    Address Address `json:"address"`
+}
+```
+
+The resulting JSON nests the address object under the `"address"` key.
+
+## map[string]any — flexible unmarshaling
+
+When you do not have a struct type ahead of time, unmarshal into `map[string]any`. Each JSON value becomes its natural Go counterpart: `string`, `float64`, `bool`, `[]any`, `map[string]any`, or `nil`.
+
+```go
+var m map[string]any
+json.Unmarshal([]byte(`{"lang":"Go","version":1.22}`), &m)
+fmt.Println(m["lang"])    // Go
+fmt.Println(m["version"]) // 1.22  (float64)
+```
+
+export const encodingJsonCode = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+)
+
+type Address struct {
+\tCity    string \`json:"city"\`
+\tCountry string \`json:"country"\`
+}
+
+type User struct {
+\tName    string  \`json:"name"\`
+\tAge     int     \`json:"age"\`
+\tEmail   string  \`json:"email,omitempty"\`
+\tAddress Address \`json:"address"\`
+}
+
+func main() {
+\t// Marshal a struct — Email is set, so it appears
+\tu := User{
+\t\tName:  "Alice",
+\t\tAge:   30,
+\t\tEmail: "alice@example.com",
+\t\tAddress: Address{
+\t\t\tCity:    "Bangkok",
+\t\t\tCountry: "Thailand",
+\t\t},
+\t}
+\tdata, err := json.Marshal(u)
+\tif err != nil {
+\t\tfmt.Println("marshal error:", err)
+\t\treturn
+\t}
+\tfmt.Println(string(data))
+
+\t// omitempty: Email is empty, so it is omitted
+\tu2 := User{Name: "Bob", Age: 25, Address: Address{City: "London", Country: "UK"}}
+\tdata2, _ := json.Marshal(u2)
+\tfmt.Println(string(data2))
+
+\t// Unmarshal back into a struct
+\tvar result User
+\terr = json.Unmarshal(data, &result)
+\tif err != nil {
+\t\tfmt.Println("unmarshal error:", err)
+\t\treturn
+\t}
+\tfmt.Printf("Name: %s, City: %s\\n", result.Name, result.Address.City)
+
+\t// map[string]any — flexible unmarshaling
+\traw := \`{"lang":"Go","version":1.22,"stable":true}\`
+\tvar m map[string]any
+\t_ = json.Unmarshal([]byte(raw), &m)
+\tfmt.Println(m["lang"], m["version"], m["stable"])
+}`;
+
+<Playground client:visible code={encodingJsonCode} />
+
+<Callout title="Only exported fields are marshaled; tags control the JSON key names">
+Fields that start with a lowercase letter are unexported and are completely invisible to `encoding/json` — they will never appear in the output and will never be populated during unmarshaling, regardless of what tag you write on them. Always make fields you want to serialize start with an uppercase letter. The `json:"name"` tag then controls the key name in the JSON output independently of the Go field name, so you can follow Go naming conventions (`UserID`) while producing clean JSON (`"user_id"`).
+</Callout>
+
+export const quizEncodingJson = [
+  {
+    q: "What does json.Unmarshal require as its second argument?",
+    options: [
+      "A value of any type",
+      "A pointer to the target value",
+      "A []byte slice",
+      "An io.Reader"
+    ],
+    answer: 1
+  },
+  {
+    q: "A struct field tagged `json:\"email,omitempty\"` with an empty string value will:",
+    options: [
+      "Appear in JSON as \"email\":\"\"",
+      "Appear in JSON as \"email\":null",
+      "Be omitted from the JSON output entirely",
+      "Cause json.Marshal to return an error"
+    ],
+    answer: 2
+  },
+  {
+    q: "You unmarshal JSON into map[string]any. What Go type does the number 1.22 become?",
+    options: [
+      "int",
+      "int64",
+      "float32",
+      "float64"
+    ],
+    answer: 3
+  },
+  {
+    q: "A struct field named userID (lowercase u) with a json:\"user_id\" tag will:",
+    options: [
+      "Be marshaled as \"user_id\" in the JSON",
+      "Be marshaled as \"userID\" in the JSON",
+      "Never appear in the JSON output because the field is unexported",
+      "Cause a compile error"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="stdlib/encoding-json" questions={quizEncodingJson} />
+
+<ProgressTracker client:visible id="stdlib/encoding-json" />

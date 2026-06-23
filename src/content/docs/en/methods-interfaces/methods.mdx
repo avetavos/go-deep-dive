@@ -1,0 +1,152 @@
+---
+title: Methods
+description: 'Declare methods on any named Go type, understand value vs pointer receivers, and learn when each is appropriate.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a method?
+
+A **method** is a function with a *receiver* — an extra parameter that appears between the `func` keyword and the function name. The receiver binds the function to a named type.
+
+```go
+func (r Rectangle) Area() float64 {
+    return r.Width * r.Height
+}
+```
+
+Here `r Rectangle` is the receiver. `Area` is now a method of `Rectangle`, callable as `rect.Area()`.
+
+## Value receivers vs pointer receivers
+
+The receiver can be either a value or a pointer:
+
+```go
+func (c Counter) Value() int  { return c.count }   // value receiver
+func (c *Counter) Inc()       { c.count++ }        // pointer receiver
+```
+
+| | Value receiver `(t T)` | Pointer receiver `(t *T)` |
+|--|------------------------|---------------------------|
+| **Sees** | A copy of the value | The original value |
+| **Can mutate?** | No — mutates the copy only | Yes |
+| **Callable on** | Both `T` and `*T` | Both `T` (addressable) and `*T` |
+| **Use when** | Read-only; small, cheap to copy | Mutation; large struct; consistent method set |
+
+**Be consistent:** if any method on a type needs a pointer receiver, give *all* methods of that type pointer receivers. Mixing causes subtle method-set issues when the type is used as an interface value.
+
+## Methods on any named type
+
+Methods are not limited to structs. You can define methods on any named type in your package:
+
+```go
+type Celsius float64
+
+func (t Celsius) String() string {
+    return fmt.Sprintf("%.1f°C", float64(t))
+}
+```
+
+You cannot define a method on a type from another package (e.g., `func (s string) Upper()` is illegal), but wrapping it in a local named type is always allowed.
+
+## Method sets
+
+The **method set** of a type determines which interfaces it satisfies:
+
+- The method set of `T` contains all methods with value receiver `(t T)`.
+- The method set of `*T` contains all methods — both `(t T)` and `(t *T)`.
+
+This is why an interface requiring a pointer-receiver method can only be satisfied by `*T`, not by `T`.
+
+export const methodsCode = `package main
+
+import "fmt"
+
+type Counter struct {
+\tcount int
+}
+
+// Pointer receiver — mutates the struct
+func (c *Counter) Inc() {
+\tc.count++
+}
+
+// Value receiver — read-only
+func (c Counter) Value() int {
+\treturn c.count
+}
+
+type Celsius float64
+
+func (t Celsius) String() string {
+\treturn fmt.Sprintf("%.1f\\u00b0C", float64(t))
+}
+
+func main() {
+\tc := Counter{}
+\tc.Inc()
+\tc.Inc()
+\tc.Inc()
+\tfmt.Println(c.Value())
+
+\ttemp := Celsius(36.6)
+\tfmt.Println(temp.String())
+}`;
+
+<Playground client:visible code={methodsCode} />
+
+<Callout title="Use a pointer receiver when you need to mutate — and be consistent">
+A value receiver always operates on a copy, so mutations are silently discarded. Use a pointer receiver whenever a method must change the receiver's state. Once you choose pointer receivers for any method on a type, use them for all methods on that type to keep the method set coherent and avoid surprising interface-satisfaction gaps.
+</Callout>
+
+export const quizMethods = [
+  {
+    q: "A method with a value receiver `(c Counter)` modifies `c.count`. What happens to the original variable?",
+    options: [
+      "The original variable is updated because Go passes structs by reference",
+      "The original variable is unchanged — the method works on a copy",
+      "A compile error is raised because value receivers cannot access fields",
+      "The behavior depends on whether the variable is on the heap or stack"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which type's method set includes both value-receiver and pointer-receiver methods?",
+    options: [
+      "T only",
+      "*T only",
+      "Both T and *T equally",
+      "Neither — method sets are determined at the call site"
+    ],
+    answer: 1
+  },
+  {
+    q: "You want to define a method on `type Kelvin float64`. What is the constraint?",
+    options: [
+      "You can only add methods if Kelvin embeds a struct",
+      "You can define methods on Kelvin only if float64 has no methods already",
+      "You can define methods on Kelvin as long as the type is defined in your package",
+      "You cannot define methods on a type whose underlying type is a primitive"
+    ],
+    answer: 2
+  },
+  {
+    q: "Your type has five methods. Four use value receivers and one uses a pointer receiver. What should you do?",
+    options: [
+      "Leave it — mixing is fine as long as each method compiles",
+      "Convert all methods to use pointer receivers for consistency",
+      "Convert all methods to use value receivers for consistency",
+      "Split the type into two separate types, one per receiver kind"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/methods" questions={quizMethods} />
+
+<ProgressTracker client:visible id="methods-interfaces/methods" />

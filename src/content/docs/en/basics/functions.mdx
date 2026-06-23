@@ -1,0 +1,250 @@
+---
+title: Functions
+description: 'Multiple return values, named returns, variadic functions, defer, closures, and first-class functions.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Function basics
+
+A Go function declares its parameter types and return types explicitly. The return type appears after the parameter list:
+
+```go
+func add(a int, b int) int {
+    return a + b
+}
+
+// Consecutive parameters of the same type can share a type annotation
+func add(a, b int) int {
+    return a + b
+}
+```
+
+## Multiple return values
+
+Go functions can return more than one value. The idiomatic pattern is `(result, error)` — the caller must handle or explicitly discard the error:
+
+```go
+func divide(a, b float64) (float64, error) {
+    if b == 0 {
+        return 0, errors.New("division by zero")
+    }
+    return a / b, nil
+}
+
+result, err := divide(10, 3)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result)
+```
+
+## Named return values
+
+Return values can be named. Named returns pre-declare variables and allow a **bare return** (a `return` with no arguments that returns the current values of the named variables). Use them sparingly — they are clearest in short functions where the names genuinely document the result:
+
+```go
+func minMax(nums []int) (min, max int) {
+    min, max = nums[0], nums[0]
+    for _, v := range nums[1:] {
+        if v < min {
+            min = v
+        }
+        if v > max {
+            max = v
+        }
+    }
+    return // bare return: returns current min, max
+}
+```
+
+## Variadic functions
+
+A variadic function accepts a variable number of arguments of the same type. Declare the last parameter with `...`:
+
+```go
+func sum(nums ...int) int {
+    total := 0
+    for _, n := range nums {
+        total += n
+    }
+    return total
+}
+
+sum(1, 2, 3)        // individual args
+sum([]int{1,2,3}...) // spread a slice with ...
+```
+
+Inside the function, `nums` is a `[]int` slice.
+
+## defer
+
+`defer` schedules a function call to run **when the surrounding function returns**, regardless of which return path is taken. It is the idiomatic way to clean up resources:
+
+```go
+func readFile(name string) error {
+    f, err := os.Open(name)
+    if err != nil {
+        return err
+    }
+    defer f.Close() // runs when readFile returns
+
+    // ... work with f ...
+    return nil
+}
+```
+
+Multiple deferred calls execute in **LIFO order** (last deferred, first to run). Arguments to the deferred function are evaluated immediately at the `defer` statement, not when the call runs.
+
+## Closures and first-class functions
+
+Functions are first-class values in Go. You can assign them to variables, pass them as arguments, and return them from other functions:
+
+```go
+double := func(n int) int { return n * 2 }
+fmt.Println(double(5)) // 10
+```
+
+A **closure** is a function that captures variables from its enclosing scope. The captured variable is shared — the closure sees mutations to it:
+
+```go
+func counter() func() int {
+    n := 0
+    return func() int {
+        n++
+        return n
+    }
+}
+
+c := counter()
+fmt.Println(c()) // 1
+fmt.Println(c()) // 2
+fmt.Println(c()) // 3
+```
+
+Each call to `counter()` creates an independent `n`, so two counters do not interfere with each other.
+
+export const functionsCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+)
+
+// Multiple return values
+func divide(a, b float64) (float64, error) {
+\tif b == 0 {
+\t\treturn 0, errors.New("division by zero")
+\t}
+\treturn a / b, nil
+}
+
+// Variadic
+func sum(nums ...int) int {
+\ttotal := 0
+\tfor _, n := range nums {
+\t\ttotal += n
+\t}
+\treturn total
+}
+
+// Closure
+func counter() func() int {
+\tn := 0
+\treturn func() int {
+\t\tn++
+\t\treturn n
+\t}
+}
+
+// defer demo
+func deferDemo() {
+\tfmt.Println("deferDemo start")
+\tdefer fmt.Println("deferred 1 (runs last)")
+\tdefer fmt.Println("deferred 2 (runs second)")
+\tdefer fmt.Println("deferred 3 (runs first)")
+\tfmt.Println("deferDemo end")
+}
+
+func main() {
+\t// Multiple returns
+\tresult, err := divide(10, 3)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Printf("10 / 3 = %.4f\\n", result)
+\t}
+
+\t_, err = divide(5, 0)
+\tif err != nil {
+\t\tfmt.Println("divide by zero:", err)
+\t}
+
+\t// Variadic
+\tfmt.Println("sum(1..5) =", sum(1, 2, 3, 4, 5))
+
+\t// Closure counter
+\tc := counter()
+\tfmt.Println("counter:", c(), c(), c())
+
+\t// defer LIFO
+\tdeferDemo()
+}`;
+
+<Playground client:visible code={functionsCode} />
+
+<Callout title="Deferred calls run LIFO at return">
+Multiple `defer` statements in the same function execute in **last-in, first-out** order when the function returns. This mirrors a stack: the last thing you deferred is the first thing that runs on the way out. Importantly, **arguments are evaluated at the defer site**, not when the deferred call actually executes — so `defer fmt.Println(x)` captures the current value of `x`, even if `x` changes before the function returns.
+</Callout>
+
+export const quizFunctions = [
+  {
+    q: "In Go, which idiomatic pattern do functions use when they can fail?",
+    options: [
+      "Return a single value and panic on error",
+      "Return (result, error) as two values; the caller checks the error",
+      "Return nil on success and a non-nil value on error",
+      "Throw an exception using the throw keyword"
+    ],
+    answer: 1
+  },
+  {
+    q: "Three defer statements are executed in a function in order A, B, C. In what order do they run when the function returns?",
+    options: [
+      "A, B, C",
+      "C, B, A",
+      "B, A, C",
+      "The order is undefined"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does a closure capture from its enclosing scope?",
+    options: [
+      "A copy of variables at the moment the closure is defined",
+      "A reference to the variables, seeing any mutations to them",
+      "Only constant values — mutable variables cannot be captured",
+      "Nothing; closures are always pure functions in Go"
+    ],
+    answer: 1
+  },
+  {
+    q: "How do you pass a slice to a variadic function as individual arguments?",
+    options: [
+      "Wrap it: variadic(slice)",
+      "Spread it: variadic(slice...)",
+      "Use the spread keyword: spread(variadic, slice)",
+      "You cannot; slices and variadic args are incompatible"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="basics/functions" questions={quizFunctions} />
+
+<ProgressTracker client:visible id="basics/functions" />

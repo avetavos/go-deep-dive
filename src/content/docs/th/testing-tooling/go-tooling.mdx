@@ -1,0 +1,146 @@
+---
+title: The Go Toolchain
+description: "go run, go build, go fmt, go vet, go doc — คำสั่งประจำวันที่ทำให้ Go productive และปรัชญา no-config ของ gofmt"
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## คำสั่ง go คือมีดพับสวิส
+
+binary `go` รวมทุกเครื่องมือที่นักพัฒนา Go ต้องการไว้ใน executable เดียว ไม่มี build system แยกต่างหาก ไม่ต้องใช้ `Makefile` สำหรับ workflow พื้นฐาน และไม่มี plugin ecosystem ที่ต้องตั้งค่า คำสั่งต่อไปนี้ครอบคลุม 90% ของการพัฒนา Go ประจำวัน
+
+## go run — compile และ execute ในขั้นตอนเดียว
+
+`go run` compile ไฟล์ที่ระบุและรัน binary ที่ได้ทันที เหมาะสำหรับ scripts และการทดสอบรวดเร็ว — ไม่มีไฟล์ output เหลือบน disk
+
+```bash
+go run main.go
+go run .                   # รัน package ใน directory ปัจจุบัน
+go run ./cmd/server        # รัน cmd sub-package เฉพาะ
+```
+
+## go build — สร้าง binary
+
+`go build` compile package และเขียน binary ลง disk โดยไม่มี flag `-o` binary จะตั้งชื่อตาม module ใน directory ปัจจุบัน
+
+```bash
+go build .                         # build package ปัจจุบัน output: ./myapp
+go build -o bin/server ./cmd/server  # build ไปยัง path เฉพาะ
+
+# Cross-compile สำหรับ Linux/amd64 จาก macOS
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/server ./cmd/server
+```
+
+flag `-ldflags="-s -w"` ลบ symbol table และ DWARF debug info ออก ลดขนาด binary อย่างมีนัยสำคัญ `CGO_ENABLED=0` รับประกัน binary ที่ static อย่างสมบูรณ์ — ไม่มี dynamic libc dependency
+
+## go fmt — จัดรูปแบบ canonical
+
+`go fmt` รัน `gofmt` กับไฟล์ `.go` ทั้งหมดใน package และเขียนผลลัพธ์กลับลง disk มีวิธีเดียวเท่านั้นในการจัดรูปแบบโค้ด Go
+
+```bash
+go fmt ./...       # จัดรูปแบบทุก package ใน module
+gofmt -w -l ./     # เทียบเท่า: เขียนการเปลี่ยนแปลง, แสดงไฟล์ที่แก้ไข
+```
+
+ใน CI ตรวจสอบว่าโค้ดถูกจัดรูปแบบแล้ว:
+
+```bash
+gofmt -l . | grep -q . && echo "unformatted files found" && exit 1 || echo "all formatted"
+```
+
+## go vet — static analysis
+
+`go vet` รัน static analysers ชุดหนึ่งที่ตรวจจับ bugs ที่ compiler ไม่ตรวจ: format verbs ของ `Printf` ที่ไม่ตรงกัน, unreachable code, การใช้ mutex ที่ผิด และอื่นๆ
+
+```bash
+go vet ./...
+```
+
+ตัวอย่าง issues ที่ `go vet` ตรวจพบ:
+
+```go
+fmt.Printf("%d", "hello")   // vet: format %d has arg "hello" of wrong type string
+var mu sync.Mutex
+mu2 := mu                   // vet: assignment copies lock value
+```
+
+`go vet` exit ด้วย non-zero status หากพบปัญหา ทำให้ fail CI pipeline ได้ง่าย
+
+## go doc — เรียกดู documentation
+
+`go doc` แสดง documentation สำหรับ package, type, function, หรือ method ใดก็ได้ — โดยไม่ต้องออกจาก terminal
+
+```bash
+go doc fmt                    # ภาพรวม package
+go doc fmt.Println            # ฟังก์ชันเฉพาะ
+go doc net/http.Request       # type ใน sub-package
+go doc -all net/http          # ทุก exported symbol ใน package
+```
+
+สำหรับประสบการณ์แบบ browser ที่สมบูรณ์กว่า ใช้ `pkgsite` หรือเรียกดูที่ `pkg.go.dev`
+
+## รวมทุกอย่าง — CI pipeline ทั่วไป
+
+```bash
+go fmt ./... && \
+go vet ./... && \
+go test -race -coverprofile=coverage.out -covermode=atomic ./... && \
+go build ./...
+```
+
+pipeline สี่คำสั่งนี้ตรวจจับ formatting drift, static bugs, data races, และ compilation errors ก่อนที่ code จะถูก merge
+
+<Callout title="gofmt จบการถกเถียงเรื่อง formatting — มี canonical style เพียงแบบเดียว">
+ต่างจากภาษาส่วนใหญ่ Go มาพร้อม formatter canonical เพียงตัวเดียวและ editor หลักทุกตัวเชื่อมต่อกับมันโดยค่าเริ่มต้น ไม่มีการโต้เถียงเรื่อง tabs กับ spaces ไม่มีการถกเถียงเรื่องความยาวบรรทัด ไม่มี style guide ที่ต้องดูแล เมื่อ gofmt บอกว่า code ควรมีลักษณะแบบใด นั่นคือจุดสิ้นสุดของการสนทนา นี่ไม่ใช่ข้อจำกัด — มันคือของขวัญ: code review มุ่งเน้นที่ logic ไม่ใช่ aesthetics
+</Callout>
+
+export const quizGoTooling = [
+  {
+    q: "ความแตกต่างระหว่าง go run และ go build คืออะไร?",
+    options: [
+      "go run ใช้ได้เฉพาะ Linux; go build ข้ามแพลตฟอร์ม",
+      "go run compile และ execute โดยไม่ทิ้ง binary ไว้บน disk; go build เขียน binary",
+      "go run ต้องการไฟล์ go.mod; go build ไม่ต้องการ",
+      "เหมือนกัน — go build เรียก go run ภายใน"
+    ],
+    answer: 1
+  },
+  {
+    q: "ควรรวม flags ใดกับ go build เมื่อ cross-compile static Linux binary?",
+    options: [
+      "GOOS=linux GOARCH=amd64 เท่านั้น",
+      "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags=\"-s -w\"",
+      "go build -static -target linux/amd64",
+      "GOFLAGS=-static go build ./..."
+    ],
+    answer: 1
+  },
+  {
+    q: "go vet ตรวจจับ issues ประเภทใดที่ compiler ไม่ตรวจ?",
+    options: [
+      "import ที่ขาดหาย",
+      "syntax errors",
+      "format verbs ของ Printf ที่ไม่ตรงกัน, lock copies, และ semantic bugs อื่นๆ",
+      "unused variables"
+    ],
+    answer: 2
+  },
+  {
+    q: "คำสั่งใดแสดง documentation สำหรับ fmt.Println ใน terminal?",
+    options: [
+      "go help fmt.Println",
+      "go doc fmt.Println",
+      "go info fmt Println",
+      "godoc -func fmt.Println"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="testing-tooling/go-tooling" questions={quizGoTooling} />
+
+<ProgressTracker client:visible id="testing-tooling/go-tooling" />

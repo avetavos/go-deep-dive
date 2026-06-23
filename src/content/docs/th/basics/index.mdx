@@ -1,12 +1,115 @@
 ---
-title: 'Basics & Syntax'
-description: 'Variables, types, control flow, functions, และ packages — พื้นฐานภาษา Go'
+title: 'พื้นฐานและ Syntax'
+description: 'ปรัชญาการออกแบบของ Go, สิ่งที่โมดูลนี้ครอบคลุม, และโปรแกรมแรกของคุณ'
 sidebar:
   order: 1
 ---
 
-## พื้นฐานและ Syntax ของ Go
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-โมดูลนี้สอนรากฐานของภาษา Go ตั้งแต่วิธีประกาศ variables และ constants ไปจนถึง type system แบบ static, โครงสร้างควบคุม (`if`, `for`, `switch`), การเขียนและเรียก functions พร้อม multiple return values, และการจัดการ packages และ imports ตามแบบฉบับ Go
+## ปรัชญาการออกแบบของ Go
 
-> โมดูลนี้กำลังจะมาเร็ว ๆ นี้ คอยติดตามบทเรียนเกี่ยวกับ variables, types, control flow, functions, และ packages
+Go ถูกออกแบบโดยทีมที่ Google เพื่อแก้ปัญหาจริงในการพัฒนา software ขนาดใหญ่ ปรัชญาหลักมีสี่ข้อ:
+
+**ความเรียบง่าย (Simplicity)** — Go เลือกความเรียบง่ายเหนือความหลากหลายของ feature ทุก keyword และ syntax มีเหตุผลที่ชัดเจน ภาษามี keyword เพียง 25 คำ ทำให้เรียนรู้ได้เร็วและอ่าน code ของคนอื่นได้ง่าย
+
+**เวลา compile เร็ว (Fast Compile)** — Go compile เป็นวินาที ไม่ใช่นาที แม้สำหรับ codebase ขนาดใหญ่ ทำให้ feedback loop สั้นและ iteration เร็ว
+
+**วิธีเดียวที่ชัดเจน (One Obvious Way)** — สำหรับปัญหาส่วนใหญ่ มักมีวิธีหนึ่งที่ Go แนะนำ สิ่งนี้ทำให้ codebase ขนาดใหญ่อ่านสม่ำเสมอ เพราะทุกคนเขียนด้วยรูปแบบเดียวกัน
+
+**Explicit มากกว่า Implicit** — Go บังคับให้คุณระบุประเภทและการแปลงอย่างชัดเจน ไม่มี magic type coercion ที่ซ่อนอยู่
+
+## โมดูลนี้ครอบคลุมอะไร
+
+โมดูล Basics จะพาคุณผ่านรากฐานของภาษา:
+
+- **Packages และ Imports** — วิธีจัดการ code ใน package และ import dependency
+- **Variables และ Types** — การประกาศตัวแปร, zero values, types พื้นฐาน, constants, และ `iota`
+- **Control Flow** — `if`, `for` (loop keyword เดียวของ Go), `switch`, และ `range`
+- **Functions** — multiple return values, `defer`, closures, และ first-class functions
+
+## โปรแกรมแรก
+
+ด้านล่างคือโปรแกรม Go ที่แสดงให้เห็น syntax พื้นฐาน: การประกาศตัวแปรด้วย `:=`, types หลายชนิด, และการ print ผลลัพธ์
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    name := "Go"
+    version := 1.22
+    fast := true
+    fmt.Println("Hello from", name)
+    fmt.Println("Version:", version)
+    fmt.Println("Fast compile:", fast)
+}
+```
+
+รันด้านล่างเพื่อดู output ทุก concept ที่ใช้ที่นี่จะถูกอธิบายอย่างละเอียดในบทเรียนต่อไป:
+
+export const indexCode = `package main
+
+import "fmt"
+
+func main() {
+\tname := "Go"
+\tversion := 1.22
+\tfast := true
+\tfmt.Println("Hello from", name)
+\tfmt.Println("Version:", version)
+\tfmt.Println("Fast compile:", fast)
+
+\t// Integer arithmetic is exact; no implicit float promotion
+\ta := 10
+\tb := 3
+\tfmt.Println("10 / 3 =", a/b)
+\tfmt.Println("10 % 3 =", a%b)
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="Explicit มากกว่า Implicit">
+Go บังคับให้คุณระบุประเภทและการแปลงอย่างชัดเจน ไม่มี coercion แบบ implicit เช่น คุณไม่สามารถบวก `int` กับ `float64` ได้โดยตรง ต้องแปลงก่อนเสมอ สิ่งนี้ทำให้ code อ่านง่ายขึ้นและลด bug ที่เกิดจาก type mismatch ได้อย่างมาก
+</Callout>
+
+export const quizIndex = [
+  {
+    q: "Go บังคับอะไรที่ compile time เพื่อให้ code กระชับ?",
+    options: [
+      "ทุก function ต้องมี return type annotation",
+      "unused local variables และ unused imports เป็น compile errors",
+      "ทุก file ต้องมี package-level comment",
+      "ทุก exported function ต้องมี documentation"
+    ],
+    answer: 1
+  },
+  {
+    q: "อะไรคือ entry point ของทุก executable Go program?",
+    options: [
+      "func Start() ใน package main",
+      "func init() ในทุก package",
+      "func main() ใน package main",
+      "func Run() ใน package main"
+    ],
+    answer: 2
+  },
+  {
+    q: "การบังคับ style เดียวของ Go (`gofmt`) หมายความว่าอะไรในทางปฏิบัติ?",
+    options: [
+      "คุณต้องรัน gofmt ด้วยตนเองก่อน commit ทุกครั้ง",
+      "การถกเถียงเรื่อง formatting และลำดับ import หมดไป — code ของทุกคนดูเหมือนกัน",
+      "gofmt เขียน logic ของคุณใหม่ให้เป็น idiomatic มากขึ้น",
+      "gofmt ใช้ได้กับ files ใน standard library เท่านั้น"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="basics/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="basics/index" />

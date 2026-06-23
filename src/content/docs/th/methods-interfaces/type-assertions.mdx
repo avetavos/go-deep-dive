@@ -1,0 +1,160 @@
+---
+title: Type Assertions
+description: 'ดึง concrete types จาก interface values โดยใช้ x.(T), comma-ok form, และ type switch'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Interface values ตอน runtime
+
+เมื่อ value ถูกเก็บใน interface variable, Go เก็บสองสิ่งไว้ภายใน: pointer ไปยัง concrete type descriptor และ pointer ไปยัง concrete value **type assertion** ดึง concrete value กลับออกมา
+
+## Single-value form
+
+```go
+var s Shape = Circle{Radius: 5}
+c := s.(Circle)   // assert ว่า s เก็บ Circle
+fmt.Println(c.Radius)
+```
+
+ถ้า `s` ไม่ได้เก็บ `Circle` นี่จะ **panic** ตอน runtime ใช้ form นี้เฉพาะเมื่อคุณแน่ใจใน dynamic type — เช่น ทันทีหลัง type check
+
+## Comma-ok form
+
+variant ที่ปลอดภัยคืน boolean แทนการ panic:
+
+```go
+c, ok := s.(Circle)
+if ok {
+    fmt.Println("it's a circle with radius", c.Radius)
+} else {
+    fmt.Println("not a circle")
+}
+```
+
+`ok` เป็น `true` เมื่อ assertion สำเร็จ, `false` มิเช่นนั้น `c` เป็น zero value ของ `Circle` เมื่อ `ok` เป็น `false` ควรใช้ comma-ok form เสมอเมื่อ dynamic type ไม่แน่นอน
+
+## Type switch
+
+เมื่อต้องการ branch ตาม types หลายแบบ **type switch** สะอาดกว่าการเชื่อม `if ok` หลาย ๆ อัน:
+
+```go
+switch v := x.(type) {
+case Circle:
+    fmt.Println("circle", v.Radius)
+case Rect:
+    fmt.Println("rect", v.W, v.H)
+default:
+    fmt.Printf("unknown: %T\n", v)
+}
+```
+
+ภายใน `case` แต่ละอัน `v` เป็น concrete type แล้ว — ไม่ต้อง assertion เพิ่มเติม `default` case ทำงานเมื่อไม่มี type ที่ระบุตรงกัน
+
+## Assert ไปยัง interface
+
+คุณยัง assert จาก interface หนึ่งไปยังอีก interface ได้:
+
+```go
+var w io.Writer = os.Stdout
+if rc, ok := w.(io.ReadWriter); ok {
+    // os.Stdout implements io.ReadWriter
+    _ = rc
+}
+```
+
+นี่คือวิธีที่โค้ด standard library ตรวจสอบ optional capabilities (เช่น ว่า `Writer` รองรับ `Seek` ด้วยหรือไม่)
+
+export const typeAssertionsCode = `package main
+
+import "fmt"
+
+type Animal interface {
+\tSound() string
+}
+
+type Dog struct{ Name string }
+type Cat struct{ Name string }
+
+func (d Dog) Sound() string { return "Woof" }
+func (c Cat) Sound() string { return "Meow" }
+
+func identify(a Animal) {
+\t// comma-ok form — safe
+\tif d, ok := a.(Dog); ok {
+\t\tfmt.Printf("Dog named %s says %s\\n", d.Name, d.Sound())
+\t\treturn
+\t}
+\t// type switch for multiple cases
+\tswitch v := a.(type) {
+\tcase Cat:
+\t\tfmt.Printf("Cat named %s says %s\\n", v.Name, v.Sound())
+\tdefault:
+\t\tfmt.Printf("Unknown animal: %T\\n", v)
+\t}
+}
+
+func main() {
+\tanimals := []Animal{Dog{Name: "Rex"}, Cat{Name: "Luna"}}
+\tfor _, a := range animals {
+\t\tidentify(a)
+\t}
+}`;
+
+<Playground client:visible code={typeAssertionsCode} />
+
+<Callout title="Single-value assertion ที่ล้มเหลวจะ panic">
+`x.(T)` โดยไม่มี comma-ok idiom จะ panic ทันทีถ้า dynamic type ไม่ใช่ `T` นี่คือ runtime error ไม่ใช่ compile-time error — compiler ไม่สามารถรู้ dynamic type ได้ ใช้ comma-ok form `v, ok := x.(T)` เสมอเมื่อมีโอกาสที่ assertion อาจล้มเหลว สงวน single-value form ไว้สำหรับ code paths ที่รับประกัน type ทางตรรกะ — และเพิ่ม comment อธิบายเหตุผล
+</Callout>
+
+export const quizTypeAssertions = [
+  {
+    q: "`v, ok := x.(T)` ทำอะไรเมื่อ x ไม่ได้เก็บ value ของ type T?",
+    options: [
+      "Panic ด้วย type mismatch error",
+      "คืน zero value ของ T และ ok == false",
+      "คืน nil และ ok == false",
+      "คืน zero value ของ T และ ok == true"
+    ],
+    answer: 1
+  },
+  {
+    q: "ภายใน type-switch case `case Rect:` type ของ switched variable `v` คืออะไร?",
+    options: [
+      "Interface type ต้นฉบับ",
+      "Concrete type Rect",
+      "`any`",
+      "Pointer ไปยัง Rect"
+    ],
+    answer: 1
+  },
+  {
+    q: "ควรใช้ form ใดเมื่อคุณไม่แน่ใจใน dynamic type?",
+    options: [
+      "`v := x.(T)` — single-value form",
+      "`v, ok := x.(T)` — comma-ok form",
+      "เรียก `recover()` ล้อมรอบ `v := x.(T)`",
+      "ตรวจสอบ `reflect.TypeOf` ก่อน assert"
+    ],
+    answer: 1
+  },
+  {
+    q: "`%T` ใน format string พิมพ์อะไร?",
+    options: [
+      "String representation ของค่า",
+      "Memory address ของค่า",
+      "Dynamic (concrete) type ของค่า",
+      "Interface type ที่ค่าถูกเก็บอยู่"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/type-assertions" questions={quizTypeAssertions} />
+
+<ProgressTracker client:visible id="methods-interfaces/type-assertions" />

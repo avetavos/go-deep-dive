@@ -1,0 +1,178 @@
+---
+title: io and bufio
+description: 'io.Reader and io.Writer interfaces, strings.NewReader, bytes.Buffer, and bufio.Scanner for streaming line-by-line input.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The io.Reader and io.Writer interfaces
+
+The `io` package defines two small but foundational interfaces:
+
+```go
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+type Writer interface {
+    Write(p []byte) (n int, err error)
+}
+```
+
+These two interfaces are the lingua franca of I/O in Go. Dozens of types implement them: files, network connections, HTTP request and response bodies, in-memory buffers, and more. Functions that accept `io.Reader` or `io.Writer` work with all of them without modification.
+
+## strings.NewReader — an in-memory Reader
+
+`strings.NewReader(s)` wraps a string as an `io.Reader`. This is invaluable in tests and examples — you can exercise any function that reads from a stream without touching the filesystem.
+
+```go
+r := strings.NewReader("hello, world")
+data, _ := io.ReadAll(r)
+fmt.Println(string(data)) // hello, world
+```
+
+## bytes.Buffer — a read/write buffer
+
+`bytes.Buffer` implements both `io.Reader` and `io.Writer`. You write into it and read back out:
+
+```go
+var buf bytes.Buffer
+fmt.Fprintln(&buf, "first line")
+fmt.Fprintln(&buf, "second line")
+content, _ := io.ReadAll(&buf)
+fmt.Print(string(content))
+```
+
+`fmt.Fprintln` accepts any `io.Writer`, so you can redirect formatted output to a buffer, a file, or a network connection with zero code changes.
+
+## bufio.Scanner — line-by-line reading
+
+`bufio.Scanner` wraps any `io.Reader` and provides convenient line-by-line (or token-by-token) reading. The default split function is `bufio.ScanLines`.
+
+```go
+scanner := bufio.NewScanner(r)
+for scanner.Scan() {
+    fmt.Println(scanner.Text()) // one line at a time
+}
+if err := scanner.Err(); err != nil {
+    log.Fatal(err)
+}
+```
+
+`scanner.Scan()` returns `false` when the input is exhausted or an error occurs. Always check `scanner.Err()` after the loop — a `false` return alone does not distinguish EOF from an error.
+
+## io helper functions
+
+The `io` package also provides useful helpers:
+
+```go
+io.ReadAll(r)           // read until EOF, return []byte
+io.Copy(dst, src)       // copy from Reader to Writer
+io.MultiReader(r1, r2)  // chain readers sequentially
+io.Discard              // Writer that discards all bytes (like /dev/null)
+io.LimitReader(r, n)    // read at most n bytes
+```
+
+export const ioBufioCode = `package main
+
+import (
+\t"bufio"
+\t"bytes"
+\t"fmt"
+\t"io"
+\t"strings"
+)
+
+// printLines accepts any io.Reader — works with files, buffers, or strings
+func printLines(r io.Reader) {
+\tscanner := bufio.NewScanner(r)
+\tfor scanner.Scan() {
+\t\tfmt.Println(">", scanner.Text())
+\t}
+}
+
+func main() {
+\t// strings.NewReader implements io.Reader
+\tr := strings.NewReader("first line\\nsecond line\\nthird line")
+\tprintLines(r)
+
+\t// bytes.Buffer implements both io.Reader and io.Writer
+\tvar buf bytes.Buffer
+\tfmt.Fprintln(&buf, "written to buffer")
+\tfmt.Fprintln(&buf, "another line")
+\tcontent, _ := io.ReadAll(&buf)
+\tfmt.Print(string(content))
+
+\t// io.MultiReader chains two readers sequentially
+\tr1 := strings.NewReader("hello ")
+\tr2 := strings.NewReader("world\\n")
+\tcombined := io.MultiReader(r1, r2)
+\tio.Copy(io.Discard, combined)
+\tfmt.Println("MultiReader composed two readers")
+
+\t// bufio.Scanner over in-memory CSV
+\tcsv := "alice,30\\nbob,25\\ncharlie,35"
+\tscanner := bufio.NewScanner(strings.NewReader(csv))
+\tfor scanner.Scan() {
+\t\tparts := strings.Split(scanner.Text(), ",")
+\t\tfmt.Printf("name=%s age=%s\\n", parts[0], parts[1])
+\t}
+}`;
+
+<Playground client:visible code={ioBufioCode} />
+
+<Callout title="Program to io.Reader and io.Writer, not to concrete types">
+Write your functions to accept `io.Reader` or `io.Writer` rather than `*os.File` or `*http.Request`. This single habit makes your code universally testable — pass a `strings.NewReader` in tests, a real file in production, and an HTTP body in handlers, all without touching the function. It also means your function participates in the entire ecosystem of Go I/O composition: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader`, and so on.
+</Callout>
+
+export const quizIoBufio = [
+  {
+    q: "What does io.ReadAll(r) return?",
+    options: [
+      "string, error",
+      "[]byte, error",
+      "int, error",
+      "io.Reader, error"
+    ],
+    answer: 1
+  },
+  {
+    q: "After bufio.Scanner.Scan() returns false, what must you check?",
+    options: [
+      "scanner.Text() for any remaining data",
+      "scanner.Bytes() for raw bytes",
+      "scanner.Err() to distinguish EOF from a real error",
+      "Nothing — false always means clean EOF"
+    ],
+    answer: 2
+  },
+  {
+    q: "Which type implements both io.Reader and io.Writer?",
+    options: [
+      "strings.Reader",
+      "bytes.Buffer",
+      "bufio.Scanner",
+      "io.Discard"
+    ],
+    answer: 1
+  },
+  {
+    q: "Why accept io.Reader in a function instead of *os.File?",
+    options: [
+      "*os.File causes memory leaks on Linux",
+      "io.Reader is faster than *os.File",
+      "Accepting io.Reader makes the function work with any source: files, buffers, strings, network — without code changes",
+      "Go does not allow *os.File as a function parameter"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="stdlib/io-bufio" questions={quizIoBufio} />
+
+<ProgressTracker client:visible id="stdlib/io-bufio" />

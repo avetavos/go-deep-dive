@@ -1,0 +1,176 @@
+---
+title: Error Values
+description: 'interface error, การคืนค่า (T, error), idiom if err != nil, errors.New, fmt.Errorf และ sentinel errors'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## interface error
+
+type `error` ของ Go คือ interface ที่เรียบง่ายที่สุดใน standard library:
+
+```go
+type error interface {
+    Error() string
+}
+```
+
+type ใดก็ตามที่ implement method เดียว — `Error() string` — จะ satisfy interface นี้และสามารถใช้ได้ทุกที่ที่ต้องการ `error` ค่า `nil` เป็น `error` ที่ถูกต้องและหมายถึง "ไม่มี error เกิดขึ้น" โดยสากล ไม่มีอะไรพิเศษเกี่ยวกับ type `error` ในระดับภาษา มันเป็นแค่ interface ธรรมดาที่ถูก predeclare ไว้เท่านั้น
+
+## การคืนค่า error จากฟังก์ชัน
+
+convention แบบ idiomatic ของ Go คือการคืนค่า `(T, error)` เป็นสองค่าสุดท้ายจากฟังก์ชันที่อาจล้มเหลวได้ caller รับทั้งคู่เสมอและต้องตรวจสอบ error ก่อนที่จะเชื่อถือผลลัพธ์:
+
+```go
+result, err := riskyOperation()
+if err != nil {
+    // ห้ามใช้ result — ไม่มีความหมาย
+    return fmt.Errorf("riskyOperation: %v", err)
+}
+// err เป็น nil: result ถูกต้องใช้ได้
+```
+
+การคืนค่า error ให้ caller เป็นบรรทัดฐาน การกลืน error อย่างเงียบ ๆ — ละเว้น `err` ด้วย `_` — ควรทำอย่างตั้งใจและเกิดขึ้นน้อยมาก ใช้เฉพาะในกรณีที่ความล้มเหลวไม่มีผลจริง ๆ (เช่น การปิดไฟล์แบบ read-only หลังจากอ่านข้อมูลทั้งหมดสำเร็จแล้ว)
+
+## การสร้าง error
+
+Go มีสองวิธีมาตรฐานในการสร้าง error value ใหม่:
+
+**`errors.New`** สร้าง error จาก string คงที่ ใช้เมื่อข้อความไม่เคยเปลี่ยนแปลง:
+
+```go
+var errTimeout = errors.New("operation timed out")
+```
+
+**`fmt.Errorf`** สร้างข้อความ error แบบ formatted ใช้เมื่อต้องการรวม runtime values เช่น ชื่อ, key หรือจำนวน:
+
+```go
+err := fmt.Errorf("user %d not found in database %q", userID, dbName)
+```
+
+หมายเหตุ: `%v` format ค่าแบบ inline และไม่แนบ wrapping metadata การ wrap — ใช้ `%w` เพื่อเชื่อม error ต่อกันเพื่อให้ `errors.Is` และ `errors.As` สามารถ unwrap chain ได้ — จะกล่าวถึงในบทเรียนถัดไป
+
+## Sentinel errors
+
+**sentinel error** คือตัวแปรระดับ package ที่แทนเงื่อนไขความล้มเหลวเฉพาะที่รู้จักกันดี:
+
+```go
+var ErrNotFound  = errors.New("not found")
+var ErrPermission = errors.New("permission denied")
+```
+
+การประกาศ sentinel ในระดับ package ให้ caller ทดสอบด้วย identity ใช้ `errors.Is` แทน `==` เพื่อให้การตรวจสอบยังทำงานได้แม้ว่า error จะถูก wrap ด้วย context เพิ่มเติม:
+
+```go
+if errors.Is(err, ErrNotFound) {
+    // จัดการกรณี not-found
+}
+```
+
+Sentinel เหมาะที่สุดสำหรับเงื่อนไขที่ caller ต้องการ branch แยกทาง หลีกเลี่ยงการสร้าง sentinel สำหรับทุกความล้มเหลวที่เป็นไปได้ — ใช้เฉพาะสำหรับ error ที่ caller จัดการแตกต่างจากกรณีล้มเหลวทั่วไปอย่างแท้จริง
+
+## รูปแบบ if err != nil
+
+การตรวจสอบ `if err != nil` อย่างชัดเจนอาจดูซ้ำซากในตอนแรก แต่มันออกแบบมาอย่างตั้งใจ Go ถือว่าทุกความล้มเหลวเป็นจุดตัดสินใจ: คุณต้องเลือกว่าจะ propagate error, wrap มันพร้อม context, retry, fallback ไปยังค่า default หรือ log แล้วดำเนินต่อ ภาษาไม่ได้ตัดสินใจแทนคุณ
+
+วินัยนี้ทำให้โค้ดมองเห็นทุก call ที่อาจเกิด error ได้ที่ callsite เมื่ออ่านฟังก์ชัน Go คุณจะเห็นชัดเจนว่า operation ใดที่อาจล้มเหลวได้และ caller ทำอะไรกับแต่ละกรณี — ไม่มีการ propagate แบบ implicit ไม่มีเส้นทาง exception ที่มองไม่เห็น
+
+export const errorValuesCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+)
+
+var ErrNotFound = errors.New("not found")
+var ErrPermission = errors.New("permission denied")
+
+func lookup(key string) (int, error) {
+\tswitch key {
+\tcase "age":
+\t\treturn 30, nil
+\tcase "secret":
+\t\treturn 0, ErrPermission
+\tdefault:
+\t\treturn 0, fmt.Errorf("lookup %q: %w", key, ErrNotFound)
+\t}
+}
+
+func main() {
+\tv, err := lookup("age")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\treturn
+\t}
+\tfmt.Println("age:", v)
+
+\t_, err = lookup("x")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\tfmt.Println("is ErrNotFound:", errors.Is(err, ErrNotFound))
+\t}
+
+\t_, err = lookup("secret")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\tfmt.Println("is ErrPermission:", errors.Is(err, ErrPermission))
+\t}
+}`;
+
+<Playground client:visible code={errorValuesCode} />
+
+<Callout title="Error คือค่าธรรมดา">
+ใน Go error เป็นเพียงค่าเหมือนค่าอื่น ๆ ไม่มี syntax พิเศษในการโยนหรือจับ error การคืนค่า `nil` หมายถึงสำเร็จ การคืนค่า error ที่ไม่ใช่ nil หมายถึงล้มเหลว การจัดการ error แบบนี้ทำให้ชัดเจน ประกอบได้ง่าย และเข้าใจได้ทันที ทุก call site บอกอย่างชัดเจนว่าอะไรอาจผิดพลาดได้
+</Callout>
+
+export const quizErrorValues = [
+  {
+    q: "การคืนค่า nil เป็น error หมายความว่าอะไร?",
+    options: [
+      "ฟังก์ชัน panic แล้ว recover",
+      "ไม่มี error — การเรียกสำเร็จ",
+      "error ถูกละเว้น",
+      "caller ควรลองใหม่"
+    ],
+    answer: 1
+  },
+  {
+    q: "ฟังก์ชันใดสร้าง error value จาก string คงที่?",
+    options: [
+      "fmt.Errorf",
+      "errors.New",
+      "log.Fatal",
+      "panic"
+    ],
+    answer: 1
+  },
+  {
+    q: "sentinel error ประกาศด้วยรูปแบบใด?",
+    options: [
+      "const ErrX = \"x\"",
+      "var ErrX = errors.New(\"x\")",
+      "type ErrX struct{}",
+      "func ErrX() error"
+    ],
+    answer: 1
+  },
+  {
+    q: "ควรใช้ fmt.Errorf แทน errors.New เมื่อใด?",
+    options: [
+      "ต้องการเพิ่ม context แบบ dynamic (ค่าต่าง ๆ, ชื่อ)",
+      "ต้องการ wrap error ที่มีอยู่ด้วย %w",
+      "ต้องการ sentinel ระดับ global",
+      "ทั้ง ก และ ข"
+    ],
+    answer: 3
+  }
+];
+
+<Quiz client:visible id="errors-generics/error-values" questions={quizErrorValues} />
+
+<ProgressTracker client:visible id="errors-generics/error-values" />

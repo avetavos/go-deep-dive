@@ -1,0 +1,166 @@
+---
+title: time
+description: 'time.Time, time.Duration, การฟอร์แมตด้วย reference layout, การ parse และการคำนวณ (Add/Sub) โดยใช้เวลาคงที่เพื่อผลลัพธ์ที่แน่นอน'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## time.Time และ time.Duration
+
+Package `time` มี type หลักสองตัว:
+
+- **`time.Time`** — ช่วงเวลาหนึ่งที่มีความแม่นยำระดับ nanosecond พร้อม location (timezone) เสมอ
+- **`time.Duration`** — signed 64-bit integer แทนความยาวของเวลาในหน่วย nanosecond ค่าคงที่อย่าง `time.Hour`, `time.Minute`, `time.Second` และ `time.Millisecond` ทำให้การคำนวณอ่านง่าย
+
+```go
+d := 2*time.Hour + 30*time.Minute + 15*time.Second
+fmt.Println(d) // 2h30m15s
+```
+
+## การสร้าง time.Time
+
+ในโค้ด production จะเรียก `time.Now()` เพื่อรับเวลาปัจจุบัน สำหรับการทดสอบและตัวอย่างที่ต้องการผลลัพธ์คงที่ให้ใช้ `time.Date`:
+
+```go
+t := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
+// year, month, day, hour, min, sec, nanosec, location
+```
+
+ค่าของ `time.Month` (ตั้งแต่ `time.January` ถึง `time.December`) เป็น typed constant แต่ก็สามารถส่ง integer literal (1–12) ได้เพราะสามารถ assign ให้ `time.Month` ได้
+
+## การฟอร์แมต — reference layout
+
+Go ใช้ช่วงเวลาอ้างอิงที่เป็นรูปธรรมแทนรหัสฟอร์แมตแบบนามธรรมอย่าง `YYYY-MM-DD` ช่วงเวลาอ้างอิงคือ:
+
+```
+Mon Jan 2 15:04:05 MST 2006
+```
+
+หากต้องการฟอร์แมตเวลา ให้เขียนช่วงเวลาอ้างอิงในรูปแบบที่ต้องการ:
+
+```go
+t.Format("2006-01-02")             // "2024-01-02"
+t.Format("15:04:05")               // "15:04:05"
+t.Format("02 Jan 2006 15:04 MST")  // "02 Jan 2024 15:04 UTC"
+t.Format(time.RFC3339)             // "2024-01-02T15:04:05Z"
+```
+
+## การ Parse
+
+`time.Parse` เป็นการทำงานตรงข้ามกับ `Format` — รับ layout และ string:
+
+```go
+parsed, err := time.Parse("2006-01-02", "2024-06-15")
+// parsed คือเที่ยงคืน UTC ของวันที่ 15 มิถุนายน 2024
+```
+
+string ของ layout ต้องตรงกับ component ของช่วงเวลาอ้างอิงที่ใช้ — ตัวอักษรเดียวกันในตำแหน่งเดียวกัน
+
+## การคำนวณ — Add และ Sub
+
+```go
+deadline := t.Add(72 * time.Hour)        // 3 วันต่อมา
+diff     := deadline.Sub(t)              // time.Duration: 72h0m0s
+before   := deadline.Before(t)          // false
+after    := deadline.After(t)           // true
+```
+
+`Add` รับ `Duration` และคืน `Time` `Sub` รับ `Time` สองค่าและคืน `Duration` ระหว่างทั้งสอง
+
+export const timeCode = `package main
+
+import (
+\t"fmt"
+\t"time"
+)
+
+func main() {
+\t// Fixed time — deterministic in any interpreter
+\tt := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
+\tfmt.Println(t)
+
+\t// Formatting with the reference layout
+\tfmt.Println(t.Format("2006-01-02"))
+\tfmt.Println(t.Format("15:04:05"))
+\tfmt.Println(t.Format("Mon, 02 Jan 2006 15:04:05 MST"))
+\tfmt.Println(t.Format(time.RFC3339))
+
+\t// Parsing
+\tparsed, err := time.Parse("2006-01-02", "2024-06-15")
+\tif err == nil {
+\t\tfmt.Println(parsed.Format("January 2, 2006"))
+\t}
+
+\t// Arithmetic
+\tdeadline := t.Add(72 * time.Hour)
+\tfmt.Println(deadline.Format("2006-01-02 15:04:05"))
+
+\tdiff := deadline.Sub(t)
+\tfmt.Println(diff)
+
+\t// Duration construction
+\td := 2*time.Hour + 30*time.Minute
+\tfmt.Println(d)
+
+\t// Accessing date parts
+\tfmt.Println(t.Year(), t.Month(), t.Day())
+\tfmt.Println(t.Hour(), t.Minute(), t.Second())
+}`;
+
+<Playground client:visible code={timeCode} />
+
+<Callout title="Reference time ของ Go — Mon Jan 2 15:04:05 MST 2006">
+ช่วงเวลาอ้างอิงไม่ได้ถูกเลือกมาแบบสุ่ม แต่ละ component เป็นตัวเลขที่โดดเด่น: month=1, day=2, hour=15 (บ่าย 3), minute=4, second=5, year=2006 เรียงตามนาฬิกา 12 ชั่วโมง: 1/2/3:4:5 PM '06 ทำให้ layout อธิบายตัวเองได้ — เขียนสิ่งที่ต้องการให้ output เป็นโดยใช้ตัวเลขเหล่านั้นพอดี ข้อผิดพลาดที่พบบ่อยคือใช้ `YYYY` หรือ `DD` แบบภาษาอื่น ซึ่ง Go จะแปลเป็นตัวอักษร Y, M, D และจะปรากฏใน output ตามตัวอักษรนั้นๆ
+</Callout>
+
+export const quizTime = [
+  {
+    q: "Reference time ของ Go ที่ใช้สำหรับการฟอร์แมตคืออะไร?",
+    options: [
+      "Mon Jan 1 00:00:00 UTC 2000",
+      "Mon Jan 2 15:04:05 MST 2006",
+      "Fri Dec 31 23:59:59 UTC 1999",
+      "Thu Jan 1 00:00:00 UTC 1970"
+    ],
+    answer: 1
+  },
+  {
+    q: "การเรียกใดที่คืนค่า time.Time ใหม่ที่ 24 ชั่วโมงหลังจาก t?",
+    options: [
+      "t.Sub(24 * time.Hour)",
+      "t.Add(24 * time.Hour)",
+      "time.Add(t, 24)",
+      "t.Plus(time.Day)"
+    ],
+    answer: 1
+  },
+  {
+    q: "t.Sub(other) คืนค่าอะไร?",
+    options: [
+      "time.Time",
+      "int64 ในหน่วยวินาที",
+      "time.Duration",
+      "float64 ในหน่วยชั่วโมง"
+    ],
+    answer: 2
+  },
+  {
+    q: "ทำไมควรหลีกเลี่ยง time.Now() ใน playground / test snippet?",
+    options: [
+      "time.Now() ไม่มีใน Go 1.22+",
+      "time.Now() จะ panic ใน WASM runtime",
+      "มันให้ output ที่ไม่แน่นอนซึ่งเปลี่ยนแปลงทุกครั้งที่รัน",
+      "มันคืนค่าเที่ยงคืน UTC เสมอ"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="stdlib/time" questions={quizTime} />
+
+<ProgressTracker client:visible id="stdlib/time" />

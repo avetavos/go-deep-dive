@@ -1,0 +1,146 @@
+---
+title: The Go Toolchain
+description: 'go run, go build, go fmt, go vet, go doc — the everyday commands that make Go productive and gofmt''s no-config philosophy.'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The go command is a Swiss Army knife
+
+The `go` binary ships every tool a Go developer needs in a single executable. There is no separate build system, no `Makefile` required for basic workflows, and no plugin ecosystem to configure. The following commands cover 90% of daily Go development.
+
+## go run — compile and execute in one step
+
+`go run` compiles the specified files and runs the resulting binary immediately. It is perfect for scripts and quick experiments — no output file is left on disk.
+
+```bash
+go run main.go
+go run .                   # run the package in the current directory
+go run ./cmd/server        # run a specific cmd sub-package
+```
+
+## go build — produce a binary
+
+`go build` compiles the package and writes the binary to disk. Without a `-o` flag the binary is named after the module in the current directory.
+
+```bash
+go build .                         # build current package, output: ./myapp
+go build -o bin/server ./cmd/server  # build to a specific path
+
+# Cross-compile for Linux/amd64 from macOS
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/server ./cmd/server
+```
+
+The `-ldflags="-s -w"` flags strip the symbol table and DWARF debug info, reducing binary size significantly. `CGO_ENABLED=0` guarantees a fully static binary — no dynamic libc dependency.
+
+## go fmt — canonical formatting
+
+`go fmt` runs `gofmt` on all `.go` files in a package and writes the result back to disk. There is exactly one way to format Go code.
+
+```bash
+go fmt ./...       # format every package in the module
+gofmt -w -l ./     # equivalent: write changes, list modified files
+```
+
+In CI, check that code is already formatted:
+
+```bash
+gofmt -l . | grep -q . && echo "unformatted files found" && exit 1 || echo "all formatted"
+```
+
+## go vet — static analysis
+
+`go vet` runs a suite of static analysers that catch bugs the compiler does not catch: mismatched `Printf` format verbs, unreachable code, incorrect mutex usage, and more.
+
+```bash
+go vet ./...
+```
+
+Sample issues `go vet` catches:
+
+```go
+fmt.Printf("%d", "hello")   // vet: format %d has arg "hello" of wrong type string
+var mu sync.Mutex
+mu2 := mu                   // vet: assignment copies lock value
+```
+
+`go vet` exits with a non-zero status if it finds problems, making it easy to fail a CI pipeline.
+
+## go doc — browse documentation
+
+`go doc` prints the documentation for any package, type, function, or method — without leaving the terminal.
+
+```bash
+go doc fmt                    # package overview
+go doc fmt.Println            # specific function
+go doc net/http.Request       # type in a sub-package
+go doc -all net/http          # every exported symbol in the package
+```
+
+For a richer browser-based experience, use `pkgsite` (the Go package documentation server) or browse `pkg.go.dev`.
+
+## Putting it together — a typical CI pipeline
+
+```bash
+go fmt ./... && \
+go vet ./... && \
+go test -race -coverprofile=coverage.out -covermode=atomic ./... && \
+go build ./...
+```
+
+This four-command pipeline catches formatting drift, static bugs, data races, and compilation errors before code is merged.
+
+<Callout title="gofmt ends formatting debates — there is one canonical style">
+Unlike most languages, Go ships a single canonical formatter and every major editor integrates it by default. There are no tabs-vs-spaces arguments, no line-length debates, no style guide to maintain. When gofmt says the code should look a certain way, that is the end of the discussion. This is not a restriction — it is a gift: code review focuses on logic, not aesthetics.
+</Callout>
+
+export const quizGoTooling = [
+  {
+    q: "What is the difference between go run and go build?",
+    options: [
+      "go run only works on Linux; go build is cross-platform",
+      "go run compiles and executes without leaving a binary on disk; go build writes the binary",
+      "go run requires a go.mod file; go build does not",
+      "They are identical — go build calls go run internally"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which flags should you combine with go build when cross-compiling a static Linux binary?",
+    options: [
+      "GOOS=linux GOARCH=amd64 only",
+      "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags=\"-s -w\"",
+      "go build -static -target linux/amd64",
+      "GOFLAGS=-static go build ./..."
+    ],
+    answer: 1
+  },
+  {
+    q: "What kind of issues does go vet detect that the compiler does not?",
+    options: [
+      "Missing package imports",
+      "Syntax errors",
+      "Mismatched Printf format verbs, lock copies, and other semantic bugs",
+      "Unused variables"
+    ],
+    answer: 2
+  },
+  {
+    q: "Which command shows documentation for fmt.Println in the terminal?",
+    options: [
+      "go help fmt.Println",
+      "go doc fmt.Println",
+      "go info fmt Println",
+      "godoc -func fmt.Println"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="testing-tooling/go-tooling" questions={quizGoTooling} />
+
+<ProgressTracker client:visible id="testing-tooling/go-tooling" />

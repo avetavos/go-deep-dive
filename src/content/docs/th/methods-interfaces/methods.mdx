@@ -1,0 +1,152 @@
+---
+title: Methods
+description: 'ประกาศ methods บน named type ใด ๆ ใน Go, เข้าใจ value vs pointer receiver, และเรียนรู้ว่าควรใช้แบบไหนเมื่อไร'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Method คืออะไร?
+
+**Method** คือฟังก์ชันที่มี *receiver* — parameter พิเศษที่ปรากฏระหว่าง keyword `func` กับชื่อฟังก์ชัน receiver ผูกฟังก์ชันนั้นเข้ากับ named type
+
+```go
+func (r Rectangle) Area() float64 {
+    return r.Width * r.Height
+}
+```
+
+ที่นี่ `r Rectangle` คือ receiver `Area` กลายเป็น method ของ `Rectangle` เรียกได้ว่า `rect.Area()`
+
+## Value receiver vs Pointer receiver
+
+Receiver สามารถเป็น value หรือ pointer ก็ได้:
+
+```go
+func (c Counter) Value() int  { return c.count }   // value receiver
+func (c *Counter) Inc()       { c.count++ }        // pointer receiver
+```
+
+| | Value receiver `(t T)` | Pointer receiver `(t *T)` |
+|--|------------------------|---------------------------|
+| **เห็น** | สำเนาของค่า | ค่าต้นฉบับ |
+| **แก้ไขได้?** | ไม่ได้ — แก้เฉพาะสำเนา | ได้ |
+| **เรียกได้จาก** | ทั้ง `T` และ `*T` | ทั้ง `T` (addressable) และ `*T` |
+| **ใช้เมื่อ** | อ่านอย่างเดียว; ขนาดเล็ก, copy ถูก | ต้องแก้ไข; struct ใหญ่; method set สม่ำเสมอ |
+
+**ความสม่ำเสมอ:** ถ้า method ใด ๆ บน type ต้องการ pointer receiver ให้ใช้ pointer receiver กับ *ทุก* method ของ type นั้น การผสมกันทำให้เกิดปัญหา method set ที่ละเอียดอ่อนเมื่อ type ถูกใช้เป็น interface value
+
+## Methods บน named type ใดก็ได้
+
+Methods ไม่จำกัดแค่ structs คุณนิยาม methods บน named type ใด ๆ ใน package ของคุณได้:
+
+```go
+type Celsius float64
+
+func (t Celsius) String() string {
+    return fmt.Sprintf("%.1f°C", float64(t))
+}
+```
+
+คุณไม่สามารถนิยาม method บน type จาก package อื่น (เช่น `func (s string) Upper()` ผิดกฎ) แต่การห่อมันใน named type ในท้องถิ่นใช้ได้เสมอ
+
+## Method sets
+
+**Method set** ของ type กำหนดว่า interfaces ใดที่ตอบสนองได้:
+
+- Method set ของ `T` มี methods ทั้งหมดที่มี value receiver `(t T)`
+- Method set ของ `*T` มี methods ทั้งหมด — ทั้ง `(t T)` และ `(t *T)`
+
+นี่คือเหตุผลที่ interface ที่ต้องการ pointer-receiver method สามารถตอบสนองได้เฉพาะโดย `*T` ไม่ใช่ `T`
+
+export const methodsCode = `package main
+
+import "fmt"
+
+type Counter struct {
+\tcount int
+}
+
+// Pointer receiver — mutates the struct
+func (c *Counter) Inc() {
+\tc.count++
+}
+
+// Value receiver — read-only
+func (c Counter) Value() int {
+\treturn c.count
+}
+
+type Celsius float64
+
+func (t Celsius) String() string {
+\treturn fmt.Sprintf("%.1f\\u00b0C", float64(t))
+}
+
+func main() {
+\tc := Counter{}
+\tc.Inc()
+\tc.Inc()
+\tc.Inc()
+\tfmt.Println(c.Value())
+
+\ttemp := Celsius(36.6)
+\tfmt.Println(temp.String())
+}`;
+
+<Playground client:visible code={methodsCode} />
+
+<Callout title="ใช้ pointer receiver เมื่อต้องการแก้ไข — และใช้ให้สม่ำเสมอ">
+Value receiver ทำงานบนสำเนาเสมอ ดังนั้นการแก้ไขจะถูกทิ้งโดยเงียบ ๆ ใช้ pointer receiver ทุกครั้งที่ method ต้องเปลี่ยนสถานะของ receiver เมื่อเลือกใช้ pointer receiver กับ method ใดใน type หนึ่ง ให้ใช้กับทุก method ใน type นั้นเพื่อให้ method set สอดคล้องกันและหลีกเลี่ยงช่องว่าง interface-satisfaction ที่น่าแปลกใจ
+</Callout>
+
+export const quizMethods = [
+  {
+    q: "method ที่มี value receiver `(c Counter)` แก้ไข `c.count` จะเกิดอะไรกับตัวแปรต้นฉบับ?",
+    options: [
+      "ตัวแปรต้นฉบับถูกอัปเดต เพราะ Go ส่ง structs แบบ by reference",
+      "ตัวแปรต้นฉบับไม่เปลี่ยน — method ทำงานบนสำเนา",
+      "เกิด compile error เพราะ value receiver ไม่สามารถเข้าถึง fields ได้",
+      "ขึ้นอยู่กับว่าตัวแปรอยู่บน heap หรือ stack"
+    ],
+    answer: 1
+  },
+  {
+    q: "method set ของ type ใดที่รวม methods ทั้ง value-receiver และ pointer-receiver?",
+    options: [
+      "เฉพาะ T",
+      "เฉพาะ *T",
+      "ทั้ง T และ *T เท่ากัน",
+      "ไม่มี — method sets ถูกกำหนด ณ call site"
+    ],
+    answer: 1
+  },
+  {
+    q: "คุณต้องการนิยาม method บน `type Kelvin float64` มีข้อจำกัดอะไร?",
+    options: [
+      "สามารถเพิ่ม methods ได้เฉพาะถ้า Kelvin embed struct",
+      "สามารถนิยาม methods บน Kelvin ได้เฉพาะถ้า float64 ยังไม่มี methods",
+      "สามารถนิยาม methods บน Kelvin ได้ตราบใดที่ type นิยามใน package ของคุณ",
+      "ไม่สามารถนิยาม methods บน type ที่มี underlying type เป็น primitive ได้"
+    ],
+    answer: 2
+  },
+  {
+    q: "type ของคุณมี 5 methods: 4 ใช้ value receiver และ 1 ใช้ pointer receiver คุณควรทำอย่างไร?",
+    options: [
+      "ปล่อยไว้ — การผสมกันไม่เป็นไรตราบใดที่แต่ละ method compile ได้",
+      "แปลง methods ทั้งหมดเป็น pointer receiver เพื่อความสม่ำเสมอ",
+      "แปลง methods ทั้งหมดเป็น value receiver เพื่อความสม่ำเสมอ",
+      "แยก type เป็นสอง types แยกกัน type ละ receiver"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/methods" questions={quizMethods} />
+
+<ProgressTracker client:visible id="methods-interfaces/methods" />

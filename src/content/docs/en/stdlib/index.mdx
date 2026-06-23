@@ -1,12 +1,121 @@
 ---
-title: 'Standard Library'
-description: 'fmt, strings, io, net/http, encoding/json, and time — the stdlib packages you will use in every Go project.'
+title: Standard Library
+description: "Go's batteries-included standard library — what it covers and a runnable tour of the packages in this module."
 sidebar:
   order: 1
 ---
 
-## Standard Library
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-Go ships with a rich standard library that covers most of what you need without third-party dependencies. This module tours the packages you will reach for daily: `fmt` for formatted I/O, `strings` and `strconv` for text processing, `io` and `bufio` for streaming data, `net/http` for building and calling HTTP services, `encoding/json` for marshalling and unmarshalling, and `time` for durations, tickers, and timers.
+## Go's batteries-included standard library
 
-> This module is coming soon. Check back for lessons on fmt, strings, io, net/http, encoding/json, and time.
+One of Go's defining characteristics is that the language ships with a comprehensive standard library — no `npm install`, no `pip install`, no Maven coordinates required for the vast majority of everyday tasks. The library covers HTTP servers and clients, JSON encoding, cryptography, file I/O, text processing, concurrency primitives, and much more. This philosophy keeps dependency trees shallow, binaries self-contained, and upgrade risks low.
+
+The table below shows what this module covers and which package delivers it.
+
+| Topic | Package(s) | Lesson |
+|---|---|---|
+| Formatted I/O, text, numbers | `fmt`, `strings`, `strconv` | fmt & strings |
+| Dates, durations, timers | `time` | time |
+| JSON marshaling / unmarshaling | `encoding/json` | encoding/json |
+| Streaming I/O, scanning | `io`, `bufio` | io & bufio |
+
+## Why standard library first?
+
+Real Go programs reach for `fmt.Println`, `strings.Split`, `time.Now`, and `json.Marshal` within the first few lines. Understanding these packages deeply means you will recognise idiomatic Go in any codebase you encounter, and you will reach for the right tool instead of pulling in an extra dependency.
+
+## A runnable tour
+
+The snippet below touches all four areas in a single `main` function. Read the output, then trace each call back to its package.
+
+export const stdlibIndexCode = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+\t"strings"
+\t"time"
+)
+
+func main() {
+\t// fmt — formatted output
+\tfmt.Println("Hello, Go!")
+\tfmt.Printf("Pi is approximately %.4f\\n", 3.14159)
+\tmsg := fmt.Sprintf("2 + 2 = %d", 4)
+\tfmt.Println(msg)
+
+\t// strings — text manipulation
+\ts := "the quick brown fox"
+\tfmt.Println(strings.ToUpper(s))
+\tfmt.Println(strings.Contains(s, "fox"))
+\tfmt.Println(strings.Join(strings.Split(s, " "), "-"))
+
+\t// time — fixed date for deterministic output
+\tt := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
+\tfmt.Println(t.Format("2006-01-02"))
+
+\t// encoding/json — marshal a struct
+\ttype Point struct {
+\t\tX int \`json:"x"\`
+\t\tY int \`json:"y"\`
+\t}
+\tp := Point{X: 3, Y: 7}
+\tb, _ := json.Marshal(p)
+\tfmt.Println(string(b))
+}`;
+
+<Playground client:visible code={stdlibIndexCode} />
+
+<Callout title="Standard library documentation">
+Every package in the standard library is documented at **pkg.go.dev/std**. Each page shows the package synopsis, all exported identifiers, and runnable examples. Bookmark it — it is the fastest way to check a function signature or find the right constant.
+</Callout>
+
+export const quizStdlibIndex = [
+  {
+    q: "Which package provides fmt.Sprintf?",
+    options: [
+      "strings",
+      "fmt",
+      "io",
+      "strconv"
+    ],
+    answer: 1
+  },
+  {
+    q: "Go's standard library is designed so that most everyday programs need:",
+    options: [
+      "At least 10 third-party modules",
+      "A build tool like Maven or Gradle",
+      "Few or no third-party dependencies",
+      "A separate runtime download"
+    ],
+    answer: 2
+  },
+  {
+    q: "Which package would you use to convert the string \"42\" to the integer 42?",
+    options: [
+      "fmt",
+      "strings",
+      "strconv",
+      "math"
+    ],
+    answer: 2
+  },
+  {
+    q: "What does json.Marshal return when it succeeds?",
+    options: [
+      "A string and an error",
+      "A []byte and an error",
+      "An io.Reader and an error",
+      "A map[string]any and an error"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="stdlib/index" questions={quizStdlibIndex} />
+
+<ProgressTracker client:visible id="stdlib/index" />

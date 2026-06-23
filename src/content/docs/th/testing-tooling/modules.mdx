@@ -1,0 +1,148 @@
+---
+title: Go Modules
+description: 'go mod init, go.mod, go.sum, การเพิ่ม dependency ด้วย go get, go mod tidy, และ semantic import versioning'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Go module คืออะไร?
+
+**module** คือกลุ่มของ Go packages ที่มี version ร่วมกันและแจกจ่ายเป็นหน่วยเดียว โปรเจกต์ Go สมัยใหม่ทุกโปรเจกต์เริ่มต้นด้วย module ระบบ module แทนที่ workflow `GOPATH` แบบเก่าใน Go 1.11 และกลายเป็นค่าเริ่มต้นใน Go 1.16
+
+> Playground note: คำสั่ง `go mod` ต้องการ `go` binary และ file system — ไม่สามารถรันใน in-browser runner ได้ ให้ทำตามขั้นตอนด้านล่างใน terminal ของคุณ
+
+## การ initialise module
+
+```bash
+mkdir myapp && cd myapp
+go mod init github.com/yourname/myapp
+```
+
+คำสั่งนี้สร้างไฟล์ `go.mod` — manifest ของ module:
+
+```go
+module github.com/yourname/myapp
+
+go 1.22
+```
+
+module path (`github.com/yourname/myapp`) ทำหน้าที่ทั้งเป็น import path prefix สำหรับ packages ของคุณเองและเป็น identifier ที่ modules อื่นใช้เมื่อ depend บน module ของคุณ ไม่จำเป็นต้องเป็น URL จริงระหว่าง development แต่ต้องไม่ซ้ำกันหากคุณเผยแพร่ใน Go module proxy
+
+## go.mod และ go.sum
+
+หลังจากเพิ่ม dependency คุณจะพบสองไฟล์ใน root ของ module:
+
+**go.mod** — ประกาศ module path, Go version ขั้นต่ำ, และ dependencies ทั้งหมดทั้งทางตรงและทางอ้อม:
+
+```
+module github.com/yourname/myapp
+
+go 1.22
+
+require (
+    github.com/go-chi/chi/v5 v5.1.0
+    golang.org/x/text v0.14.0 // indirect
+)
+```
+
+**go.sum** — ทะเบียน cryptographic checksum ทุก zip archive ของ dependency และ `go.mod` ถูก hash ที่นี่ Go toolchain ตรวจสอบ hash เหล่านี้ทุก build เพื่อรับประกัน reproducibility และป้องกัน supply-chain attacks ให้ commit ทั้งสองไฟล์ลง version control
+
+## การเพิ่ม dependency
+
+```bash
+# เพิ่ม module เวอร์ชันล่าสุด
+go get github.com/go-chi/chi/v5
+
+# เพิ่มเวอร์ชันที่ระบุ
+go get github.com/go-chi/chi/v5@v5.1.0
+
+# อัปเกรด dependency เป็น patch/minor release ล่าสุด
+go get -u github.com/go-chi/chi/v5
+```
+
+หลังจาก `go get` source code ของคุณสามารถ import package ได้:
+
+```go
+import "github.com/go-chi/chi/v5"
+```
+
+## go mod tidy
+
+เมื่อเวลาผ่านไป code และ dependencies อาจไม่สอดคล้องกัน — คุณอาจลบ import หรือเพิ่มโดยไม่ได้รัน `go get` `go mod tidy` แก้ไขทั้งสองกรณี:
+
+```bash
+go mod tidy
+```
+
+มันเพิ่ม `require` lines ที่ขาดหาย ลบ `require` lines สำหรับ packages ที่ไม่ได้ import แล้ว และอัปเดต `go.sum` ให้ตรงกัน รันก่อน commit ทุกครั้ง
+
+## Semantic import versioning
+
+Go บังคับใช้กฎที่เรียกว่า **semantic import versioning**: หาก module ออก v2 ขึ้นไป import path ต้องรวม major version suffix ด้วย
+
+```bash
+# v1 — ไม่ต้องใช้ suffix
+go get github.com/foo/bar@v1.2.3
+# import "github.com/foo/bar"
+
+# v2+ — /v2 suffix เป็นส่วนหนึ่งของ import path
+go get github.com/foo/bar/v2@v2.0.0
+# import "github.com/foo/bar/v2"
+```
+
+ซึ่งหมายความว่า major version สองเวอร์ชันของ module เดียวกันสามารถอยู่ร่วมกันใน binary เดียวได้โดยไม่ขัดแย้ง การเปลี่ยน import path เป็นเจตนา: v2 API อนุญาตให้ไม่เข้ากันกับ v1
+
+<Callout title="module คือกลุ่มของ packages ที่มี version ร่วมกัน">
+คิดว่า module คือหน่วยของการแจกจ่ายและ versioning ส่วน package คือหน่วยของการ compile module หนึ่งประกอบด้วยหลาย packages เมื่อคุณรัน `go get` คุณกำลังเพิ่ม module (และ packages ทั้งหมดของมันพร้อมใช้งาน) เมื่อคุณเขียน `import` คุณกำลัง import package path เฉพาะภายใน module สองแนวคิดนี้มีความเกี่ยวข้องกันอย่างใกล้ชิดแต่แตกต่างกัน
+</Callout>
+
+export const quizModules = [
+  {
+    q: "คำสั่งใด initialise Go module ใหม่ใน directory ปัจจุบัน?",
+    options: [
+      "go init",
+      "go new module",
+      "go mod init <module-path>",
+      "go create module"
+    ],
+    answer: 2
+  },
+  {
+    q: "วัตถุประสงค์ของ go.sum คืออะไร?",
+    options: [
+      "แสดงรายการเฉพาะ direct dependencies ของ module",
+      "เก็บ cryptographic checksums เพื่อรับประกัน reproducibility และตรวจจับการแก้ไข",
+      "เป็นไฟล์ cache ที่ optional และลบได้อย่างปลอดภัย",
+      "แทนที่ go.mod ใน Go 1.22+"
+    ],
+    answer: 1
+  },
+  {
+    q: "go mod tidy ทำอะไร?",
+    options: [
+      "อัปเกรด dependencies ทั้งหมดเป็นเวอร์ชันล่าสุด",
+      "ลบไฟล์ go.sum และสร้างใหม่",
+      "เพิ่ม require entries ที่ขาดหายและลบที่ไม่ได้ใช้ จากนั้นอัปเดต go.sum",
+      "จัดรูปแบบไฟล์ go.mod"
+    ],
+    answer: 2
+  },
+  {
+    q: "module ออก v2.0.0 พร้อม breaking changes import path ต้องเปลี่ยนอย่างไร?",
+    options: [
+      "คงเดิม — version tag ใน go.mod จัดการเอง",
+      "เพิ่ม suffix /v2 ต่อท้าย import path",
+      "ต้องเปลี่ยนชื่อ module ทั้งหมด",
+      "เพิ่ม replace directive ใน go.mod"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="testing-tooling/modules" questions={quizModules} />
+
+<ProgressTracker client:visible id="testing-tooling/modules" />

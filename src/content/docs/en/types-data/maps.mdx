@@ -1,0 +1,173 @@
+---
+title: Maps
+description: 'make(map[K]V), set/get/delete, the comma-ok idiom, zero-value for missing keys, random iteration order, and maps as reference types.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Creating a map
+
+A map is a hash table that maps keys of type `K` to values of type `V`. Create one with `make` or a composite literal:
+
+```go
+// make — preferred when you add entries incrementally
+scores := make(map[string]int)
+
+// composite literal — preferred when entries are known upfront
+scores := map[string]int{
+    "Alice": 95,
+    "Bob":   87,
+}
+```
+
+The key type must be **comparable** (supports `==`). Valid key types include `string`, `int`, all numeric types, booleans, pointers, and structs whose fields are all comparable. Slices, maps, and functions cannot be used as keys.
+
+## Set, get, delete
+
+```go
+scores["Charlie"] = 72  // set
+fmt.Println(scores["Alice"]) // get → 95
+delete(scores, "Bob")        // delete (no-op if key absent)
+```
+
+## Missing-key zero value
+
+Reading a key that does not exist **never panics** — it returns the zero value for the value type:
+
+```go
+fmt.Println(scores["Dave"]) // 0 — not a panic
+```
+
+This is convenient but can hide bugs: you cannot tell whether a key maps to `0` or was never set. Use the comma-ok idiom to distinguish.
+
+## The comma-ok idiom
+
+A two-result map lookup returns the value and a boolean indicating whether the key was present:
+
+```go
+v, ok := scores["Dave"]
+if !ok {
+    fmt.Println("Dave not found")
+}
+```
+
+## Maps are reference types
+
+Assigning a map copies the header, not the data. Both variables point to the same underlying hash table:
+
+```go
+a := map[string]int{"x": 1}
+b := a
+b["x"] = 99
+fmt.Println(a["x"]) // 99 — a and b share the same map
+```
+
+## Iteration order is randomized
+
+Go deliberately randomizes map iteration order on every run to prevent code from depending on an undefined order. To print map entries deterministically, sort the keys first:
+
+```go
+import "sort"
+
+keys := make([]string, 0, len(scores))
+for k := range scores {
+    keys = append(keys, k)
+}
+sort.Strings(keys)
+for _, k := range keys {
+    fmt.Printf("%s: %d\n", k, scores[k])
+}
+```
+
+export const mapsCode = `package main
+
+import (
+\t"fmt"
+\t"sort"
+)
+
+func main() {
+\t// make a map and add entries
+\tscores := make(map[string]int)
+\tscores["Alice"] = 95
+\tscores["Bob"] = 87
+\tscores["Charlie"] = 72
+
+\t// Comma-ok idiom
+\tv, ok := scores["Bob"]
+\tfmt.Println(v, ok) // 87 true
+
+\tv2, ok2 := scores["Dave"]
+\tfmt.Println(v2, ok2) // 0 false
+
+\t// Delete an entry
+\tdelete(scores, "Charlie")
+
+\t// Sort keys for deterministic output
+\tkeys := make([]string, 0, len(scores))
+\tfor k := range scores {
+\t\tkeys = append(keys, k)
+\t}
+\tsort.Strings(keys)
+\tfor _, k := range keys {
+\t\tfmt.Printf("%s: %d\\n", k, scores[k])
+\t}
+}`;
+
+<Playground client:visible code={mapsCode} />
+
+<Callout title="Map iteration order is randomized — always sort for deterministic output">
+Go intentionally randomizes map iteration order on every program run. This prevents bugs that silently depend on hash ordering. If you need stable output — for tests, logs, or user-facing data — collect the keys into a `[]string`, call `sort.Strings`, then range over the sorted slice. Never rely on the order of `for k, v := range myMap`.
+</Callout>
+
+export const quizMaps = [
+  {
+    q: "You read `scores[\"Dave\"]` but \"Dave\" was never added. What does Go return?",
+    options: [
+      "A runtime panic",
+      "nil",
+      "The zero value for the value type (0 for int)",
+      "An error value"
+    ],
+    answer: 2
+  },
+  {
+    q: "What does the second return value in `v, ok := scores[\"Alice\"]` tell you?",
+    options: [
+      "Whether the value is non-zero",
+      "Whether the key was present in the map",
+      "Whether the map has remaining capacity",
+      "Whether the key is a valid string"
+    ],
+    answer: 1
+  },
+  {
+    q: "You assign `b := a` where a is a `map[string]int`. You then set `b[\"x\"] = 99`. What is `a[\"x\"]`?",
+    options: [
+      "0 — b is an independent copy of a",
+      "99 — maps are reference types; a and b point to the same hash table",
+      "A panic — you cannot assign maps directly",
+      "The original value of a[\"x\"] before the assignment"
+    ],
+    answer: 1
+  },
+  {
+    q: "Why does Go randomize map iteration order?",
+    options: [
+      "To improve hash table performance",
+      "To prevent programs from accidentally depending on an undefined, implementation-specific ordering",
+      "To reduce memory usage",
+      "It does not randomize — the order is always alphabetical by key"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="types-data/maps" questions={quizMaps} />
+
+<ProgressTracker client:visible id="types-data/maps" />

@@ -1,0 +1,169 @@
+---
+title: Slices
+description: 'Array vs slice, make, len/cap, การเติบโตของ append, slicing expression, backing array ที่แชร์กัน, และ copy'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Array: รากฐาน
+
+**Array** ใน Go มีขนาดคงที่ซึ่งเป็นส่วนหนึ่งของ type `[3]int` และ `[4]int` คือ type คนละตัวกัน:
+
+```go
+arr := [3]int{10, 20, 30}
+fmt.Println(len(arr)) // 3 — เสมอ
+```
+
+Array เป็น value type: การ assign `a2 := a1` จะ copy ทุก element มีประโยชน์สำหรับข้อมูลขนาดคงที่ แต่ยืดหยุ่นน้อยเกินไปสำหรับงานส่วนใหญ่
+
+## Slice: มุมมองแบบ dynamic
+
+**Slice** คือ header ขนาดเบา — สาม word — ที่อธิบาย "หน้าต่าง" เข้าไปยัง array ที่อยู่ด้านล่าง:
+
+```
+slice header
+┌──────────┐
+│ pointer  │ ──► backing array [ 10 | 20 | 30 | 40 | 50 ]
+│ len = 3  │         ↑ index 0
+│ cap = 5  │
+└──────────┘
+```
+
+- **`len`** — จำนวน element ที่เข้าถึงได้ผ่าน slice ในขณะนี้
+- **`cap`** — จำนวน element จากจุดเริ่มต้นของ slice ไปจนถึงท้ายของ backing array
+
+สร้าง slice ด้วย `make`, composite literal, หรือการ slice array:
+
+```go
+s := make([]int, 3, 5)      // len=3, cap=5, ทุกค่าเป็น zero
+t := []int{1, 2, 3}         // len=3, cap=3
+u := arr[1:3]               // len=2, cap=2, หน้าต่างเข้าสู่ arr
+```
+
+## `append` และการเติบโต
+
+`append` เพิ่ม element ให้ slice และคืนค่า slice (ที่อาจเป็นตัวใหม่):
+
+```go
+s = append(s, 4, 5, 6)
+```
+
+เมื่อ `len == cap`, `append` จะ allocate backing array ใหม่ที่ใหญ่กว่า copy element ที่มีอยู่ แล้วคืน slice ที่ชี้ไป array ใหม่ slice เดิมไม่ถูกกระทบ **ควร reassign ผลลัพธ์ของ append เสมอ** — `s = append(s, ...)`
+
+## Slicing expression และ backing array ที่แชร์
+
+`a[low:high]` สร้าง slice header ใหม่ที่แชร์ backing array เดียวกัน:
+
+```go
+base := []int{1, 2, 3, 4, 5}
+a := base[1:3] // [2 3] — แชร์ backing array กับ base
+b := base[1:4] // [2 3 4] — แชร์ด้วยเช่นกัน
+a[0] = 99
+fmt.Println(b[0]) // 99 — การแก้ไขมองเห็นได้ผ่าน b ด้วย
+```
+
+นี่คือพลัง (sub-slicing แบบ zero-copy) แต่อันตรายถ้าลืมเรื่องนี้
+
+## `copy` เพื่อ slice ที่เป็นอิสระ
+
+ใช้ built-in `copy(dst, src)` เพื่อตัดการแชร์ โดย copy `min(len(dst), len(src))` element และคืนจำนวนที่ copy:
+
+```go
+fresh := []int{10, 20, 30}
+dst := make([]int, 3)
+copy(dst, fresh)
+dst[0] = 0
+fmt.Println(fresh[0], dst[0]) // 10 0 — เป็นอิสระต่อกัน
+```
+
+export const slicesCode = `package main
+
+import "fmt"
+
+func main() {
+\t// Array vs slice
+\tarr := [3]int{10, 20, 30} // fixed-size array
+\tsl := arr[:]              // slice backed by arr
+\tsl[0] = 99
+\tfmt.Println(arr[0], sl[0]) // 99 99 — shared backing array
+
+\t// make: len and cap
+\ts := make([]int, 3, 5)
+\tfmt.Println(len(s), cap(s)) // 3 5
+
+\t// append beyond cap allocates a new backing array
+\ts = append(s, 1, 2, 3)
+\tfmt.Println(len(s), cap(s)) // 6 10
+
+\t// Two slices sharing the same backing array
+\tbase := []int{1, 2, 3, 4, 5}
+\ta := base[1:3] // [2 3]
+\tb := base[1:4] // [2 3 4]
+\ta[0] = 99
+\tfmt.Println(b[0]) // 99 — shared backing array
+
+\t// copy to get an independent slice
+\tfresh := []int{10, 20, 30}
+\tdst := make([]int, 3)
+\tcopy(dst, fresh)
+\tdst[0] = 0
+\tfmt.Println(fresh[0], dst[0]) // 10 0 — independent after copy
+}`;
+
+<Playground client:visible code={slicesCode} />
+
+<Callout title="append อาจ allocate หรือไม่ก็ได้; slice แชร์ backing array">
+มีกฎสำคัญสองข้อที่ต้องจำ ข้อแรก: `append` คืน slice header ใหม่เสมอ — ถ้าเกิดการ reallocation คุณจะได้ backing array ใหม่ทั้งหมด อย่าเพิกเฉยต่อค่าที่คืนมา ข้อสอง: `a[low:high]` ไม่ได้ copy ข้อมูล ทั้งสอง slice แชร์ backing array เดียวกัน การเขียนผ่านตัวหนึ่งจะมองเห็นได้จากอีกตัวด้วย ใช้ `copy` เมื่อต้องการ slice ที่เป็นอิสระจริงๆ
+</Callout>
+
+export const quizSlices = [
+  {
+    q: "คุณเขียน `s = append(s, 1)` เมื่อ `len(s) == cap(s)` Go ทำอะไร?",
+    options: [
+      "Runtime panic — เกินความจุ",
+      "Element ถูกละเว้นโดยเงียบ",
+      "Go allocate backing array ใหม่ที่ใหญ่กว่า copy element เดิม แล้วคืน slice ที่ชี้ไป array ใหม่",
+      "Go ขยาย array เดิมใน place"
+    ],
+    answer: 2
+  },
+  {
+    q: "คุณมี `base := []int{1, 2, 3}` และ `a := base[0:2]` แล้วกำหนด `a[0] = 99` ค่าของ `base[0]` คืออะไร?",
+    options: [
+      "1 — a คือ copy ที่เป็นอิสระ",
+      "99 — a และ base แชร์ backing array เดียวกัน",
+      "0 — slice header ถูก zero หลัง slicing",
+      "Panic — ไม่สามารถ mutate slice ที่สร้างจาก slice อื่นได้"
+    ],
+    answer: 1
+  },
+  {
+    q: "`make([]string, 4, 10)` สร้างอะไร?",
+    options: [
+      "Slice ที่มี len=10 และ cap=4",
+      "Slice ที่มี len=4 และ cap=10",
+      "Array ของ string 10 ตัวที่ fill ข้อมูล 4 ตัว",
+      "Compile error — make รับ argument ขนาดเดียวสำหรับ slice"
+    ],
+    answer: 1
+  },
+  {
+    q: "วิธี idiomatic ที่ทำให้ slice สองตัวไม่แชร์ backing array คืออะไร?",
+    options: [
+      "ใช้ `a[low:high:max]` พร้อม max-cap parameter",
+      "ใช้ `copy(dst, src)` เพื่อ copy element ลงใน slice ที่ allocate ใหม่",
+      "Assign slice ไปยังตัวแปรใหม่: `b := a`",
+      "ใช้ `append([]int{}, a...)` — แต่ไม่ใช่มาตรฐาน"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="types-data/slices" questions={quizSlices} />
+
+<ProgressTracker client:visible id="types-data/slices" />

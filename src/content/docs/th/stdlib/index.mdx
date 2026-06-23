@@ -1,12 +1,121 @@
 ---
-title: 'Standard Library'
-description: 'fmt, strings, io, net/http, encoding/json, และ time — packages สำคัญใน Go standard library'
+title: Standard Library
+description: "Standard library ของ Go — ครอบคลุมทุกสิ่งที่ต้องการพร้อม tour โปรแกรมที่รันได้ในโมดูลนี้"
 sidebar:
   order: 1
 ---
 
-## Standard Library ของ Go
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-Go มาพร้อม standard library ที่ครอบคลุมและออกแบบมาอย่างดี โมดูลนี้สำรวจ packages ที่ใช้บ่อยที่สุด: `fmt` สำหรับ formatted I/O, `strings` และ `strconv` สำหรับจัดการข้อความ, `io` และ `bufio` สำหรับ stream processing, `net/http` สำหรับสร้าง HTTP clients และ servers, `encoding/json` สำหรับ serialization, และ `time` สำหรับจัดการวันเวลา
+## Standard library แบบ batteries-included ของ Go
 
-> โมดูลนี้กำลังจะมาเร็ว ๆ นี้ คอยติดตามบทเรียนเกี่ยวกับ fmt, strings, io, net/http, encoding/json, และ time
+หนึ่งในคุณสมบัติที่โดดเด่นของ Go คือภาษานี้มาพร้อม standard library ที่ครบครัน — ไม่ต้องรัน `npm install`, `pip install`, หรือระบุ Maven coordinates สำหรับงานประจำวันส่วนใหญ่ Library ครอบคลุม HTTP server และ client, การเข้ารหัส JSON, cryptography, file I/O, การจัดการข้อความ, concurrency primitives และอีกมากมาย แนวคิดนี้ทำให้ dependency tree สั้นกระชับ binary พึ่งพาตัวเอง และความเสี่ยงในการ upgrade ต่ำ
+
+ตารางด้านล่างแสดงเนื้อหาของโมดูลนี้และ package ที่รับผิดชอบในแต่ละหัวข้อ
+
+| หัวข้อ | Package | บทเรียน |
+|---|---|---|
+| Formatted I/O, ข้อความ, ตัวเลข | `fmt`, `strings`, `strconv` | fmt & strings |
+| วันที่, ระยะเวลา, timer | `time` | time |
+| JSON marshal / unmarshal | `encoding/json` | encoding/json |
+| Streaming I/O, การสแกน | `io`, `bufio` | io & bufio |
+
+## ทำไมต้องเรียน standard library ก่อน?
+
+โปรแกรม Go จริงๆ จะเรียก `fmt.Println`, `strings.Split`, `time.Now`, และ `json.Marshal` ตั้งแต่บรรทัดแรกๆ การเข้าใจ package เหล่านี้อย่างถ่องแท้หมายความว่าคุณจะจำ idiomatic Go ได้ในทุก codebase ที่พบ และเลือกใช้เครื่องมือที่ถูกต้องแทนการดึง dependency เพิ่มเติม
+
+## Tour โปรแกรมที่รันได้
+
+snippet ด้านล่างครอบคลุมทั้งสี่หัวข้อในฟังก์ชัน `main` เดียว อ่าน output แล้วย้อนติดตาม call แต่ละอันกลับไปยัง package ของมัน
+
+export const stdlibIndexCode = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+\t"strings"
+\t"time"
+)
+
+func main() {
+\t// fmt — formatted output
+\tfmt.Println("Hello, Go!")
+\tfmt.Printf("Pi is approximately %.4f\\n", 3.14159)
+\tmsg := fmt.Sprintf("2 + 2 = %d", 4)
+\tfmt.Println(msg)
+
+\t// strings — text manipulation
+\ts := "the quick brown fox"
+\tfmt.Println(strings.ToUpper(s))
+\tfmt.Println(strings.Contains(s, "fox"))
+\tfmt.Println(strings.Join(strings.Split(s, " "), "-"))
+
+\t// time — fixed date for deterministic output
+\tt := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
+\tfmt.Println(t.Format("2006-01-02"))
+
+\t// encoding/json — marshal a struct
+\ttype Point struct {
+\t\tX int \`json:"x"\`
+\t\tY int \`json:"y"\`
+\t}
+\tp := Point{X: 3, Y: 7}
+\tb, _ := json.Marshal(p)
+\tfmt.Println(string(b))
+}`;
+
+<Playground client:visible code={stdlibIndexCode} />
+
+<Callout title="เอกสาร standard library">
+ทุก package ใน standard library มีเอกสารที่ **pkg.go.dev/std** แต่ละหน้าแสดง synopsis ของ package, identifier ที่ export ทั้งหมด และตัวอย่างที่รันได้ บุ๊กมาร์กไว้เลย — เป็นวิธีที่เร็วที่สุดในการตรวจสอบ signature ของฟังก์ชันหรือค้นหา constant ที่ต้องการ
+</Callout>
+
+export const quizStdlibIndex = [
+  {
+    q: "Package ใดที่ให้บริการ fmt.Sprintf?",
+    options: [
+      "strings",
+      "fmt",
+      "io",
+      "strconv"
+    ],
+    answer: 1
+  },
+  {
+    q: "Standard library ของ Go ถูกออกแบบมาเพื่อให้โปรแกรมประจำวันส่วนใหญ่ต้องการ:",
+    options: [
+      "Third-party module อย่างน้อย 10 ตัว",
+      "Build tool อย่าง Maven หรือ Gradle",
+      "Dependency จากภายนอกน้อยมากหรือไม่มีเลย",
+      "ดาวน์โหลด runtime แยกต่างหาก"
+    ],
+    answer: 2
+  },
+  {
+    q: "Package ใดที่ใช้แปลง string \"42\" เป็น integer 42?",
+    options: [
+      "fmt",
+      "strings",
+      "strconv",
+      "math"
+    ],
+    answer: 2
+  },
+  {
+    q: "json.Marshal คืนค่าอะไรเมื่อสำเร็จ?",
+    options: [
+      "string และ error",
+      "[]byte และ error",
+      "io.Reader และ error",
+      "map[string]any และ error"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="stdlib/index" questions={quizStdlibIndex} />
+
+<ProgressTracker client:visible id="stdlib/index" />

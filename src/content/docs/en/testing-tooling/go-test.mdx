@@ -1,0 +1,169 @@
+---
+title: Writing Tests with go test
+description: '_test.go files, func TestXxx(t *testing.T), t.Errorf/t.Fatalf, table-driven tests with t.Run, and running go test ./...'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Test files and naming conventions
+
+Go's test runner discovers tests through two rules enforced by the toolchain:
+
+1. **File name** ends in `_test.go` — the compiler excludes these files from normal builds.
+2. **Function name** starts with `Test` followed by a capital letter — `TestAdd`, `TestParseURL`, etc.
+
+A minimal test file for a `math.go` source file lives in the **same package** and directory:
+
+```go
+// math_test.go
+package math
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+    got := Add(2, 3)
+    want := 5
+    if got != want {
+        t.Errorf("Add(2, 3) = %d; want %d", got, want)
+    }
+}
+```
+
+Run it with:
+
+```bash
+go test ./...          # run all tests in all packages
+go test -v ./...       # verbose: print each test name and PASS/FAIL
+go test -run TestAdd   # run only tests whose name matches the regex
+```
+
+## t.Errorf vs t.Fatalf
+
+Both record a failure, but they differ in whether the test continues:
+
+| Function | Marks failure | Stops test? |
+|----------|--------------|-------------|
+| `t.Errorf` | Yes | No — test continues |
+| `t.Fatalf` | Yes | Yes — test stops immediately |
+
+Use `t.Fatalf` when a later assertion would panic if the earlier one failed (e.g., dereferencing a pointer that you just checked is nil).
+
+```go
+func TestDivide(t *testing.T) {
+    result, err := Divide(10, 0)
+    if err == nil {
+        t.Fatalf("expected an error for division by zero, got nil")
+    }
+    _ = result
+}
+```
+
+## Table-driven tests with t.Run
+
+The idiomatic Go pattern for testing many inputs against the same function is a **table-driven test**: a slice of `struct` cases iterated with `t.Run`. Each sub-test gets its own name, failure message, and — with `-v` — its own line in the output.
+
+```go
+// fibonacci_test.go
+package main
+
+import "testing"
+
+func TestFibonacci(t *testing.T) {
+    cases := []struct {
+        name string
+        n    int
+        want int
+    }{
+        {"fib(0)", 0, 0},
+        {"fib(1)", 1, 1},
+        {"fib(5)", 5, 5},
+        {"fib(10)", 10, 55},
+    }
+
+    for _, tc := range cases {
+        tc := tc // capture range variable (pre-Go 1.22)
+        t.Run(tc.name, func(t *testing.T) {
+            got := Fibonacci(tc.n)
+            if got != tc.want {
+                t.Errorf("Fibonacci(%d) = %d; want %d", tc.n, got, tc.want)
+            }
+        })
+    }
+}
+```
+
+Run with `-v` to see each sub-test:
+
+```bash
+go test -v -run TestFibonacci ./...
+# --- PASS: TestFibonacci (0.00s)
+#     --- PASS: TestFibonacci/fib(0) (0.00s)
+#     --- PASS: TestFibonacci/fib(1) (0.00s)
+#     --- PASS: TestFibonacci/fib(5) (0.00s)
+#     --- PASS: TestFibonacci/fib(10) (0.00s)
+```
+
+## The race detector
+
+Add `-race` to catch data races at test time — this is mandatory in CI:
+
+```bash
+go test -race -coverprofile=coverage.out -covermode=atomic ./...
+```
+
+The `-covermode=atomic` flag is required alongside `-race` for accurate coverage counts because the race detector rewrites memory accesses.
+
+<Callout title="Table-driven tests are the idiomatic Go pattern">
+You will see table-driven tests in virtually every serious Go codebase and in the Go standard library itself. They keep test logic in one place, make it trivial to add new cases, and produce readable failure messages. When you catch a bug, add a new row to the table — the test becomes a regression guard automatically.
+</Callout>
+
+export const quizGoTest = [
+  {
+    q: "What file suffix does the Go toolchain require for test files?",
+    options: [
+      ".test.go",
+      "_spec.go",
+      "_test.go",
+      ".testing.go"
+    ],
+    answer: 2
+  },
+  {
+    q: "What is the difference between t.Errorf and t.Fatalf?",
+    options: [
+      "t.Errorf stops the test immediately; t.Fatalf lets it continue",
+      "t.Fatalf stops the test immediately; t.Errorf lets it continue",
+      "They are identical — both stop the test",
+      "t.Fatalf only works inside t.Run sub-tests"
+    ],
+    answer: 1
+  },
+  {
+    q: "In a table-driven test, what does t.Run provide for each case?",
+    options: [
+      "A separate goroutine per case",
+      "A named sub-test with its own pass/fail result",
+      "Automatic parallelism across all cases",
+      "A fresh copy of the test binary"
+    ],
+    answer: 1
+  },
+  {
+    q: "Why is -covermode=atomic required when using -race?",
+    options: [
+      "It makes coverage faster",
+      "It is required by the go test specification",
+      "The race detector rewrites memory accesses, and atomic mode gives accurate counts",
+      "It enables branch coverage instead of statement coverage"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="testing-tooling/go-test" questions={quizGoTest} />
+
+<ProgressTracker client:visible id="testing-tooling/go-test" />

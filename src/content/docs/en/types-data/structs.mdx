@@ -1,0 +1,191 @@
+---
+title: Structs
+description: 'Defining structs, field access, struct literals, anonymous structs, comparison, and embedding for composition.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Defining a struct
+
+A **struct** groups related fields under a single named type. Each field has a name and a type:
+
+```go
+type Point struct {
+    X, Y int
+}
+
+type User struct {
+    Name  string
+    Email string
+    Age   int
+}
+```
+
+Fields whose names begin with an uppercase letter are **exported** (visible outside the package). Lowercase names are unexported.
+
+## Struct literals
+
+You can create a struct value in two ways:
+
+```go
+// Positional — order must match the field declaration order
+p := Point{3, 4}
+
+// Named fields — order does not matter; unset fields get zero values
+u := User{Name: "Alice", Email: "alice@example.com"}
+```
+
+Named-field form is strongly preferred: it is self-documenting and resilient to field reordering.
+
+## Field access
+
+Use a dot to read or write any field:
+
+```go
+fmt.Println(u.Name)   // read
+u.Age = 30            // write
+```
+
+## Anonymous structs
+
+For one-off shapes — configuration, test fixtures, local grouping — you can define a struct type inline without naming it:
+
+```go
+cfg := struct {
+    Host string
+    Port int
+}{Host: "localhost", Port: 8080}
+```
+
+## Struct comparison
+
+Two struct values are comparable with `==` if **all** their fields are comparable types. The comparison is field-by-field:
+
+```go
+a := Point{1, 2}
+b := Point{1, 2}
+fmt.Println(a == b) // true
+```
+
+Structs containing slices, maps, or functions are **not** comparable with `==`.
+
+## Struct embedding (composition)
+
+Go has no class inheritance. Instead, you **embed** one struct type inside another to promote its fields and methods:
+
+```go
+type Address struct {
+    City    string
+    Country string
+}
+
+type Person struct {
+    Name    string
+    Age     int
+    Address          // embedded — City and Country are promoted
+}
+```
+
+After embedding, `person.City` is shorthand for `person.Address.City`. This is **composition**, not inheritance — the embedded type does not know it is embedded, and the outer type is not a subtype of the inner type.
+
+export const structsCode = `package main
+
+import "fmt"
+
+type Address struct {
+\tCity    string
+\tCountry string
+}
+
+type Person struct {
+\tName    string
+\tAge     int
+\tAddress // embedded struct
+}
+
+func main() {
+\t// Named-field literal
+\tp1 := Person{
+\t\tName: "Alice",
+\t\tAge:  30,
+\t\tAddress: Address{City: "Bangkok", Country: "Thailand"},
+\t}
+\tfmt.Println(p1.Name, p1.Age)
+\tfmt.Println(p1.City)    // promoted from Address
+\tfmt.Println(p1.Country) // promoted from Address
+
+\t// Struct copy: p2 is an independent value
+\tp2 := p1
+\tp2.Name = "Bob"
+\tfmt.Println(p1.Name, p2.Name) // Alice Bob
+
+\t// Anonymous struct
+\tcfg := struct {
+\t\tHost string
+\t\tPort int
+\t}{Host: "localhost", Port: 8080}
+\tfmt.Printf("%s:%d\\n", cfg.Host, cfg.Port)
+
+\t// Struct comparison (all fields comparable)
+\ta1 := Address{City: "Bangkok", Country: "Thailand"}
+\ta2 := Address{City: "Bangkok", Country: "Thailand"}
+\tfmt.Println(a1 == a2) // true
+}`;
+
+<Playground client:visible code={structsCode} />
+
+<Callout title="Structs are value types — assignment copies">
+Writing `p2 := p1` produces a completely independent copy of the struct. Every field is copied. Mutating `p2.Name` does not touch `p1`. This is different from slices and maps, where assignment copies only the header and the two variables share the same underlying data. If you need to share a struct across goroutines or avoid copying large structs, use a pointer (`*Person`).
+</Callout>
+
+export const quizStructs = [
+  {
+    q: "You write `p2 := p1` where p1 is a `Person` struct. You then set `p2.Name = \"Bob\"`. What is p1.Name?",
+    options: [
+      "\"Bob\" — structs are reference types so both variables see the change",
+      "\"Alice\" — structs are value types so p2 is an independent copy",
+      "An empty string — the copy zeroes all fields",
+      "A compile error — structs cannot be assigned directly"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which struct literal style is preferred in idiomatic Go?",
+    options: [
+      "Positional: `Point{3, 4}`",
+      "Named-field: `Point{X: 3, Y: 4}`",
+      "Either style is equally idiomatic",
+      "Structs should always be created with `new(Point)`"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does embedding `Address` inside `Person` give you?",
+    options: [
+      "Person inherits from Address; Person is a subtype of Address",
+      "The Address fields and methods are promoted onto Person, accessible as person.City etc.",
+      "A compile error — Go does not support embedding",
+      "Person and Address share the same memory layout"
+    ],
+    answer: 1
+  },
+  {
+    q: "Can you compare two `User` structs with `==` if User contains a `[]string` field?",
+    options: [
+      "Yes — Go compares slices element by element",
+      "Yes — but only if the slices have the same length",
+      "No — structs containing slices are not comparable with ==",
+      "Yes — the comparison ignores slice fields"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="types-data/structs" questions={quizStructs} />
+
+<ProgressTracker client:visible id="types-data/structs" />

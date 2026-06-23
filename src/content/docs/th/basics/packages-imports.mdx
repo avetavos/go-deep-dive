@@ -1,0 +1,170 @@
+---
+title: 'Packages และ Imports'
+description: 'package main, func main, import, identifier ที่ exported vs unexported, และ standard library'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Package คืออะไร?
+
+ใน Go ทุก source file ต้องเริ่มต้นด้วย `package` declaration Package คือหน่วยของการจัดระเบียบ code ที่ Go ใช้ควบคุม scope และ visibility
+
+```go
+package main   // บอกว่า file นี้อยู่ใน package main
+```
+
+Package name ปกติจะสั้น, lowercase, และตรงกับชื่อ directory (เช่น directory `strings` → `package strings`)
+
+## func main — จุดเริ่มต้น
+
+Program ที่ executable ต้องมี **`package main`** และ function **`func main()`** เสมอ เมื่อคุณรัน binary Go จะเริ่มต้นที่ `main.main()`
+
+```go
+package main
+
+func main() {
+    // program เริ่มต้นที่นี่
+}
+```
+
+Package อื่น ๆ (เช่น library) ไม่มี `func main` พวกมันถูก import และใช้โดย package อื่น
+
+## การ Import
+
+ใช้ `import` เพื่อดึง package อื่นเข้ามาใช้ มีสองรูปแบบ:
+
+```go
+// import เดี่ยว
+import "fmt"
+
+// grouped import (แนะนำเมื่อ import หลาย package)
+import (
+    "fmt"
+    "strings"
+    "strconv"
+)
+```
+
+Go compiler จะ error ทันทีถ้าคุณ import package แล้วไม่ใช้ สิ่งนี้บังคับให้ code สะอาด
+
+หากต้องการ import package เพื่อ side effect เท่านั้น (เช่น `init()` ของมัน) ใช้ blank identifier:
+
+```go
+import _ "net/http/pprof"
+```
+
+## Exported vs Unexported
+
+Go ควบคุม visibility ด้วยตัวพิมพ์ของอักษรตัวแรกของ identifier:
+
+| Identifier | ตัวอย่าง | Visibility |
+|---|---|---|
+| ขึ้นต้นด้วยตัวพิมพ์ใหญ่ | `fmt.Println`, `http.Handler` | **Exported** — ใช้ได้จาก package อื่น |
+| ขึ้นต้นด้วยตัวพิมพ์เล็ก | `myHelper`, `internalMap` | **Unexported** — ใช้ได้เฉพาะใน package นั้น |
+
+กฎนี้ใช้กับ functions, types, variables, constants, และ struct fields ทั้งหมด
+
+## Standard Library
+
+Go มี standard library ที่ครบครันในตัว package ที่ใช้บ่อย ได้แก่:
+
+- `fmt` — formatted I/O (Println, Printf, Sprintf, Errorf)
+- `strings` — string manipulation (ToUpper, Split, Join, Contains, Replace)
+- `strconv` — แปลงระหว่าง string และ numeric types (Itoa, Atoi, ParseFloat)
+- `errors` — สร้างและ wrap errors
+- `sort` — sort slices และ collections
+- `math` — math functions (Sqrt, Abs, Round)
+- `time` — time และ duration operations
+- `os` — OS interface (file I/O, environment variables)
+
+export const packagesCode = `package main
+
+import (
+\t"fmt"
+\t"strconv"
+\t"strings"
+)
+
+func main() {
+\t// fmt: formatted output
+\tfmt.Println("Go packages demo")
+
+\t// strings: manipulating text
+\tsentence := "the quick brown fox"
+\twords := strings.Split(sentence, " ")
+\tfmt.Println("Word count:", len(words))
+\tfmt.Println("Uppercase:", strings.ToUpper(sentence))
+\tfmt.Println("Contains 'fox':", strings.Contains(sentence, "fox"))
+
+\t// strconv: converting between strings and numbers
+\tn := 42
+\ts := strconv.Itoa(n)
+\tfmt.Println("int to string:", s)
+
+\tparsed, err := strconv.Atoi("123")
+\tif err == nil {
+\t\tfmt.Println("string to int:", parsed)
+\t}
+
+\t// Combining packages together
+\tparts := []string{"Go", strconv.Itoa(1), strconv.Itoa(22)}
+\tfmt.Println("Joined:", strings.Join(parts, "."))
+}`;
+
+<Playground client:visible code={packagesCode} />
+
+<Callout title="ตัวพิมพ์ใหญ่ควบคุม Visibility">
+identifier ที่ขึ้นต้นด้วยตัวพิมพ์ใหญ่ (เช่น `fmt.Println`, `strings.ToUpper`) สามารถใช้จาก package อื่นได้ ส่วนที่ขึ้นต้นด้วยตัวพิมพ์เล็กจะเป็น private ภายใน package นั้น compiler จะ enforce กฎนี้ทันที — ไม่ใช่แค่ convention
+</Callout>
+
+export const quizPackages = [
+  {
+    q: "Package name ใดที่บอกว่า Go file นั้นจะ produce executable binary?",
+    options: [
+      "package exe",
+      "package run",
+      "package main",
+      "package binary"
+    ],
+    answer: 2
+  },
+  {
+    q: "identifier ที่ขึ้นต้นด้วยตัวพิมพ์เล็กใน Go หมายความว่าอะไร?",
+    options: [
+      "เป็น constant",
+      "เป็น package-private ไม่สามารถ access จาก package อื่นได้",
+      "เป็น pointer type",
+      "เป็น deprecated"
+    ],
+    answer: 1
+  },
+  {
+    q: "เมื่อไรคุณจะใช้ blank import `import _ \"pkg\"`?",
+    options: [
+      "เมื่อต้องการ import package แต่ rename เป็นค่าว่าง",
+      "เพื่อปิด linter warning เรื่อง unused package",
+      "เพื่อ import package เพื่อ side effects เท่านั้น เช่น การ register driver",
+      "เพื่อ import ทุก exported identifier เข้า namespace ปัจจุบัน"
+    ],
+    answer: 2
+  },
+  {
+    q: "รูปแบบ idiomatic Go เมื่อ import หลาย package คือรูปแบบใด?",
+    options: [
+      "หนึ่ง import statement ต่อ package แต่ละบรรทัด",
+      "grouped import block เดียวพร้อมวงเล็บ",
+      "รายการคั่นด้วยจุลภาค: import \"fmt\", \"strings\"",
+      "ลำดับ import ไม่สำคัญ gofmt จัดการให้"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="basics/packages-imports" questions={quizPackages} />
+
+<ProgressTracker client:visible id="basics/packages-imports" />

@@ -1,0 +1,169 @@
+---
+title: การเขียน Tests ด้วย go test
+description: 'ไฟล์ _test.go, func TestXxx(t *testing.T), t.Errorf/t.Fatalf, table-driven tests ด้วย t.Run, และการรัน go test ./...'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ไฟล์ test และ naming conventions
+
+test runner ของ Go ค้นหา tests ผ่านกฎ 2 ข้อที่บังคับใช้โดย toolchain:
+
+1. **ชื่อไฟล์** ลงท้ายด้วย `_test.go` — compiler จะไม่รวมไฟล์เหล่านี้ใน build ปกติ
+2. **ชื่อฟังก์ชัน** ขึ้นต้นด้วย `Test` ตามด้วยตัวพิมพ์ใหญ่ — `TestAdd`, `TestParseURL` เป็นต้น
+
+ไฟล์ test ขั้นต่ำสำหรับ source file `math.go` อยู่ใน **package เดียวกัน** และ directory เดียวกัน:
+
+```go
+// math_test.go
+package math
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+    got := Add(2, 3)
+    want := 5
+    if got != want {
+        t.Errorf("Add(2, 3) = %d; want %d", got, want)
+    }
+}
+```
+
+รันด้วย:
+
+```bash
+go test ./...          # รัน tests ทั้งหมดใน packages ทั้งหมด
+go test -v ./...       # verbose: แสดงชื่อ test แต่ละตัวและ PASS/FAIL
+go test -run TestAdd   # รันเฉพาะ tests ที่ชื่อตรงกับ regex
+```
+
+## t.Errorf vs t.Fatalf
+
+ทั้งคู่บันทึกความล้มเหลว แต่ต่างกันตรงที่ test จะหยุดหรือดำเนินต่อ:
+
+| ฟังก์ชัน | บันทึกความล้มเหลว | หยุด test? |
+|----------|--------------|-------------|
+| `t.Errorf` | ใช่ | ไม่ — test ดำเนินต่อ |
+| `t.Fatalf` | ใช่ | ใช่ — test หยุดทันที |
+
+ใช้ `t.Fatalf` เมื่อ assertion ถัดไปอาจ panic หาก assertion ก่อนหน้าล้มเหลว (เช่น การ dereference pointer ที่เพิ่งตรวจพบว่าเป็น nil)
+
+```go
+func TestDivide(t *testing.T) {
+    result, err := Divide(10, 0)
+    if err == nil {
+        t.Fatalf("expected an error for division by zero, got nil")
+    }
+    _ = result
+}
+```
+
+## Table-driven tests ด้วย t.Run
+
+รูปแบบ idiomatic ของ Go สำหรับการทดสอบ input หลายค่ากับฟังก์ชันเดียวกันคือ **table-driven test**: slice ของ `struct` cases ที่วนซ้ำด้วย `t.Run` แต่ละ sub-test มีชื่อ, error message, และ — เมื่อใช้ `-v` — บรรทัดผลลัพธ์เป็นของตัวเอง
+
+```go
+// fibonacci_test.go
+package main
+
+import "testing"
+
+func TestFibonacci(t *testing.T) {
+    cases := []struct {
+        name string
+        n    int
+        want int
+    }{
+        {"fib(0)", 0, 0},
+        {"fib(1)", 1, 1},
+        {"fib(5)", 5, 5},
+        {"fib(10)", 10, 55},
+    }
+
+    for _, tc := range cases {
+        tc := tc // capture range variable (pre-Go 1.22)
+        t.Run(tc.name, func(t *testing.T) {
+            got := Fibonacci(tc.n)
+            if got != tc.want {
+                t.Errorf("Fibonacci(%d) = %d; want %d", tc.n, got, tc.want)
+            }
+        })
+    }
+}
+```
+
+รันด้วย `-v` เพื่อดู sub-test แต่ละตัว:
+
+```bash
+go test -v -run TestFibonacci ./...
+# --- PASS: TestFibonacci (0.00s)
+#     --- PASS: TestFibonacci/fib(0) (0.00s)
+#     --- PASS: TestFibonacci/fib(1) (0.00s)
+#     --- PASS: TestFibonacci/fib(5) (0.00s)
+#     --- PASS: TestFibonacci/fib(10) (0.00s)
+```
+
+## Race detector
+
+เพิ่ม `-race` เพื่อตรวจจับ data races ในเวลา test — นี่คือสิ่งที่ต้องมีใน CI:
+
+```bash
+go test -race -coverprofile=coverage.out -covermode=atomic ./...
+```
+
+flag `-covermode=atomic` จำเป็นต้องใช้ร่วมกับ `-race` เพื่อให้ได้ coverage counts ที่แม่นยำ เนื่องจาก race detector เขียนทับ memory accesses
+
+<Callout title="Table-driven tests คือ idiomatic Go pattern">
+คุณจะเห็น table-driven tests ในเกือบทุก Go codebase ที่จริงจังและใน Go standard library เอง โค้ด test อยู่ในที่เดียว เพิ่ม cases ใหม่ได้ง่าย และสร้าง failure messages ที่อ่านได้ เมื่อพบ bug ให้เพิ่มแถวใหม่ในตาราง — test จะกลายเป็น regression guard โดยอัตโนมัติ
+</Callout>
+
+export const quizGoTest = [
+  {
+    q: "Go toolchain ต้องการ suffix ใดสำหรับไฟล์ test?",
+    options: [
+      ".test.go",
+      "_spec.go",
+      "_test.go",
+      ".testing.go"
+    ],
+    answer: 2
+  },
+  {
+    q: "ความแตกต่างระหว่าง t.Errorf และ t.Fatalf คืออะไร?",
+    options: [
+      "t.Errorf หยุด test ทันที; t.Fatalf ให้ดำเนินต่อ",
+      "t.Fatalf หยุด test ทันที; t.Errorf ให้ดำเนินต่อ",
+      "เหมือนกัน — ทั้งคู่หยุด test",
+      "t.Fatalf ใช้ได้เฉพาะใน t.Run sub-tests"
+    ],
+    answer: 1
+  },
+  {
+    q: "ใน table-driven test, t.Run ให้อะไรแก่แต่ละ case?",
+    options: [
+      "goroutine แยกต่างหากต่อ case",
+      "named sub-test ที่มีผลลัพธ์ pass/fail ของตัวเอง",
+      "parallelism อัตโนมัติสำหรับทุก cases",
+      "สำเนาใหม่ของ test binary"
+    ],
+    answer: 1
+  },
+  {
+    q: "ทำไมจึงต้องใช้ -covermode=atomic ร่วมกับ -race?",
+    options: [
+      "ทำให้ coverage เร็วขึ้น",
+      "เป็นข้อกำหนดของ go test specification",
+      "race detector เขียนทับ memory accesses และ atomic mode ให้ counts ที่แม่นยำ",
+      "เปิดใช้ branch coverage แทน statement coverage"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="testing-tooling/go-test" questions={quizGoTest} />
+
+<ProgressTracker client:visible id="testing-tooling/go-test" />

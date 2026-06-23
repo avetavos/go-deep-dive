@@ -1,0 +1,215 @@
+---
+title: การ Wrap Error
+description: 'การ wrap ด้วย fmt.Errorf และ %w, การ unwrap ด้วย errors.Is และ errors.As, และการสร้าง custom error types'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทำไมต้อง Wrap Error?
+
+เมื่อฟังก์ชันเรียกใช้อีกฟังก์ชันแล้วล้มเหลว การคืน error เดิมทำให้เสียบริบท ผู้เรียกเห็นแค่ "database error" แต่ไม่รู้ว่า operation ใดที่ทำให้เกิด request ใดที่เกี่ยวข้อง หรือเกิดที่ layer ไหน การ wrap เพิ่มชั้น context ว่ากำลังทำอะไรอยู่ โดยยังเก็บ error เดิมไว้ให้ตรวจสอบได้
+
+รูปแบบ idiomatic ใน Go:
+
+```go
+if err != nil {
+    return fmt.Errorf("description: %w", err)
+}
+```
+
+`%w` คือกุญแจสำคัญ มันทำการ wrap error เดิมไว้ภายใน error ใหม่ รักษา chain ทั้งหมดไว้สำหรับ caller ที่ต้องการตรวจสอบ
+
+## fmt.Errorf และ %w
+
+`fmt.Errorf` สร้าง error ใหม่ที่มี message รวมค่าอื่น แต่วิธีที่มันรวม error argument ขึ้นอยู่กับ verb ที่เลือก:
+
+- **`%v`** จัดรูปแบบ message string ของ error และฝังเป็น plain text type ของ error เดิมหายไป chain ถูกตัด
+- **`%w`** บันทึก error เดิมไว้ใน error ใหม่ message ยังมี message เดิม แต่ error เดิมยังสามารถเข้าถึงได้โดยใช้โปรแกรม
+
+```go
+base := errors.New("connection refused")
+
+// %v — message only, chain is severed
+e1 := fmt.Errorf("dial: %v", base)
+fmt.Println(errors.Is(e1, base)) // false
+
+// %w — wraps, chain is preserved
+e2 := fmt.Errorf("dial: %w", base)
+fmt.Println(errors.Is(e2, base)) // true
+```
+
+ใช้ `%w` เมื่อต้องการให้ caller upstream สามารถระบุหรือดึง error เดิมออกมาได้ ใช้ `%v` เฉพาะเมื่อตั้งใจจะทิ้ง error type เดิม เช่น เมื่อ log และ chain ไม่มีความสำคัญ
+
+## errors.Is — ตรวจสอบ identity ผ่าน chain
+
+`errors.Is(err, target)` เดิน unwrap chain ทั้งหมดของ `err` และคืนค่า `true` ถ้า error ใดใน chain ตรงกับ `target` การ match ทำโดย identity (`==`) ตามค่าเริ่มต้น ไม่ใช่ตาม message string
+
+```go
+var ErrNotFound = errors.New("not found")
+
+err := fmt.Errorf("getUser: %w", fmt.Errorf("queryDB: %w", ErrNotFound))
+
+fmt.Println(errors.Is(err, ErrNotFound)) // true — found deep in the chain
+```
+
+ทำงานได้ไม่ว่า target จะถูก wrap ลึกแค่ไหน นิยาม sentinel error ครั้งเดียว (เป็น `var` ระดับ package) และตรวจสอบได้ทุกที่ใน call stack
+
+## errors.As — ดึง type จาก chain
+
+`errors.As(err, &target)` เดิน chain เช่นกัน แต่แทนที่จะตรวจสอบ identity จะตรวจสอบ type ถ้า error ใดใน chain สามารถ assign ให้ type ของ `target` ได้ จะทำการ assign และคืน `true`
+
+```go
+var ve *ValidationError
+if errors.As(err, &ve) {
+    fmt.Println(ve.Field) // access fields on the concrete type
+}
+```
+
+ใช้ `errors.As` เมื่อมี custom error type ที่เก็บข้อมูลเพิ่มเติม เช่น field names, HTTP status codes, retry hints และต้องการเข้าถึง field เหล่านั้น ไม่ใช่แค่ตรวจว่า error มีอยู่
+
+## Custom error types
+
+struct ใดก็ตามที่ implement `Error() string` ตรงตาม `error` interface custom types ช่วยให้เก็บ structured context ควบคู่กับ message:
+
+```go
+type ValidationError struct {
+    Field   string
+    Message string
+}
+
+func (e *ValidationError) Error() string {
+    return fmt.Sprintf("validation: field %q %s", e.Field, e.Message)
+}
+```
+
+เพื่อให้ custom error type เป็นส่วนหนึ่งของ wrapping chain ให้ implement `Unwrap() error`:
+
+```go
+type AppError struct {
+    Code int
+    Err  error
+}
+
+func (e *AppError) Error() string  { return fmt.Sprintf("code %d: %v", e.Code, e.Err) }
+func (e *AppError) Unwrap() error  { return e.Err }
+```
+
+เมื่อมี `Unwrap` แล้ว `errors.Is` และ `errors.As` สามารถมองผ่าน `AppError` เพื่อไปถึง error ที่มันครอบอยู่
+
+export const wrappingCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+)
+
+var ErrDatabase = errors.New("database error")
+
+type ValidationError struct {
+\tField   string
+\tMessage string
+}
+
+func (e *ValidationError) Error() string {
+\treturn fmt.Sprintf("validation: field %q %s", e.Field, e.Message)
+}
+
+func queryDB(id int) (string, error) {
+\tif id < 0 {
+\t\treturn "", ErrDatabase
+\t}
+\tif id == 0 {
+\t\treturn "", &ValidationError{Field: "id", Message: "must be positive"}
+\t}
+\treturn "Alice", nil
+}
+
+func getUser(id int) (string, error) {
+\tname, err := queryDB(id)
+\tif err != nil {
+\t\treturn "", fmt.Errorf("getUser %d: %w", id, err)
+\t}
+\treturn name, nil
+}
+
+func main() {
+\t_, err := getUser(-1)
+\tif err != nil {
+\t\tfmt.Println(err)
+\t\tfmt.Println("is ErrDatabase:", errors.Is(err, ErrDatabase))
+\t}
+
+\t_, err = getUser(0)
+\tif err != nil {
+\t\tfmt.Println(err)
+\t\tvar ve *ValidationError
+\t\tif errors.As(err, &ve) {
+\t\t\tfmt.Printf("field=%q msg=%q\\n", ve.Field, ve.Message)
+\t\t}
+\t}
+
+\tname, err := getUser(1)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\treturn
+\t}
+\tfmt.Println("name:", name)
+}`;
+
+<Playground client:visible code={wrappingCode} />
+
+<Callout title="Wrap เพื่อเพิ่ม context; ใช้ errors.Is/As เพื่อตรวจสอบ">
+ใช้ `%w` (ไม่ใช่ `%v`) เมื่อต้องการให้ caller ตรวจสอบ error chain ได้ `errors.Is` ตรวจสอบ identity (sentinel errors) `errors.As` ตรวจสอบ type (structured errors ที่มี field) ใช้ `%v` เฉพาะเมื่อตั้งใจจะทิ้ง error type เดิม
+</Callout>
+
+export const quizWrapping = [
+  {
+    q: "ความแตกต่างระหว่าง %v และ %w ใน fmt.Errorf คืออะไร?",
+    options: [
+      "%v wrap error (เก็บ type); %w ฝังเป็น string",
+      "%w wrap error (เก็บ type เพื่อ unwrap); %v ฝังเป็น string เท่านั้น",
+      "ทั้งสองเหมือนกัน",
+      "%w ใช้ได้กับ sentinel errors เท่านั้น"
+    ],
+    answer: 1
+  },
+  {
+    q: "errors.Is(err, ErrNotFound) คืนค่า true เมื่อ:",
+    options: [
+      "err == ErrNotFound เท่านั้น",
+      "message string ของ err มี ErrNotFound.Error() อยู่",
+      "error ใด ๆ ใน unwrap chain ของ err ตรงกับ ErrNotFound",
+      "ErrNotFound เป็น nil"
+    ],
+    answer: 2
+  },
+  {
+    q: "errors.As(err, &target) ทำอะไร?",
+    options: [
+      "เปรียบเทียบ err กับ target ตามค่า",
+      "เดิน error chain และ assign error แรกที่ type ตรงกับ target",
+      "แปลง err เป็น string",
+      "panic ถ้าไม่พบ match"
+    ],
+    answer: 1
+  },
+  {
+    q: "เพื่อให้ custom error type สามารถ unwrap ได้ ต้อง implement:",
+    options: [
+      "Unwrap() error บน type",
+      "Wrap() error บน type",
+      "errors.Register(myErr)",
+      "interface fmt.Stringer"
+    ],
+    answer: 0
+  }
+];
+
+<Quiz client:visible id="errors-generics/wrapping" questions={quizWrapping} />
+
+<ProgressTracker client:visible id="errors-generics/wrapping" />

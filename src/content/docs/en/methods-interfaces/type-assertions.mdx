@@ -1,0 +1,160 @@
+---
+title: Type Assertions
+description: 'Recover concrete types from interface values using x.(T), the comma-ok form, and the type switch.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Interface values at runtime
+
+When a value is stored in an interface variable, Go keeps two things under the hood: a pointer to the concrete type descriptor and a pointer to the concrete value. A **type assertion** extracts the concrete value back out.
+
+## The single-value form
+
+```go
+var s Shape = Circle{Radius: 5}
+c := s.(Circle)   // asserts that s holds a Circle
+fmt.Println(c.Radius)
+```
+
+If `s` does not hold a `Circle`, this **panics** at runtime. Use this form only when you are certain of the dynamic type — for example, right after a type check.
+
+## The comma-ok form
+
+The safe variant returns a boolean instead of panicking:
+
+```go
+c, ok := s.(Circle)
+if ok {
+    fmt.Println("it's a circle with radius", c.Radius)
+} else {
+    fmt.Println("not a circle")
+}
+```
+
+`ok` is `true` when the assertion succeeds, `false` otherwise. `c` is the zero value of `Circle` when `ok` is `false`. Always prefer the comma-ok form when the dynamic type is uncertain.
+
+## The type switch
+
+When you need to branch on several possible types, a **type switch** is cleaner than chained `if ok` blocks:
+
+```go
+switch v := x.(type) {
+case Circle:
+    fmt.Println("circle", v.Radius)
+case Rect:
+    fmt.Println("rect", v.W, v.H)
+default:
+    fmt.Printf("unknown: %T\n", v)
+}
+```
+
+Inside each `case`, `v` is already the concrete type — no additional assertion needed. The `default` case fires when none of the listed types match.
+
+## Asserting to an interface
+
+You can also assert from one interface to another:
+
+```go
+var w io.Writer = os.Stdout
+if rc, ok := w.(io.ReadWriter); ok {
+    // os.Stdout implements io.ReadWriter
+    _ = rc
+}
+```
+
+This is how standard library code checks for optional capabilities (e.g., whether a `Writer` also supports `Seek`).
+
+export const typeAssertionsCode = `package main
+
+import "fmt"
+
+type Animal interface {
+\tSound() string
+}
+
+type Dog struct{ Name string }
+type Cat struct{ Name string }
+
+func (d Dog) Sound() string { return "Woof" }
+func (c Cat) Sound() string { return "Meow" }
+
+func identify(a Animal) {
+\t// comma-ok form — safe
+\tif d, ok := a.(Dog); ok {
+\t\tfmt.Printf("Dog named %s says %s\\n", d.Name, d.Sound())
+\t\treturn
+\t}
+\t// type switch for multiple cases
+\tswitch v := a.(type) {
+\tcase Cat:
+\t\tfmt.Printf("Cat named %s says %s\\n", v.Name, v.Sound())
+\tdefault:
+\t\tfmt.Printf("Unknown animal: %T\\n", v)
+\t}
+}
+
+func main() {
+\tanimals := []Animal{Dog{Name: "Rex"}, Cat{Name: "Luna"}}
+\tfor _, a := range animals {
+\t\tidentify(a)
+\t}
+}`;
+
+<Playground client:visible code={typeAssertionsCode} />
+
+<Callout title="A failed single-value assertion panics">
+`x.(T)` without the comma-ok idiom panics immediately if the dynamic type is not `T`. This is a runtime error, not a compile-time error — the compiler cannot know the dynamic type. Always use the comma-ok form `v, ok := x.(T)` when there is any chance the assertion could fail. Reserve the single-value form for code paths where the type is logically guaranteed — and add a comment explaining why.
+</Callout>
+
+export const quizTypeAssertions = [
+  {
+    q: "What does `v, ok := x.(T)` do when x does NOT hold a value of type T?",
+    options: [
+      "Panics with a type mismatch error",
+      "Returns the zero value of T and ok == false",
+      "Returns nil and ok == false",
+      "Returns the zero value of T and ok == true"
+    ],
+    answer: 1
+  },
+  {
+    q: "Inside a type-switch case `case Rect:`, what is the type of the switched variable `v`?",
+    options: [
+      "The original interface type",
+      "The concrete type Rect",
+      "`any`",
+      "A pointer to Rect"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which form should you use when you are NOT certain of the dynamic type?",
+    options: [
+      "`v := x.(T)` — the single-value form",
+      "`v, ok := x.(T)` — the comma-ok form",
+      "A `recover()` call around `v := x.(T)`",
+      "A `reflect.TypeOf` check before asserting"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does `%T` print in a format string?",
+    options: [
+      "The string representation of the value",
+      "The memory address of the value",
+      "The dynamic (concrete) type of the value",
+      "The interface type the value is stored in"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/type-assertions" questions={quizTypeAssertions} />
+
+<ProgressTracker client:visible id="methods-interfaces/type-assertions" />

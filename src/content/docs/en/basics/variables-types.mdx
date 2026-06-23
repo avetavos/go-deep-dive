@@ -1,0 +1,198 @@
+---
+title: 'Variables & Types'
+description: 'var, short :=, zero values, basic types, constants, iota, and explicit type conversions.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Declaring variables
+
+Go has two ways to declare a variable. The `var` keyword works at both package scope and function scope:
+
+```go
+var name string          // zero value: ""
+var age  int             // zero value: 0
+var active bool          // zero value: false
+var count int = 10       // explicit initial value
+```
+
+Inside a function, the short declaration operator `:=` infers the type from the right-hand side and is the idiomatic choice:
+
+```go
+func main() {
+    name := "Alice"      // string
+    score := 98.6        // float64
+    done := false        // bool
+}
+```
+
+`:=` cannot be used at package scope — only `var` works there. You also cannot use `:=` if every variable on the left side was already declared (at least one must be new).
+
+## Zero values
+
+Every type in Go has a **zero value** — the value a variable holds before any assignment. There is no concept of an uninitialised variable.
+
+| Type | Zero value |
+|------|-----------|
+| `int`, `int8`, `int16`, `int32`, `int64` | `0` |
+| `uint`, `uint8`, `uint16`, `uint32`, `uint64` | `0` |
+| `float32`, `float64` | `0.0` |
+| `string` | `""` |
+| `bool` | `false` |
+| pointer, slice, map, channel, function | `nil` |
+
+This guarantee means you can always use a variable safely after declaration, even without an explicit initialiser.
+
+## Basic types
+
+Go's numeric types are explicit about their size. The unsized `int` and `uint` match the platform word size (32 or 64 bits).
+
+```go
+var i   int     = -100      // platform-sized signed integer
+var u   uint    = 100       // platform-sized unsigned integer
+var i32 int32   = 2_147_483_647
+var f64 float64 = 3.14159
+var b   byte    = 255       // alias for uint8
+var r   rune    = 'A'       // alias for int32; holds a Unicode code point
+var s   string  = "hello"
+var ok  bool    = true
+```
+
+`rune` and `byte` are built-in type aliases, not distinct types. `rune` is `int32`; `byte` is `uint8`.
+
+## Constants and iota
+
+Constants are declared with `const` and evaluated at compile time. A `const` block with `iota` creates auto-incrementing integer sequences — the idiomatic Go way to define enumerations:
+
+```go
+const Pi = 3.14159
+
+type Direction int
+
+const (
+    North Direction = iota // 0
+    East                   // 1
+    South                  // 2
+    West                   // 3
+)
+```
+
+`iota` resets to zero at the start of each `const` block and increments by one for each constant specification within the block.
+
+## Explicit type conversions
+
+Go has **no implicit numeric conversions**. To use a value of one numeric type where another is expected, you must convert explicitly using the target type as a function:
+
+```go
+var x int = 7
+var y float64 = 2.5
+
+// sum := x + y  // compile error: mismatched types int and float64
+sum := float64(x) + y   // explicit conversion: 9.5
+
+var n int = int(sum)     // truncates: 9
+```
+
+export const variablesCode = `package main
+
+import "fmt"
+
+type Weekday int
+
+const (
+\tMonday Weekday = iota + 1
+\tTuesday
+\tWednesday
+\tThursday
+\tFriday
+\tSaturday
+\tSunday
+)
+
+func main() {
+\t// Zero values
+\tvar i int
+\tvar s string
+\tvar b bool
+\tfmt.Println("Zero int:", i)
+\tfmt.Println("Zero string:", s == "")
+\tfmt.Println("Zero bool:", b)
+
+\t// Short declaration
+\tname := "Go"
+\tversion := 1.22
+\tfmt.Println("Language:", name, "Version:", version)
+
+\t// iota enum
+\tfmt.Println("Monday =", Monday)
+\tfmt.Println("Wednesday =", Wednesday)
+\tfmt.Println("Sunday =", Sunday)
+
+\t// Explicit type conversion
+\tmeters := 100
+\tkilometers := float64(meters) / 1000.0
+\tfmt.Println("100 meters =", kilometers, "km")
+
+\t// rune vs byte
+\tch := 'Z'
+\tfmt.Println("rune 'Z' as int32:", int32(ch))
+\tfmt.Println("byte value:", byte(ch))
+}`;
+
+<Playground client:visible code={variablesCode} />
+
+<Callout title="No implicit numeric conversions">
+Go will not silently convert between numeric types. An expression like `int(3) + float64(1.5)` is a **compile error**. You must write `float64(3) + 1.5` or `3 + int(1.5)` depending on which precision you want. This is stricter than most languages, but it prevents entire classes of subtle precision and overflow bugs that occur when a language silently widens or narrows values for you.
+</Callout>
+
+export const quizVariables = [
+  {
+    q: "What is the zero value of a string variable in Go?",
+    options: [
+      "nil",
+      "0",
+      "\"\" (empty string)",
+      "undefined"
+    ],
+    answer: 2
+  },
+  {
+    q: "Given `const ( A = iota; B; C )`, what is the value of C?",
+    options: [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    answer: 2
+  },
+  {
+    q: "Which of the following correctly converts an int to float64 in Go?",
+    options: [
+      "(float64) x",
+      "float64(x)",
+      "x as float64",
+      "cast(x, float64)"
+    ],
+    answer: 1
+  },
+  {
+    q: "Where can the short declaration operator := NOT be used?",
+    options: [
+      "Inside a for loop initialiser",
+      "Inside an if init statement",
+      "At package scope",
+      "Inside a function body"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="basics/variables-types" questions={quizVariables} />
+
+<ProgressTracker client:visible id="basics/variables-types" />

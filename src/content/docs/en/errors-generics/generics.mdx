@@ -1,0 +1,191 @@
+---
+title: Generics
+description: 'Type parameters, constraints, the any and comparable built-ins, and writing generic functions and types in Go 1.18+.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why generics?
+
+Before Go 1.18, writing a function that worked on multiple types required either code duplication or `interface{}` plus type assertions at runtime, losing type safety. Generics solve this: write once, the compiler generates type-specific code and catches misuse at compile time.
+
+For example, a `Max` function that works for both `int` and `float64` previously required either two identical functions or an `interface{}` parameter that silently accepted the wrong type. With generics, one function covers both — and the compiler rejects any call with an unsupported type.
+
+## Type parameters
+
+The syntax for a generic function is `func FuncName[T Constraint](args) returnType`. The `[T Constraint]` section is called the **type parameter list**. `T` is a placeholder that the compiler substitutes with a concrete type at each call site.
+
+```go
+func Max[T Number](a, b T) T {
+    if a > b {
+        return a
+    }
+    return b
+}
+```
+
+At the call site, Go usually **infers** `T` from the argument types. You can write `Max(3, 7)` and the compiler infers `T` is `int` — no need to write `Max[int](3, 7)` explicitly. Explicit type arguments are only needed when inference is ambiguous or when calling with no arguments.
+
+## Constraints
+
+A **constraint** is an interface that restricts which types may be substituted for a type parameter. Constraints appear after the type parameter name in the `[T Constraint]` list.
+
+- **`any`** — the most permissive constraint; equivalent to `interface{}`. Allows any type, but limits what operations you can perform on values of type `T` (only operations valid for all types: assignment, passing to functions, etc.).
+- **`comparable`** — any type that supports `==` and `!=`. Use it when your generic function needs to compare values for equality.
+
+You can write **custom constraints** using interface union syntax:
+
+```go
+type Number interface {
+    ~int | ~float64
+}
+```
+
+The `~` prefix means "any type whose underlying type is `int` or `~float64`." This is the **tilde operator**: without it, only the exact named type matches; with it, custom types like `type Celsius float64` also satisfy `~float64`. This makes constraints work naturally with domain-specific type aliases.
+
+## Built-in constraints from cmp
+
+Go 1.21 introduced the `cmp` package, which exports `cmp.Ordered` — the idiomatic constraint for any type that supports `<`, `<=`, `>`, `>=`, `==`. It covers all integer, float, and string types. Using `cmp.Ordered` is cleaner than writing out the full union `~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ... | ~float64 | ~string` manually.
+
+```go
+import "cmp"
+
+func Min[T cmp.Ordered](a, b T) T {
+    if a < b {
+        return a
+    }
+    return b
+}
+```
+
+For the playground snippet below, `cmp.Ordered` is replaced by a local `Number` interface to avoid the external package import — yaegi (the in-browser interpreter) has partial generics support and works most reliably with inline constraints.
+
+## Generic types
+
+You can parameterize **structs** as well as functions. Declare the type parameter after the type name:
+
+```go
+type Stack[T any] struct {
+    items []T
+}
+
+func (s *Stack[T]) Push(v T) {
+    s.items = append(s.items, v)
+}
+
+func (s *Stack[T]) Pop() (T, bool) {
+    if len(s.items) == 0 {
+        var zero T
+        return zero, false
+    }
+    last := s.items[len(s.items)-1]
+    s.items = s.items[:len(s.items)-1]
+    return last, true
+}
+```
+
+Methods on a generic type repeat the type parameter in the receiver — `(s *Stack[T])` — but do not add a new constraint. The constraint is fixed once when the type is declared.
+
+export const genericsCode = `package main
+
+import "fmt"
+
+type Number interface {
+	~int | ~float64
+}
+
+func Max[T Number](a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func Map[T, U any](slice []T, f func(T) U) []U {
+	result := make([]U, len(slice))
+	for i, v := range slice {
+		result[i] = f(v)
+	}
+	return result
+}
+
+func Filter[T any](slice []T, pred func(T) bool) []T {
+	var result []T
+	for _, v := range slice {
+		if pred(v) {
+			result = append(result, v)
+		}
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(Max(3, 7))
+	fmt.Println(Max(3.14, 2.71))
+
+	nums := []int{1, 2, 3, 4, 5}
+	doubled := Map(nums, func(n int) int { return n * 2 })
+	fmt.Println(doubled)
+
+	words := []string{"go", "generics", "fun", "code"}
+	long := Filter(words, func(s string) bool { return len(s) > 3 })
+	fmt.Println(long)
+}`;
+
+<Playground client:visible code={genericsCode} />
+
+<Callout title="Generics add type safety without interface{} + assertions">
+Before generics, a generic container or algorithm required `interface{}` parameters and runtime type assertions — errors only surfaced at runtime. With type parameters, the compiler verifies type correctness at compile time. Use generics when you find yourself writing the same algorithm for two or more types, or when you need a container that preserves the element type.
+</Callout>
+
+export const quizGenerics = [
+  {
+    q: "In func Max[T Number](a, b T) T, what does [T Number] mean?",
+    options: [
+      "T is a variable named Number",
+      "T is a type parameter constrained to types satisfying Number",
+      "T must be the exact type Number",
+      "Number is a function that returns T"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does the ~ prefix mean in a constraint like ~int?",
+    options: [
+      "Exactly the type int only",
+      "Any type whose underlying type is int (includes custom types like type MyID int)",
+      "Approximately int (fuzzy matching)",
+      "A pointer to int"
+    ],
+    answer: 1
+  },
+  {
+    q: "What constraint allows any type that supports == and !=?",
+    options: [
+      "any",
+      "comparable",
+      "ordered",
+      "equatable"
+    ],
+    answer: 1
+  },
+  {
+    q: "At the call site Max(3, 7), do you need to write Max[int](3, 7)?",
+    options: [
+      "Yes, always explicit",
+      "No, Go infers the type parameter from the arguments",
+      "Only if both arguments are the same type",
+      "Only in Go 1.21+"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="errors-generics/generics" questions={quizGenerics} />
+
+<ProgressTracker client:visible id="errors-generics/generics" />

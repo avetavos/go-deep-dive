@@ -1,0 +1,152 @@
+---
+title: Benchmarks
+description: 'func BenchmarkXxx(b *testing.B), the b.Loop() and b.N loop forms, go test -bench=. -benchmem, and reading benchmark output.'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a benchmark?
+
+A **benchmark** measures how long a piece of code takes to run. Go benchmarks live in `_test.go` files alongside unit tests and are run by the same `go test` command — just with different flags.
+
+A benchmark function has this signature:
+
+```go
+func BenchmarkXxx(b *testing.B) {
+    // ... setup code (not measured) ...
+    for b.Loop() {   // Go 1.24+ preferred form
+        // code under measurement
+    }
+}
+```
+
+The `testing.B` value drives the loop. The framework starts with a small value for `b.N` and keeps increasing it until the benchmark runs long enough to produce a stable measurement. You never set `b.N` yourself.
+
+## Two loop forms
+
+Go 1.24 introduced `b.Loop()` as the preferred alternative to the classic `b.N` counter loop:
+
+```go
+// Classic form — works in all Go versions
+func BenchmarkFibClassic(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        Fibonacci(20)
+    }
+}
+
+// Modern form — Go 1.24+
+func BenchmarkFib(b *testing.B) {
+    for b.Loop() {
+        Fibonacci(20)
+    }
+}
+```
+
+Both forms are correct. `b.Loop()` is preferred in Go 1.24+ because it handles timer reset internally and is less error-prone.
+
+## Setup outside the loop
+
+If your benchmark needs expensive setup (opening a file, building a large slice), do it before the loop and call `b.ResetTimer()` so setup time is not counted:
+
+```go
+func BenchmarkIsPrimeList(b *testing.B) {
+    numbers := make([]int, 1000)
+    for i := range numbers {
+        numbers[i] = i + 2
+    }
+    b.ResetTimer() // start measuring from here
+
+    for b.Loop() {
+        for _, n := range numbers {
+            IsPrime(n)
+        }
+    }
+}
+```
+
+## Running benchmarks
+
+Unit tests do **not** run benchmarks by default. Use the `-bench` flag:
+
+```bash
+# Run all benchmarks, show memory allocations
+go test -bench=. -benchmem ./...
+
+# Run only benchmarks matching a name pattern
+go test -bench=BenchmarkFib -benchmem ./...
+
+# Run benchmarks for at least 5 seconds per function
+go test -bench=. -benchtime=5s ./...
+```
+
+## Reading the output
+
+```
+BenchmarkFib-8        5000000      234 ns/op
+BenchmarkFibClassic-8 5000000      236 ns/op     0 B/op    0 allocs/op
+```
+
+| Column | Meaning |
+|--------|---------|
+| `-8` suffix | GOMAXPROCS value (8 logical CPUs) |
+| `5000000` | Number of iterations `b.N` ran |
+| `234 ns/op` | Nanoseconds per operation |
+| `0 B/op` | Bytes allocated per operation (needs `-benchmem`) |
+| `0 allocs/op` | Heap allocations per operation (needs `-benchmem`) |
+
+`Fibonacci` allocates nothing because it uses only stack variables — that is why both alloc columns are zero. A function that builds a `[]string` would show non-zero values.
+
+<Callout title="Let b.N drive iterations — never set it yourself">
+The benchmark framework controls `b.N` to achieve a statistically stable measurement. If you set `b.N` directly or use a fixed loop count, your timings will be unreliable. Also use `-benchmem` as a habit: even functions that look allocation-free sometimes surprise you, and catching unnecessary heap allocations early is far cheaper than profiling in production.
+</Callout>
+
+export const quizBenchmarks = [
+  {
+    q: "What does the testing framework do with b.N during a benchmark run?",
+    options: [
+      "It is always set to 1000",
+      "You set it once before the loop",
+      "The framework increases it until measurements are stable",
+      "It equals the number of test cases in the file"
+    ],
+    answer: 2
+  },
+  {
+    q: "Which flag makes go test report bytes allocated per operation?",
+    options: [
+      "-memprofile",
+      "-benchmem",
+      "-allocs",
+      "-trace"
+    ],
+    answer: 1
+  },
+  {
+    q: "When should you call b.ResetTimer() in a benchmark?",
+    options: [
+      "At the very start of every benchmark function",
+      "After the for b.Loop() block ends",
+      "After expensive setup that should not be counted in the measurement",
+      "Before calling b.N"
+    ],
+    answer: 2
+  },
+  {
+    q: "What is the preferred benchmark loop form in Go 1.24+?",
+    options: [
+      "for i := 0; i < b.N; i++",
+      "for b.Loop()",
+      "for b.Next()",
+      "for range b.N"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="testing-tooling/benchmarks" questions={quizBenchmarks} />
+
+<ProgressTracker client:visible id="testing-tooling/benchmarks" />

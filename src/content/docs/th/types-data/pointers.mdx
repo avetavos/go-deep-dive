@@ -1,0 +1,183 @@
+---
+title: Pointers
+description: 'operator & และ *, pointer vs value, mutation ผ่าน pointer, nil pointer, และเหตุผลที่ Go ไม่มี pointer arithmetic'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Pointer คืออะไร?
+
+**Pointer** คือตัวแปรที่เก็บ memory address ของตัวแปรอื่น type ของ pointer ไปยัง `T` เขียนว่า `*T`:
+
+```go
+x := 42
+p := &x   // & นำ address ของ x; p มี type *int
+```
+
+เพื่ออ่านหรือเขียนผ่าน pointer ให้ **dereference** ด้วย `*`:
+
+```go
+fmt.Println(*p) // 42 — อ่านผ่าน p
+*p = 100        // เขียนผ่าน p — x กลายเป็น 100
+fmt.Println(x)  // 100
+```
+
+## `&` และ `*` เป็น inverse กัน
+
+| Operator | อ่านว่า | ผล |
+|----------|---------|-----|
+| `&x` | "address of x" | คืน `*T` ที่ชี้ไป `x` |
+| `*p` | "value at p" | dereference `p` อ่านหรือเขียน `T` |
+
+## เมื่อไรควรใช้ pointer
+
+**1. Mutation ข้ามขอบเขตของ function.** Go ส่ง argument ทุกตัวเป็น value หาก function ต้องแก้ไขตัวแปรของ caller ให้ส่ง pointer:
+
+```go
+func double(n *int) {
+    *n = *n * 2
+}
+x := 5
+double(&x)
+fmt.Println(x) // 10
+```
+
+**2. Struct ขนาดใหญ่.** การ copy struct ขนาดใหญ่ทุกครั้งที่เรียก function นั้นสิ้นเปลือง ส่ง `*Config` แทน `Config` เมื่อ struct มีหลาย field
+
+**3. Optional value.** `*T` สามารถเป็น `nil` เพื่อแทน "ไม่ได้กำหนด" คล้ายกับ `null` ในภาษาอื่น
+
+## Shorthand สำหรับ struct pointer
+
+เมื่อมี pointer ไปยัง struct Go จะ dereference ให้อัตโนมัติสำหรับการเข้าถึง field คุณไม่ต้องเขียน `(*cfg).Debug`:
+
+```go
+cfg := &Config{Workers: 4}
+cfg.Debug = true   // shorthand ของ (*cfg).Debug = true
+```
+
+## `new` allocate zero value
+
+Built-in `new(T)` allocate zero value ของ type `T` และคืน `*T`:
+
+```go
+n := new(int)   // *int ที่ชี้ไป 0
+*n = 7
+```
+
+## Nil pointer
+
+Zero value ของ pointer type ทุกชนิดคือ `nil` การ dereference nil pointer ทำให้เกิด runtime panic:
+
+```go
+var p *int
+fmt.Println(p == nil) // true
+// *p = 1 จะ panic: nil pointer dereference
+```
+
+ควรตรวจสอบ pointer ว่าเป็น `nil` ก่อน dereference เสมอ เมื่อ pointer นั้นอาจไม่ได้ถูกกำหนดค่า
+
+## ไม่มี pointer arithmetic
+
+Go ออกแบบมาโดยตั้งใจไม่รวม pointer arithmetic คุณไม่สามารถทำ `p++` หรือ `p + 4` เพื่อเดินผ่าน memory ได้ ทำให้ขจัดบั๊กด้านความปลอดภัยของ memory ทั้งคลาสหนึ่งไปได้ Package `unsafe` มี pointer arithmetic เป็น escape hatch แต่แทบไม่จำเป็นในโค้ด application
+
+export const pointersCode = `package main
+
+import "fmt"
+
+type Config struct {
+\tDebug   bool
+\tWorkers int
+}
+
+func enableDebug(cfg *Config) {
+\tcfg.Debug = true // mutates the caller's Config
+}
+
+func double(n *int) {
+\t*n = *n * 2
+}
+
+func main() {
+\t// & takes the address; * dereferences
+\tx := 42
+\tp := &x
+\tfmt.Println(*p) // 42
+\t*p = 100
+\tfmt.Println(x)  // 100 -- x was mutated through p
+
+\t// Pointer for mutation across function boundary
+\tdouble(&x)
+\tfmt.Println(x) // 200
+
+\t// Pointer to struct
+\tcfg := Config{Debug: false, Workers: 4}
+\tenableDebug(&cfg)
+\tfmt.Println(cfg.Debug) // true
+
+\t// new() allocates a zeroed value and returns a pointer
+\tn := new(int)
+\t*n = 7
+\tfmt.Println(*n) // 7
+
+\t// nil pointer
+\tvar ptr *int
+\tfmt.Println(ptr == nil) // true
+}`;
+
+<Playground client:visible code={pointersCode} />
+
+<Callout title="Go มี pointer แต่ไม่มี pointer arithmetic">
+Go มีความสามารถด้าน pointer อย่างเต็มที่ — นำ address, dereference, ส่ง pointer ไปยัง function — แต่ตั้งใจไม่รวม pointer arithmetic คุณไม่สามารถบวก integer เข้ากับ pointer เพื่อเดินผ่าน memory ได้ การตัดสินใจออกแบบเพียงข้อเดียวนี้ขจัด buffer overflow, การเดิน memory แบบ off-by-one, และบั๊ก use-after-free ในระดับภาษา หากต้องการ memory operation ระดับต่ำ package `unsafe` มีให้ใช้ แต่ควรสงวนไว้สำหรับงาน FFI และ runtime เท่านั้น
+</Callout>
+
+export const quizPointers = [
+  {
+    q: "คุณส่ง `x` (เป็น int) ไปยัง `func add(n int)` ซึ่งกำหนด `n = n + 1` หลังเรียก function แล้ว ค่าของ `x` คืออะไร?",
+    options: [
+      "x ถูก increment — Go ส่งแบบ reference",
+      "x ไม่เปลี่ยน — Go ส่งแบบ value; n คือ copy",
+      "Compile error — ต้องส่ง &x",
+      "x กลายเป็น 0 — argument ของ function ถูก zero"
+    ],
+    answer: 1
+  },
+  {
+    q: "`&x` คืนค่าอะไร?",
+    options: [
+      "Copy ของ x",
+      "ค่าที่เก็บใน x",
+      "Pointer (*T) ที่เก็บ memory address ของ x",
+      "Bitwise AND ของ x กับตัวเอง"
+    ],
+    answer: 2
+  },
+  {
+    q: "เกิดอะไรขึ้นถ้าคุณ dereference nil pointer ใน Go?",
+    options: [
+      "คุณอ่าน zero value ของ type นั้น",
+      "Compiler ปฏิเสธโปรแกรม",
+      "Runtime panic: nil pointer dereference",
+      "ได้ undefined behavior แบบ C"
+    ],
+    answer: 2
+  },
+  {
+    q: "กำหนด `cfg := &Config{Workers: 4}` จะ set field Debug อย่างไร?",
+    options: [
+      "cfg->Debug = true (แบบ C arrow operator)",
+      "(*cfg).Debug = true หรือเทียบเท่า cfg.Debug = true",
+      "cfg[Debug] = true",
+      "deref(cfg).Debug = true"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="types-data/pointers" questions={quizPointers} />
+
+<ProgressTracker client:visible id="types-data/pointers" />

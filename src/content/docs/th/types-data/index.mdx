@@ -1,12 +1,121 @@
 ---
 title: 'Types & Data'
-description: 'Arrays, slices, maps, structs, และ pointers — การจัดการข้อมูลใน Go'
+description: 'Value types, composite types, และโปรแกรมตัวอย่างแรกที่ใช้ struct + slice — ภาพรวมของข้อมูลใน Go'
 sidebar:
   order: 1
 ---
 
-## Types และ Data Structures ใน Go
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-โมดูลนี้ครอบคลุม data structures หลักของ Go ได้แก่ arrays ที่มีขนาดคงที่, slices ที่ขยายตัวได้, maps สำหรับ key-value storage, และ structs สำหรับการจัดกลุ่ม fields ที่เกี่ยวข้อง นอกจากนี้ยังสอน pointer semantics และความแตกต่างระหว่าง value types กับ reference types ซึ่งเป็นแนวคิดสำคัญใน Go
+## ภาพรวม Type ใน Go
 
-> โมดูลนี้กำลังจะมาเร็ว ๆ นี้ คอยติดตามบทเรียนเกี่ยวกับ arrays, slices, maps, structs, และ pointers
+ทุกค่าใน Go มี type แบบ static ที่กำหนดตั้งแต่ compile time ซึ่ง Go แบ่ง type ออกเป็นสองกลุ่มหลัก:
+
+**Value types** — ตัวแปรเก็บข้อมูลโดยตรง การ assign ค่าจะ copy ข้อมูลทั้งหมด ได้แก่ boolean, ตัวเลข (`int`, `int64`, `float64`, `uint8`, …), และ `string` รวมถึง composite value types อย่าง **array** และ **struct**
+
+**Reference-like types** — ตัวแปรเก็บ header ขนาดเล็กที่ชี้ไปยังโครงสร้างข้อมูลจริงซึ่งถูก allocate ไว้ที่อื่น การ assign จะ copy แค่ header ดังนั้นตัวแปรสองตัวอาจชี้ไปข้อมูลชุดเดียวกันได้ ได้แก่ **slice**, **map**, **channel**, **function**, และ **pointer**
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  ภาพรวม Type ใน Go                                               │
+│                                                                  │
+│  Value types (copy on assign)    Reference-like (header copied) │
+│  ─────────────────────────────   ──────────────────────────────  │
+│  bool, int, float64, string      *T  (pointer)                  │
+│  [N]T  (array)                   []T (slice)                     │
+│  struct { … }                    map[K]V                         │
+│                                  chan T, func(…)                 │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## เนื้อหาในโมดูลนี้
+
+| บทเรียน | หัวข้อ |
+|---------|--------|
+| หน้านี้ | ภาพรวม Type และโปรแกรมตัวอย่างแรก |
+| Structs | การนิยาม struct, embedding, การเปรียบเทียบ |
+| Slices | Array vs slice, `make`, `append`, `copy` |
+| Maps | `make(map[K]V)`, comma-ok, delete, การวน loop |
+| Pointers | `&` และ `*`, mutation, nil pointer |
+
+## โปรแกรม composite type แรกของคุณ
+
+โปรแกรมด้านล่างนิยาม struct ชื่อ `Point` สร้าง slice `[]Point` แล้วค้นหาชื่อจาก `map[string]int` ซึ่งแสดงให้เห็น value type (`Point` ถูก copy), slice literal, และการเข้าถึง map พร้อม zero-value เมื่อ key ไม่มีอยู่
+
+export const indexCode = `package main
+
+import "fmt"
+
+type Point struct {
+\tX, Y int
+}
+
+func main() {
+\t// Struct literal with named fields
+\tp := Point{X: 3, Y: 4}
+\tfmt.Println(p.X, p.Y)
+
+\t// Slice of structs
+\tpoints := []Point{
+\t\t{X: 0, Y: 0},
+\t\t{X: 1, Y: 2},
+\t\t{X: 3, Y: 4},
+\t}
+\tfor _, pt := range points {
+\t\tfmt.Printf("(%d, %d)\\n", pt.X, pt.Y)
+\t}
+
+\t// Map: string -> int
+\tscore := map[string]int{
+\t\t"Alice": 95,
+\t\t"Bob":   87,
+\t}
+\tfmt.Println(score["Alice"])
+\tfmt.Println(score["Charlie"]) // missing key -> zero value (0)
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="Value types ถูก copy; reference-like types แชร์ข้อมูล">
+เมื่อคุณ assign struct ไปยังตัวแปรใหม่ — `p2 := p1` — คุณจะได้ copy ที่เป็นอิสระ การแก้ไข `p2` ไม่ส่งผลต่อ `p1` แต่ slice และ map ทำงานต่างออกไป: การ assign จะ copy แค่ header ทำให้ตัวแปรสองตัวชี้ไปข้อมูลชุดเดียวกัน ความแตกต่างนี้คือหัวใจของการตัดสินใจออกแบบส่วนใหญ่ที่คุณจะพบในโมดูลนี้
+</Callout>
+
+export const quizIndex = [
+  {
+    q: "อะไรคือ value type ใน Go — หมายความว่าการ assign จะ copy ข้อมูล?",
+    options: [
+      "[]int (slice)",
+      "map[string]int",
+      "struct { X, Y int }",
+      "*int (pointer)"
+    ],
+    answer: 2
+  },
+  {
+    q: "Go จะ print อะไรเมื่อคุณอ่าน map key ที่ยังไม่เคยกำหนดค่า?",
+    options: [
+      "Runtime panic",
+      "nil",
+      "Error value",
+      "Zero value ของ value type ที่ map นั้นใช้"
+    ],
+    answer: 3
+  },
+  {
+    q: "ทั้ง `[]Point` slice และ `[3]Point` array เก็บค่า Point ความแตกต่างหลักคืออะไร?",
+    options: [
+      "Array เก็บได้ทุก type; slice เก็บได้แค่ struct",
+      "Slice มีขนาดคงที่ตั้งแต่ compile time; array ขยายได้ dynamic",
+      "Array มีขนาดคงที่ตั้งแต่ compile time; slice ขยายได้ dynamic",
+      "เหมือนกันทุกอย่าง — วงเล็บเป็นแค่ syntax sugar"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="types-data/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="types-data/index" />

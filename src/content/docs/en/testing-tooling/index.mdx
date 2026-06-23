@@ -1,12 +1,133 @@
 ---
 title: 'Testing & Tooling'
-description: 'go test, table-driven tests, benchmarks, the race detector, go vet, and golangci-lint — Go''s world-class built-in toolchain.'
+description: 'An overview of Go''s built-in testing package and go toolchain — what this module covers and a runnable demo of the pure function you will test.'
 sidebar:
   order: 1
 ---
 
-## Testing & Tooling
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-Go's testing story is built into the language itself — no test framework needed. This module covers writing table-driven tests with subtests (`t.Run`), benchmarks with `b.Loop()` (Go 1.24+), using the race detector (`go test -race`) to catch data races at CI time, and the static analysis tools `go vet` and `golangci-lint` that enforce correctness and style before code review.
+## Go's built-in testing story
 
-> This module is coming soon. Check back for lessons on go test, table-driven tests, benchmarks, race detector, and go vet.
+Most languages require a third-party testing framework. Go ships everything you need inside the standard library. The `testing` package provides `*testing.T` for unit tests, `*testing.B` for benchmarks, and `*testing.F` for fuzzing — all driven by a single command: `go test`.
+
+The `go` toolchain that ships with every Go installation also includes:
+
+| Tool | Purpose |
+|------|---------|
+| `go test` | Run tests and benchmarks |
+| `go build` | Compile packages and binaries |
+| `go run` | Compile and run in one step |
+| `go fmt` | Format source code (wraps `gofmt`) |
+| `go vet` | Static analysis for common mistakes |
+| `go mod` | Module and dependency management |
+| `go doc` | Browse package documentation |
+
+## What this module covers
+
+1. **go-test** — Writing `_test.go` files, `func TestXxx(t *testing.T)`, and table-driven tests with `t.Run`.
+2. **benchmarks** — Measuring performance with `func BenchmarkXxx(b *testing.B)` and reading `-benchmem` output.
+3. **modules** — Managing dependencies with `go mod init`, `go.mod`, `go.sum`, and `go get`.
+4. **go-tooling** — The everyday commands: `go run`, `go build`, `go fmt`, `go vet`, and `go doc`.
+
+## A function worth testing
+
+The best way to appreciate Go's testing tools is to start with a pure function — one with no side effects, no I/O, just input and output. The playground below runs `Fibonacci` from `main`. In the next lesson you will write a proper `_test.go` file for exactly this kind of function.
+
+export const indexCode = `package main
+
+import "fmt"
+
+// Fibonacci returns the nth Fibonacci number (0-indexed).
+// fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, ...
+func Fibonacci(n int) int {
+\tif n <= 1 {
+\t\treturn n
+\t}
+\treturn Fibonacci(n-1) + Fibonacci(n-2)
+}
+
+// IsPrime reports whether n is a prime number.
+func IsPrime(n int) bool {
+\tif n < 2 {
+\t\treturn false
+\t}
+\tfor i := 2; i*i <= n; i++ {
+\t\tif n%i == 0 {
+\t\t\treturn false
+\t\t}
+\t}
+\treturn true
+}
+
+func main() {
+\t// Print the first 10 Fibonacci numbers
+\tfmt.Println("Fibonacci sequence:")
+\tfor i := 0; i < 10; i++ {
+\t\tfmt.Printf("  fib(%d) = %d\\n", i, Fibonacci(i))
+\t}
+
+\t// Find primes up to 30
+\tfmt.Println("Primes up to 30:")
+\tfor n := 2; n <= 30; n++ {
+\t\tif IsPrime(n) {
+\t\t\tfmt.Printf("  %d\\n", n)
+\t\t}
+\t}
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="Why pure functions make the best first tests">
+A pure function — one that depends only on its arguments and always returns the same output for the same input — is the ideal starting point for testing. There is no database to mock, no HTTP server to spin up, and no shared state to reset between runs. `Fibonacci` and `IsPrime` both qualify: call them a thousand times with the same input and you get the same result. The next lesson shows how Go's `testing` package makes writing these tests nearly effortless.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: "Which command runs all tests in the current module and every sub-package?",
+    options: [
+      "go test",
+      "go test ./...",
+      "go run test",
+      "go check ./..."
+    ],
+    answer: 1
+  },
+  {
+    q: "Which Go standard library package provides *testing.T and *testing.B?",
+    options: [
+      "testing/unit",
+      "test",
+      "testing",
+      "stdlib/test"
+    ],
+    answer: 2
+  },
+  {
+    q: "What makes a function a good candidate for a first unit test?",
+    options: [
+      "It opens a database connection",
+      "It is pure — depends only on its arguments with no side effects",
+      "It uses goroutines",
+      "It writes to a file"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which tool formats Go source code according to the canonical style?",
+    options: [
+      "go lint",
+      "go check",
+      "go fmt",
+      "go style"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="testing-tooling/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="testing-tooling/index" />

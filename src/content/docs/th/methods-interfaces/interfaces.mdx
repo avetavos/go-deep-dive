@@ -1,0 +1,169 @@
+---
+title: Interfaces
+description: 'นิยาม interface types, ตอบสนองโดยนัย, ออกแบบ small focused interfaces, และทำงานกับ empty interface any'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Interface คืออะไร?
+
+**Interface** คือชื่อที่รวบรวม method signatures ไว้ด้วยกัน type ใดที่มี methods ทั้งหมดนั้นจะตอบสนอง interface — โดยไม่ต้องบอกอย่างชัดเจน
+
+```go
+type Shape interface {
+    Area()      float64
+    Perimeter() float64
+}
+```
+
+type ใดที่มี method `Area() float64` และ `Perimeter() float64` จะตอบสนอง `Shape` โดยอัตโนมัติ
+
+## Implicit satisfaction — ไม่มี `implements`
+
+นี่คือคุณสมบัติที่กำหนดตัวตน interfaces ของ Go เปรียบเทียบ:
+
+| ภาษา | วิธีประกาศการตอบสนอง |
+|------|----------------------|
+| Java / C# | `class Circle implements Shape` |
+| Go | แค่มี methods ที่ถูกต้อง |
+
+ผลลัพธ์คือโค้ดที่ *decoupled* type ใน package `geometry` สามารถตอบสนอง interface ใน package `renderer` โดยที่ไม่มี package ใดรู้จักอีก package ทำให้ Go interfaces compose ข้าม package boundaries ได้โดยไม่มี import dependency บน interface definition
+
+## Small interfaces
+
+standard library ของ Go สร้างบน interfaces เล็ก ๆ ที่มีจุดโฟกัส:
+
+```go
+type Reader interface { Read(p []byte) (n int, err error) }
+type Writer interface { Write(p []byte) (n int, err error) }
+type Stringer interface { String() string }
+```
+
+คำสอนของ Go: *"ยิ่ง interface ใหญ่ abstraction ยิ่งอ่อนแอ"* interface สอง methods ถูกตอบสนองโดย types จำนวนมากกว่า interface สิบ methods อย่างมาก ทำให้ reuse ได้มากกว่าอย่างมหาศาล
+
+## Empty interface — `any`
+
+Interface ที่ไม่มี method ถูกตอบสนองโดยทุก type ตั้งแต่ Go 1.18 มี alias ว่า `any`:
+
+```go
+var v any = 42
+v = "hello"
+v = []int{1, 2, 3}
+```
+
+ใช้ `any` อย่างประหยัด — มันสละ type safety กรณีใช้งานปกติ: generic containers (ก่อนที่ generics จะถูกเพิ่ม), JSON unmarshalling รูปร่างที่ไม่รู้จัก, และฟังก์ชัน logging แบบ variadic
+
+## Accept interfaces, return structs
+
+แนวทาง Go ที่ idiomatic:
+
+- **Function parameters** ควรเป็น interfaces — รับ type กว้างที่สุดที่ครอบคลุมสิ่งที่คุณเรียกจริง
+- **Return values** ควรเป็น concrete structs — ผู้เรียกได้รับ API เต็มของ type จริง; พวกเขา narrow เองได้
+
+```go
+// ดี: รับ interface, คืน concrete type
+func NewBuffer(r io.Reader) *bytes.Buffer { ... }
+```
+
+export const interfacesCode = `package main
+
+import (
+\t"fmt"
+\t"math"
+)
+
+type Shape interface {
+\tArea()      float64
+\tPerimeter() float64
+}
+
+type Circle struct {
+\tRadius float64
+}
+
+func (c Circle) Area() float64 {
+\treturn math.Pi * c.Radius * c.Radius
+}
+
+func (c Circle) Perimeter() float64 {
+\treturn 2 * math.Pi * c.Radius
+}
+
+type Rect struct {
+\tW, H float64
+}
+
+func (r Rect) Area() float64      { return r.W * r.H }
+func (r Rect) Perimeter() float64 { return 2 * (r.W + r.H) }
+
+func describe(s Shape) {
+\tfmt.Printf("area=%.2f perimeter=%.2f\\n", s.Area(), s.Perimeter())
+}
+
+func main() {
+\tshapes := []Shape{
+\t\tCircle{Radius: 5},
+\t\tRect{W: 4, H: 3},
+\t}
+\tfor _, s := range shapes {
+\t\tdescribe(s)
+\t}
+}`;
+
+<Playground client:visible code={interfacesCode} />
+
+<Callout title="Interfaces ตอบสนองโดยนัย">
+ทั้ง `Circle` และ `Rect` ไม่เคยกล่าวถึง `Shape` พวกมันตอบสนองเพราะมี `Area()` และ `Perimeter()` ที่มี signatures ถูกต้อง นั่นหมายความว่าคุณสามารถนิยาม interface *หลัง* types ที่ตอบสนองมัน — types เหล่านั้นไม่ต้องเปลี่ยนเลย การตอบสนอง interface แบบย้อนหลังเป็นหนึ่งในเครื่องมือ refactoring ที่ทรงพลังที่สุดของ Go
+</Callout>
+
+export const quizInterfaces = [
+  {
+    q: "type ใน Go ประกาศว่า implement interface อย่างไร?",
+    options: [
+      "ด้วย keyword `implements` ในการประกาศ type",
+      "โดย embed interface ไว้ใน struct",
+      "โดยมี methods ทั้งหมดที่ interface ต้องการ — ไม่ต้องใช้ keyword",
+      "โดยเรียก `register(myType, MyInterface)` ที่ init time"
+    ],
+    answer: 2
+  },
+  {
+    q: "คุณนิยาม interface `Printer` ที่มีหนึ่ง method ใน package `ui` struct `Document` ใน package `doc` มี method นั้น ต้องการ import อะไรเพิ่ม?",
+    options: [
+      "`doc` ต้อง import `ui` เพื่อประกาศว่า implement `Printer`",
+      "`ui` ต้อง import `doc` เพื่ออ้างถึง `Document`",
+      "ไม่ต้องการ import เพิ่ม — การตอบสนองเป็นแบบ implicit",
+      "ทั้งสอง packages ต้อง import package `contracts` ที่ใช้ร่วมกัน"
+    ],
+    answer: 2
+  },
+  {
+    q: "`any` หมายถึงอะไรใน Go 1.18+?",
+    options: [
+      "Union type ที่เก็บได้สองประเภทเท่านั้น",
+      "Alias ของ `interface{}` — interface ที่ไม่มี methods",
+      "Constraint ที่ใช้เฉพาะใน generic type parameters",
+      "Pointer ไปยัง unknown type"
+    ],
+    answer: 1
+  },
+  {
+    q: "ฟังก์ชันของคุณต้องการเขียน bytes ควรใช้ parameter type ใดที่ idiomatic ที่สุด?",
+    options: [
+      "`*os.File` — writer ที่พบบ่อยที่สุด",
+      "`*bytes.Buffer` — in-memory writer ที่เร็วที่สุด",
+      "`io.Writer` — interface ที่ writer ใดก็ตอบสนองได้",
+      "`any` — รับทุกอย่างแล้ว type-assert ภายใน"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/interfaces" questions={quizInterfaces} />
+
+<ProgressTracker client:visible id="methods-interfaces/interfaces" />

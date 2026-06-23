@@ -1,0 +1,179 @@
+---
+title: Embedding
+description: 'Compose types ผ่าน struct embedding, promote fields และ methods, และสร้าง interfaces ขนาดใหญ่จาก interfaces เล็ก ๆ'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Composition แทน Inheritance
+
+Go ไม่มี `extends`, ไม่มี base class, และไม่มี virtual dispatch แต่มี **embedding**: คุณวาง type หนึ่งไว้ใน type อื่นโดยไม่มีชื่อ field และ outer type จะได้รับ fields และ methods ทั้งหมดของ inner type ราวกับว่าเป็นของตัวเอง
+
+```go
+type Named struct {
+    Name string
+}
+
+func (n Named) Describe() string { return "Name: " + n.Name }
+
+type Employee struct {
+    Named              // embedded — ไม่มีชื่อ field
+    Department string
+}
+```
+
+ตอนนี้ `Employee` มี field `Name` และ method `Describe()` ที่ promote จาก `Named`:
+
+```go
+e := Employee{Named: Named{Name: "Alice"}, Department: "Engineering"}
+fmt.Println(e.Name)       // promoted field
+fmt.Println(e.Describe()) // promoted method
+```
+
+## Promotion ทำงานอย่างไร
+
+เมื่อคุณเข้าถึง `e.Name`, Go มองหา field หรือ method ชื่อ `Name` ใน `Employee` โดยตรงก่อน ถ้าไม่พบ จะลงไปใน embedded type แต่ละอันตามลำดับ การ lookup นี้เป็นแค่ syntactic sugar — รูปแบบยาว `e.Named.Name` ใช้ได้เสมอ
+
+คุณสามารถ **override** promoted method ได้โดยประกาศ method ที่มีชื่อเดียวกันบน outer type:
+
+```go
+func (e Employee) Describe() string {
+    return fmt.Sprintf("%s in %s", e.Name, e.Department)
+}
+```
+
+ตอนนี้ `e.Describe()` เรียก method ของ outer แต่ inner method ยังเข้าถึงได้ผ่าน `e.Named.Describe()`
+
+## Interface embedding
+
+Interfaces ยัง embed interfaces อื่นได้:
+
+```go
+type Stringer interface {
+    String() string
+}
+
+type Describer interface {
+    Stringer            // embeds Stringer
+    Describe() string
+}
+```
+
+type ใดที่ตอบสนอง `Describer` ก็ตอบสนอง `Stringer` โดยอัตโนมัติ standard library ใช้สิ่งนี้อย่างกว้างขวาง: `io.ReadWriter` embeds `io.Reader` และ `io.Writer`
+
+## Embedding ไม่ใช่ Inheritance
+
+ความแตกต่างสำคัญ:
+
+| Inheritance (Java/C++) | Embedding (Go) |
+|------------------------|----------------|
+| Virtual dispatch: method call บน outer type สามารถ dispatch ไปยัง override ของ inner | ไม่มี virtual dispatch: การเรียก inner method เรียก *method นั้น* เสมอ ไม่ว่า outer type จะมีอะไร |
+| `instanceof` / type hierarchy | ไม่มี hierarchy — types ไม่มีความสัมพันธ์ |
+| Base class อ้างถึง derived class ได้ผ่าน virtual methods | Embedded type ไม่รู้จัก outer type |
+
+เพราะไม่มี virtual dispatch, embedding ไม่อนุญาต polymorphism บน outer type ในการได้ polymorphism คุณยังต้องการ interface
+
+export const embeddingCode = `package main
+
+import "fmt"
+
+type Named struct {
+\tName string
+}
+
+func (n Named) Describe() string {
+\treturn "Name: " + n.Name
+}
+
+type Employee struct {
+\tNamed
+\tDepartment string
+}
+
+// Interface embedding
+type Stringer interface {
+\tString() string
+}
+
+type Describer interface {
+\tStringer
+\tDescribe() string
+}
+
+func (e Employee) String() string {
+\treturn fmt.Sprintf("%s (Dept: %s)", e.Name, e.Department)
+}
+
+func print(d Describer) {
+\tfmt.Println(d.String())
+\tfmt.Println(d.Describe())
+}
+
+func main() {
+\te := Employee{
+\t\tNamed:      Named{Name: "Alice"},
+\t\tDepartment: "Engineering",
+\t}
+\t// promoted field and method
+\tfmt.Println(e.Name)
+\tfmt.Println(e.Describe())
+\tprint(e)
+}`;
+
+<Playground client:visible code={embeddingCode} />
+
+<Callout title="Embedding คือ composition ไม่ใช่ inheritance">
+ไม่มี virtual dispatch บน outer type ถ้า `Employee` embeds `Named` และคุณเรียก `e.Named.Describe()` คุณเรียก `Describe` ของ `Named` เสมอ — compiler ไม่มองหา override ใน `Employee` นี่เป็นเจตนา: embedding ของ Go คือกลไก code-reuse ไม่ใช่กลไก polymorphism สำหรับ polymorphism ให้นิยาม interface และให้ทั้งสอง types ตอบสนองมันอย่างอิสระ
+</Callout>
+
+export const quizEmbedding = [
+  {
+    q: "`Employee` embeds `Named` คุณเข้าถึง field `Name` ที่ promote มาได้อย่างไร?",
+    options: [
+      "`e.Named().Name` — ต้องเรียก embedded type เป็น method ก่อน",
+      "`e.Name` (short form) หรือ `e.Named.Name` (explicit form) — ทั้งสองใช้ได้",
+      "เฉพาะ `e.Named.Name` — short form ไม่มีสำหรับ embedded fields",
+      "`e.Get(\"Name\")` — promoted fields ใช้ generic accessor"
+    ],
+    answer: 1
+  },
+  {
+    q: "คุณ embed `Named` ใน `Employee` และประกาศ `func (e Employee) Describe() string` ด้วย `e.Describe()` เรียก method ใด?",
+    options: [
+      "Describe ของ Named — embedded methods มีความสำคัญก่อนเสมอ",
+      "Describe ของ Employee — method ของ outer type บัง promoted method",
+      "ทั้งสองถูกเรียกและผลลัพธ์ถูก concatenate",
+      "เกิด compile error — ไม่สามารถ override promoted method ได้"
+    ],
+    answer: 1
+  },
+  {
+    q: "Interface `io.ReadWriter` embeds `io.Reader` และ `io.Writer` type ที่ตอบสนอง `io.ReadWriter` ตอบสนอง... โดยอัตโนมัติ",
+    options: [
+      "ไม่ตอบสนองทั้ง io.Reader และ io.Writer — ต้องประกาศแยก",
+      "เฉพาะ io.Reader",
+      "เฉพาะ io.Writer",
+      "ทั้ง io.Reader และ io.Writer"
+    ],
+    answer: 3
+  },
+  {
+    q: "ความแตกต่างหลักระหว่าง Go embedding กับ Java inheritance คืออะไร?",
+    options: [
+      "Go embedding ช้ากว่าเพราะใช้ reflection ภายใน",
+      "Go embedding มี virtual dispatch; Java inheritance ไม่มี",
+      "Go embedding คือ composition ที่มี promoted methods; ไม่มี virtual dispatch หรือ type hierarchy",
+      "Go embedding ต้องการให้ outer type ระบุทุก promoted method อย่างชัดเจน"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="methods-interfaces/embedding" questions={quizEmbedding} />
+
+<ProgressTracker client:visible id="methods-interfaces/embedding" />

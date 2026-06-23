@@ -1,12 +1,125 @@
 ---
 title: 'Basics & Syntax'
-description: 'Variables, constants, types, control flow, functions, and packages — the building blocks of every Go program.'
+description: "Go's design philosophy, what this module covers, and your first runnable program."
 sidebar:
   order: 1
 ---
 
-## Basics & Syntax
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-This module covers the complete syntactic foundation of Go. You will learn how to declare variables with `var` and `:=`, work with Go's built-in types (`int`, `string`, `bool`, `float64`), write functions with multiple return values, use `if`, `for`, and `switch`, and organise code into packages. By the end you will be able to read and write any idiomatic Go program from scratch.
+## Go's design philosophy
 
-> This module is coming soon. Check back for lessons on variables, types, control flow, functions, and packages.
+Go was designed around three ideas that shape everything you write in it.
+
+**Simplicity over cleverness.** The language has a small spec. There is deliberately no overloading, no default arguments, no implicit conversions, and no inheritance. When you read Go code written by someone else, it looks almost exactly like code you would have written yourself — that is intentional.
+
+**Explicit over implicit.** Type conversions, error handling, and memory allocation are all visible at the call site. Nothing happens behind the scenes that you have not written. This makes the code easy to trace and audit.
+
+**One obvious way.** Go's tooling enforces a single code style (`gofmt`), a single module system (`go mod`), and a single test runner (`go test`). Debates about formatting, import order, and project layout simply do not happen.
+
+```go
+// The compiler rejects unused imports and unused local variables.
+// This keeps every file minimal and every dependency intentional.
+import "fmt"
+
+func greet(name string) string {
+    return "Hello, " + name
+}
+```
+
+## What this module covers
+
+| Lesson | Topics |
+|--------|--------|
+| **Packages & Imports** | `package`, `import`, exported vs unexported identifiers |
+| **Variables & Types** | `var`, `:=`, zero values, `const`, `iota`, type conversions |
+| **Control Flow** | `if` with init, `for` (three forms), `switch` |
+| **Functions** | Multiple returns, `defer`, closures, first-class functions |
+
+By the end of this module you will be able to read and write complete idiomatic Go programs from scratch.
+
+## Your first Go program
+
+Every executable Go program lives in `package main` and execution starts in `func main`. Here is a program that prints a greeting and shows a few basic values:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    name := "Go"
+    version := 1.22
+    fast := true
+    fmt.Println("Hello from", name)
+    fmt.Println("Version:", version)
+    fmt.Println("Fast compile:", fast)
+}
+```
+
+Run it below to see the output. Every concept used here — short variable declaration, basic types, `fmt.Println` — is covered in detail in the lessons that follow.
+
+export const indexCode = `package main
+
+import "fmt"
+
+func main() {
+\tname := "Go"
+\tversion := 1.22
+\tfast := true
+\tfmt.Println("Hello from", name)
+\tfmt.Println("Version:", version)
+\tfmt.Println("Fast compile:", fast)
+
+\t// Integer arithmetic is exact; no implicit float promotion
+\ta := 10
+\tb := 3
+\tfmt.Println("10 / 3 =", a/b)
+\tfmt.Println("10 % 3 =", a%b)
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="Explicit is better than implicit">
+Go never promotes or coerces types silently. Adding an `int` and a `float64` is a compile error until you write the conversion yourself — `float64(a) + b`. This feels strict at first but eliminates an entire class of precision bugs that are common in languages with implicit numeric widening.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: "Which of the following does Go enforce at compile time to keep code minimal?",
+    options: [
+      "All functions must have a return type annotation",
+      "Unused local variables and unused imports are compile errors",
+      "Every file must have a package-level comment",
+      "All exported functions must be documented"
+    ],
+    answer: 1
+  },
+  {
+    q: "What is the entry point of every executable Go program?",
+    options: [
+      "func Start() in package main",
+      "func init() in any package",
+      "func main() in package main",
+      "func Run() in package main"
+    ],
+    answer: 2
+  },
+  {
+    q: "What does Go's single-style enforcement mean in practice?",
+    options: [
+      "You must run gofmt manually before every commit",
+      "Style debates about formatting and import order are eliminated — everyone's code looks the same",
+      "gofmt rewrites your logic to be more idiomatic",
+      "gofmt only applies to files in the standard library"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="basics/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="basics/index" />

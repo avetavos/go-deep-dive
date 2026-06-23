@@ -1,0 +1,169 @@
+---
+title: Slices
+description: 'Arrays vs slices, make, len/cap, append growth, slicing expressions, shared backing arrays, and copy.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Arrays: the foundation
+
+An **array** in Go has a fixed size that is part of its type. `[3]int` and `[4]int` are two different types:
+
+```go
+arr := [3]int{10, 20, 30}
+fmt.Println(len(arr)) // 3 — always
+```
+
+Arrays are value types: assigning `a2 := a1` copies every element. They are useful for fixed-size data but too rigid for most work.
+
+## Slices: the dynamic view
+
+A **slice** is a lightweight header — three words — that describes a window into an underlying array:
+
+```
+slice header
+┌──────────┐
+│ pointer  │ ──► backing array [ 10 | 20 | 30 | 40 | 50 ]
+│ len = 3  │         ↑ index 0
+│ cap = 5  │
+└──────────┘
+```
+
+- **`len`** — number of elements currently accessible through the slice.
+- **`cap`** — number of elements from the slice's start to the end of the backing array.
+
+Create a slice with `make`, a composite literal, or by slicing an array:
+
+```go
+s := make([]int, 3, 5)      // len=3, cap=5, all zeros
+t := []int{1, 2, 3}         // len=3, cap=3
+u := arr[1:3]               // len=2, cap=2, window into arr
+```
+
+## `append` and growth
+
+`append` adds elements to a slice and returns the (possibly new) slice:
+
+```go
+s = append(s, 4, 5, 6)
+```
+
+When `len == cap`, `append` allocates a new, larger backing array, copies existing elements, and returns a slice pointing to the new array. The old slice is unaffected. **Always reassign the result of append** — `s = append(s, ...)`.
+
+## Slicing expressions and shared backing arrays
+
+`a[low:high]` creates a new slice header that shares the same backing array:
+
+```go
+base := []int{1, 2, 3, 4, 5}
+a := base[1:3] // [2 3] — shares backing array with base
+b := base[1:4] // [2 3 4] — also shares
+a[0] = 99
+fmt.Println(b[0]) // 99 — mutation visible through b too
+```
+
+This is powerful (zero-copy sub-slicing) but dangerous if you forget about it.
+
+## `copy` for independent slices
+
+Use the built-in `copy(dst, src)` to break the sharing. It copies `min(len(dst), len(src))` elements and returns the number copied:
+
+```go
+fresh := []int{10, 20, 30}
+dst := make([]int, 3)
+copy(dst, fresh)
+dst[0] = 0
+fmt.Println(fresh[0], dst[0]) // 10 0 — independent
+```
+
+export const slicesCode = `package main
+
+import "fmt"
+
+func main() {
+\t// Array vs slice
+\tarr := [3]int{10, 20, 30} // fixed-size array
+\tsl := arr[:]              // slice backed by arr
+\tsl[0] = 99
+\tfmt.Println(arr[0], sl[0]) // 99 99 — shared backing array
+
+\t// make: len and cap
+\ts := make([]int, 3, 5)
+\tfmt.Println(len(s), cap(s)) // 3 5
+
+\t// append beyond cap allocates a new backing array
+\ts = append(s, 1, 2, 3)
+\tfmt.Println(len(s), cap(s)) // 6 10
+
+\t// Two slices sharing the same backing array
+\tbase := []int{1, 2, 3, 4, 5}
+\ta := base[1:3] // [2 3]
+\tb := base[1:4] // [2 3 4]
+\ta[0] = 99
+\tfmt.Println(b[0]) // 99 — shared backing array
+
+\t// copy to get an independent slice
+\tfresh := []int{10, 20, 30}
+\tdst := make([]int, 3)
+\tcopy(dst, fresh)
+\tdst[0] = 0
+\tfmt.Println(fresh[0], dst[0]) // 10 0 — independent after copy
+}`;
+
+<Playground client:visible code={slicesCode} />
+
+<Callout title="append may or may not allocate; slices share backing arrays">
+Two important rules to internalize. First: `append` returns a new slice header — if growth caused a reallocation you now have a completely new backing array. Never ignore the return value. Second: `a[low:high]` does not copy data — both slices share the same backing array. A write through one is visible through the other. Use `copy` when you need a truly independent slice.
+</Callout>
+
+export const quizSlices = [
+  {
+    q: "You write `s = append(s, 1)` when `len(s) == cap(s)`. What does Go do?",
+    options: [
+      "A runtime panic — you exceeded the capacity",
+      "The element is silently dropped",
+      "Go allocates a new, larger backing array, copies existing elements, and returns a new slice pointing to it",
+      "Go extends the existing array in place"
+    ],
+    answer: 2
+  },
+  {
+    q: "You have `base := []int{1, 2, 3}` and `a := base[0:2]`. You then set `a[0] = 99`. What is `base[0]`?",
+    options: [
+      "1 — a is an independent copy",
+      "99 — a and base share the same backing array",
+      "0 — the slice header is zeroed after slicing",
+      "A panic — you cannot mutate a slice created from another slice"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does `make([]string, 4, 10)` create?",
+    options: [
+      "A slice with len=10 and cap=4",
+      "A slice with len=4 and cap=10",
+      "An array of 10 strings with 4 elements filled",
+      "A compile error — make takes only one size argument for slices"
+    ],
+    answer: 1
+  },
+  {
+    q: "What is the idiomatic way to ensure two slices do NOT share a backing array?",
+    options: [
+      "Use `a[low:high:max]` with a max-cap parameter",
+      "Use `copy(dst, src)` to copy elements into a freshly allocated slice",
+      "Assign the slice to a new variable: `b := a`",
+      "Use `append([]int{}, a...)` — but this is not standard"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="types-data/slices" questions={quizSlices} />
+
+<ProgressTracker client:visible id="types-data/slices" />

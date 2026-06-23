@@ -1,0 +1,263 @@
+---
+title: Functions
+description: 'multiple return values, named returns, variadic functions, defer, closures, และ first-class functions'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Syntax พื้นฐานของ Function
+
+Function ใน Go ประกาศด้วย keyword `func` ตามด้วยชื่อ, parameters, และ return types:
+
+```go
+func add(x int, y int) int {
+    return x + y
+}
+
+// Parameters ที่มี type เดียวกันสามารถเขียนรวมได้
+func add(x, y int) int {
+    return x + y
+}
+```
+
+## Multiple Return Values
+
+Go functions สามารถ return หลายค่าได้ ซึ่งเป็น pattern มาตรฐานสำหรับ error handling:
+
+```go
+func divide(a, b float64) (float64, error) {
+    if b == 0 {
+        return 0, errors.New("division by zero")
+    }
+    return a / b, nil
+}
+
+result, err := divide(10, 3)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Pattern `(value, error)` ถือเป็น idiomatic Go — แทบทุก function ที่อาจล้มเหลวจะ return error เป็น value สุดท้าย
+
+## Named Return Values
+
+Return values สามารถตั้งชื่อได้ ทำให้สามารถใช้ **bare return** ได้:
+
+```go
+func minMax(nums []int) (min, max int) {
+    min, max = nums[0], nums[0]
+    for _, n := range nums[1:] {
+        if n < min {
+            min = n
+        }
+        if n > max {
+            max = n
+        }
+    }
+    return   // return min, max โดยไม่ต้องระบุ
+}
+```
+
+ใช้ named returns เพื่อความชัดเจนใน function สั้น ๆ หลีกเลี่ยงใน function ยาวเพราะทำให้อ่านสับสน
+
+## Variadic Functions
+
+ใช้ `...T` เพื่อรับ arguments จำนวนไม่จำกัดของ type เดียวกัน:
+
+```go
+func sum(nums ...int) int {
+    total := 0
+    for _, n := range nums {
+        total += n
+    }
+    return total
+}
+
+sum(1, 2, 3)       // ส่งแต่ละตัว
+sum(1, 2, 3, 4, 5) // จำนวนเท่าไรก็ได้
+
+existing := []int{1, 2, 3}
+sum(existing...)   // spread slice ด้วย ...
+```
+
+## defer
+
+`defer` เลื่อนการเรียก function ออกไปจนกว่า function ที่ครอบอยู่จะ return เหมาะสำหรับ cleanup:
+
+```go
+func readFile(path string) error {
+    f, err := os.Open(path)
+    if err != nil {
+        return err
+    }
+    defer f.Close()   // จะถูกเรียกเมื่อ readFile return ไม่ว่าจะ return ปกติหรือ error
+    // ... ใช้ f
+}
+```
+
+**Arguments ของ deferred call ถูก evaluate ทันที** ณ จุดที่ `defer` statement ถูก execute ไม่ใช่ตอน call จริง:
+
+```go
+i := 0
+defer fmt.Println(i)   // บันทึกค่า 0 ณ ตรงนี้
+i = 100
+// เมื่อ function return จะ print "0" ไม่ใช่ "100"
+```
+
+หลาย `defer` ในฟังก์ชันเดียวจะ execute แบบ LIFO (last in, first out)
+
+## Closures และ First-Class Functions
+
+Functions ใน Go เป็น first-class values — สามารถ assign ให้ตัวแปร, ส่งเป็น argument, หรือ return จาก function ได้:
+
+```go
+// Function เป็น value ใน variable
+double := func(x int) int { return x * 2 }
+fmt.Println(double(5)) // 10
+
+// Function เป็น parameter
+apply := func(f func(int) int, x int) int { return f(x) }
+fmt.Println(apply(double, 3)) // 6
+```
+
+**Closure** คือ function ที่ "จำ" ตัวแปรจาก enclosing scope:
+
+```go
+func makeCounter() func() int {
+    count := 0
+    return func() int {
+        count++      // capture ตัวแปร count จาก makeCounter
+        return count
+    }
+}
+
+counter := makeCounter()
+fmt.Println(counter()) // 1
+fmt.Println(counter()) // 2 — state ถูกเก็บไว้ใน closure
+```
+
+export const functionsCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+)
+
+// Multiple return values
+func divide(a, b float64) (float64, error) {
+\tif b == 0 {
+\t\treturn 0, errors.New("division by zero")
+\t}
+\treturn a / b, nil
+}
+
+// Variadic
+func sum(nums ...int) int {
+\ttotal := 0
+\tfor _, n := range nums {
+\t\ttotal += n
+\t}
+\treturn total
+}
+
+// Closure
+func counter() func() int {
+\tn := 0
+\treturn func() int {
+\t\tn++
+\t\treturn n
+\t}
+}
+
+// defer demo
+func deferDemo() {
+\tfmt.Println("deferDemo start")
+\tdefer fmt.Println("deferred 1 (runs last)")
+\tdefer fmt.Println("deferred 2 (runs second)")
+\tdefer fmt.Println("deferred 3 (runs first)")
+\tfmt.Println("deferDemo end")
+}
+
+func main() {
+\t// Multiple returns
+\tresult, err := divide(10, 3)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Printf("10 / 3 = %.4f\\n", result)
+\t}
+
+\t_, err = divide(5, 0)
+\tif err != nil {
+\t\tfmt.Println("divide by zero:", err)
+\t}
+
+\t// Variadic
+\tfmt.Println("sum(1..5) =", sum(1, 2, 3, 4, 5))
+
+\t// Closure counter
+\tc := counter()
+\tfmt.Println("counter:", c(), c(), c())
+
+\t// defer LIFO
+\tdeferDemo()
+}`;
+
+<Playground client:visible code={functionsCode} />
+
+<Callout title="Deferred calls ทำงานแบบ LIFO เมื่อ return">
+หลาย `defer` statement จะทำงานในลำดับ last-in first-out เมื่อ function ที่ครอบคลุมอยู่ return arguments จะถูก evaluate ทันที ณ จุดที่ `defer` ไม่ใช่ตอน call จริง จึงต้องระวังเมื่อ defer function ที่ใช้ตัวแปรที่อาจเปลี่ยนค่า
+</Callout>
+
+export const quizFunctions = [
+  {
+    q: "ใน Go idiomatic pattern ใดที่ function ใช้เมื่ออาจล้มเหลว?",
+    options: [
+      "Return ค่าเดียวและ panic เมื่อ error",
+      "Return (result, error) สองค่า; caller ตรวจ error",
+      "Return nil เมื่อสำเร็จและ non-nil เมื่อ error",
+      "โยน exception ด้วย keyword throw"
+    ],
+    answer: 1
+  },
+  {
+    q: "ถ้าประกาศ defer สามครั้งในลำดับ A, B, C จะ execute ในลำดับใด?",
+    options: [
+      "A, B, C (FIFO — ลำดับที่ประกาศ)",
+      "C, B, A (LIFO — ย้อนกลับ)",
+      "B, A, C (สุ่ม)",
+      "ทั้งสามพร้อมกัน"
+    ],
+    answer: 1
+  },
+  {
+    q: "Closure ใน Go จำตัวแปรจาก enclosing scope อย่างไร?",
+    options: [
+      "copy ค่าตอนที่ closure ถูกสร้าง",
+      "reference ตัวแปรจาก enclosing scope และเห็นการเปลี่ยนแปลงหลังจากนั้น",
+      "ไม่สามารถ access ตัวแปรจาก enclosing scope ได้",
+      "ต้องใช้ keyword `capture` อย่างชัดเจน"
+    ],
+    answer: 1
+  },
+  {
+    q: "จะส่ง slice เข้า variadic function เป็น arguments แยกกันได้อย่างไร?",
+    options: [
+      "ครอบด้วย: variadic(slice)",
+      "Spread ด้วย: variadic(slice...)",
+      "ใช้ keyword spread: spread(variadic, slice)",
+      "ทำไม่ได้ slice กับ variadic args เข้ากันไม่ได้"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="basics/functions" questions={quizFunctions} />
+
+<ProgressTracker client:visible id="basics/functions" />

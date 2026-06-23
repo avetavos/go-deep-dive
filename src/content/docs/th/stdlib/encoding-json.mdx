@@ -1,0 +1,183 @@
+---
+title: encoding/json
+description: 'json.Marshal และ Unmarshal, struct tags, nested structs และ map[string]any สำหรับการจัดการ JSON อย่างยืดหยุ่น'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## JSON ใน Go
+
+Package `encoding/json` แปลงค่า Go เป็น JSON text (marshaling) และแปลง JSON text กลับเป็นค่า Go (unmarshaling) ฟังก์ชันหลักสองตัวคือ:
+
+```go
+data, err := json.Marshal(v)       // Go value → []byte (JSON)
+err        = json.Unmarshal(data, &v) // []byte (JSON) → Go value
+```
+
+`Marshal` รับค่าใดก็ได้และคืน `[]byte` `Unmarshal` เขียนลงในค่าที่ชี้โดย argument ที่สอง — ส่ง pointer เสมอเพื่อให้ฟังก์ชันแก้ไขตัวแปรได้
+
+## Struct tags
+
+**Struct tag** คือ raw-string literal บน field ของ struct ที่ให้ metadata Package `encoding/json` อ่าน tag `json:"name"` เพื่อควบคุมการ serialize:
+
+```go
+type User struct {
+    Name  string `json:"name"`
+    Email string `json:"email,omitempty"`
+    Age   int    `json:"age"`
+}
+```
+
+syntax ของ tag คือ `` `json:"<name>[,options]"` `` option ที่พบบ่อย:
+
+| Tag | ผล |
+|-----|--------|
+| `json:"name"` | ใช้ `name` เป็น JSON key แทนชื่อ field |
+| `json:"name,omitempty"` | ละเว้น field นี้ใน output เมื่อค่าเป็น zero value |
+| `json:"-"` | ละเว้น field นี้เสมอ |
+
+## Nested structs
+
+Field ของ struct สามารถเป็น struct ได้เช่นกัน `json.Marshal` จะ recurse เข้าไปโดยอัตโนมัติ:
+
+```go
+type Address struct {
+    City    string `json:"city"`
+    Country string `json:"country"`
+}
+
+type User struct {
+    Name    string  `json:"name"`
+    Age     int     `json:"age"`
+    Address Address `json:"address"`
+}
+```
+
+JSON ที่ได้จะฝัง address object ไว้ภายใต้ key `"address"`
+
+## map[string]any — การ unmarshal แบบยืดหยุ่น
+
+เมื่อยังไม่มี struct type ล่วงหน้า ให้ unmarshal ลงใน `map[string]any` แต่ละค่า JSON จะกลายเป็น Go counterpart ที่เป็นธรรมชาติ: `string`, `float64`, `bool`, `[]any`, `map[string]any` หรือ `nil`
+
+```go
+var m map[string]any
+json.Unmarshal([]byte(`{"lang":"Go","version":1.22}`), &m)
+fmt.Println(m["lang"])    // Go
+fmt.Println(m["version"]) // 1.22  (float64)
+```
+
+export const encodingJsonCode = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+)
+
+type Address struct {
+\tCity    string \`json:"city"\`
+\tCountry string \`json:"country"\`
+}
+
+type User struct {
+\tName    string  \`json:"name"\`
+\tAge     int     \`json:"age"\`
+\tEmail   string  \`json:"email,omitempty"\`
+\tAddress Address \`json:"address"\`
+}
+
+func main() {
+\t// Marshal a struct — Email is set, so it appears
+\tu := User{
+\t\tName:  "Alice",
+\t\tAge:   30,
+\t\tEmail: "alice@example.com",
+\t\tAddress: Address{
+\t\t\tCity:    "Bangkok",
+\t\t\tCountry: "Thailand",
+\t\t},
+\t}
+\tdata, err := json.Marshal(u)
+\tif err != nil {
+\t\tfmt.Println("marshal error:", err)
+\t\treturn
+\t}
+\tfmt.Println(string(data))
+
+\t// omitempty: Email is empty, so it is omitted
+\tu2 := User{Name: "Bob", Age: 25, Address: Address{City: "London", Country: "UK"}}
+\tdata2, _ := json.Marshal(u2)
+\tfmt.Println(string(data2))
+
+\t// Unmarshal back into a struct
+\tvar result User
+\terr = json.Unmarshal(data, &result)
+\tif err != nil {
+\t\tfmt.Println("unmarshal error:", err)
+\t\treturn
+\t}
+\tfmt.Printf("Name: %s, City: %s\\n", result.Name, result.Address.City)
+
+\t// map[string]any — flexible unmarshaling
+\traw := \`{"lang":"Go","version":1.22,"stable":true}\`
+\tvar m map[string]any
+\t_ = json.Unmarshal([]byte(raw), &m)
+\tfmt.Println(m["lang"], m["version"], m["stable"])
+}`;
+
+<Playground client:visible code={encodingJsonCode} />
+
+<Callout title="เฉพาะ exported field เท่านั้นที่ถูก marshal; tag ควบคุมชื่อ JSON key">
+Field ที่ขึ้นต้นด้วยตัวอักษรพิมพ์เล็กเป็น unexported และ `encoding/json` จะมองไม่เห็นเลย — จะไม่ปรากฏใน output และจะไม่ถูก populate ระหว่าง unmarshal ไม่ว่าจะเขียน tag อะไรก็ตาม ควรทำให้ field ที่ต้องการ serialize ขึ้นต้นด้วยตัวพิมพ์ใหญ่เสมอ จากนั้น tag `json:"name"` จะควบคุมชื่อ key ใน JSON output โดยอิสระจากชื่อ field ใน Go ทำให้สามารถใช้ naming convention ของ Go (`UserID`) และได้ JSON ที่สะอาด (`"user_id"`) ในเวลาเดียวกัน
+</Callout>
+
+export const quizEncodingJson = [
+  {
+    q: "json.Unmarshal ต้องการอะไรเป็น argument ที่สอง?",
+    options: [
+      "ค่าของ type ใดก็ได้",
+      "Pointer ที่ชี้ไปยังค่าเป้าหมาย",
+      "[]byte slice",
+      "io.Reader"
+    ],
+    answer: 1
+  },
+  {
+    q: "Field ของ struct ที่มี tag `json:\"email,omitempty\"` และมีค่าเป็น empty string จะ:",
+    options: [
+      "ปรากฏใน JSON เป็น \"email\":\"\"",
+      "ปรากฏใน JSON เป็น \"email\":null",
+      "ถูกละเว้นจาก JSON output ทั้งหมด",
+      "ทำให้ json.Marshal คืน error"
+    ],
+    answer: 2
+  },
+  {
+    q: "เมื่อ unmarshal JSON ลงใน map[string]any ตัวเลข 1.22 จะกลายเป็น type ใดของ Go?",
+    options: [
+      "int",
+      "int64",
+      "float32",
+      "float64"
+    ],
+    answer: 3
+  },
+  {
+    q: "Field ของ struct ชื่อ userID (u พิมพ์เล็ก) ที่มี tag json:\"user_id\" จะ:",
+    options: [
+      "ถูก marshal เป็น \"user_id\" ใน JSON",
+      "ถูก marshal เป็น \"userID\" ใน JSON",
+      "ไม่ปรากฏใน JSON output เพราะ field เป็น unexported",
+      "ทำให้เกิด compile error"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="stdlib/encoding-json" questions={quizEncodingJson} />
+
+<ProgressTracker client:visible id="stdlib/encoding-json" />

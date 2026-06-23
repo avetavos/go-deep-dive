@@ -1,0 +1,178 @@
+---
+title: io และ bufio
+description: 'interface io.Reader และ io.Writer, strings.NewReader, bytes.Buffer และ bufio.Scanner สำหรับการอ่าน input ทีละบรรทัด'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Interface io.Reader และ io.Writer
+
+Package `io` นิยาม interface ขนาดเล็กแต่เป็นรากฐานสองตัว:
+
+```go
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+type Writer interface {
+    Write(p []byte) (n int, err error)
+}
+```
+
+Interface ทั้งสองนี้คือภาษากลางของ I/O ใน Go มี type จำนวนมากที่ implement มัน: ไฟล์, network connection, HTTP request และ response body, in-memory buffer และอื่นๆ ฟังก์ชันที่รับ `io.Reader` หรือ `io.Writer` จะทำงานกับทุก type เหล่านั้นโดยไม่ต้องแก้ไขโค้ด
+
+## strings.NewReader — Reader ในหน่วยความจำ
+
+`strings.NewReader(s)` ห่อ string เป็น `io.Reader` มีประโยชน์มากใน test และตัวอย่าง — สามารถทดสอบฟังก์ชันที่อ่านจาก stream ได้โดยไม่ต้องแตะ filesystem
+
+```go
+r := strings.NewReader("hello, world")
+data, _ := io.ReadAll(r)
+fmt.Println(string(data)) // hello, world
+```
+
+## bytes.Buffer — buffer สำหรับอ่านและเขียน
+
+`bytes.Buffer` implement ทั้ง `io.Reader` และ `io.Writer` เขียนลงไปแล้วอ่านกลับออกมา:
+
+```go
+var buf bytes.Buffer
+fmt.Fprintln(&buf, "first line")
+fmt.Fprintln(&buf, "second line")
+content, _ := io.ReadAll(&buf)
+fmt.Print(string(content))
+```
+
+`fmt.Fprintln` รับ `io.Writer` ใดก็ได้ ดังนั้นจึงเปลี่ยน output ที่ฟอร์แมตแล้วไปยัง buffer, ไฟล์ หรือ network connection ได้โดยไม่ต้องเปลี่ยนโค้ด
+
+## bufio.Scanner — การอ่านทีละบรรทัด
+
+`bufio.Scanner` ห่อ `io.Reader` ใดก็ได้และให้การอ่านทีละบรรทัด (หรือทีละ token) อย่างสะดวก ฟังก์ชัน split แบบ default คือ `bufio.ScanLines`
+
+```go
+scanner := bufio.NewScanner(r)
+for scanner.Scan() {
+    fmt.Println(scanner.Text()) // ทีละบรรทัด
+}
+if err := scanner.Err(); err != nil {
+    log.Fatal(err)
+}
+```
+
+`scanner.Scan()` คืน `false` เมื่อ input หมดหรือเกิด error ควรตรวจสอบ `scanner.Err()` หลังลูปเสมอ — การคืน `false` เพียงอย่างเดียวไม่ได้บอกว่าเป็น EOF หรือ error
+
+## ฟังก์ชัน helper ของ io
+
+Package `io` ยังมี helper ที่มีประโยชน์:
+
+```go
+io.ReadAll(r)           // อ่านจนถึง EOF คืน []byte
+io.Copy(dst, src)       // copy จาก Reader ไปยัง Writer
+io.MultiReader(r1, r2)  // ต่อ reader หลายตัวตามลำดับ
+io.Discard              // Writer ที่ทิ้ง byte ทั้งหมด (เหมือน /dev/null)
+io.LimitReader(r, n)    // อ่านไม่เกิน n bytes
+```
+
+export const ioBufioCode = `package main
+
+import (
+\t"bufio"
+\t"bytes"
+\t"fmt"
+\t"io"
+\t"strings"
+)
+
+// printLines accepts any io.Reader — works with files, buffers, or strings
+func printLines(r io.Reader) {
+\tscanner := bufio.NewScanner(r)
+\tfor scanner.Scan() {
+\t\tfmt.Println(">", scanner.Text())
+\t}
+}
+
+func main() {
+\t// strings.NewReader implements io.Reader
+\tr := strings.NewReader("first line\\nsecond line\\nthird line")
+\tprintLines(r)
+
+\t// bytes.Buffer implements both io.Reader and io.Writer
+\tvar buf bytes.Buffer
+\tfmt.Fprintln(&buf, "written to buffer")
+\tfmt.Fprintln(&buf, "another line")
+\tcontent, _ := io.ReadAll(&buf)
+\tfmt.Print(string(content))
+
+\t// io.MultiReader chains two readers sequentially
+\tr1 := strings.NewReader("hello ")
+\tr2 := strings.NewReader("world\\n")
+\tcombined := io.MultiReader(r1, r2)
+\tio.Copy(io.Discard, combined)
+\tfmt.Println("MultiReader composed two readers")
+
+\t// bufio.Scanner over in-memory CSV
+\tcsv := "alice,30\\nbob,25\\ncharlie,35"
+\tscanner := bufio.NewScanner(strings.NewReader(csv))
+\tfor scanner.Scan() {
+\t\tparts := strings.Split(scanner.Text(), ",")
+\t\tfmt.Printf("name=%s age=%s\\n", parts[0], parts[1])
+\t}
+}`;
+
+<Playground client:visible code={ioBufioCode} />
+
+<Callout title="เขียนโค้ดให้รับ io.Reader และ io.Writer ไม่ใช่ concrete type">
+เขียนฟังก์ชันให้รับ `io.Reader` หรือ `io.Writer` แทนที่จะรับ `*os.File` หรือ `*http.Request` นิสัยเดียวนี้ทำให้โค้ด test ได้ทุกที่ — ส่ง `strings.NewReader` ใน test, ไฟล์จริงใน production และ HTTP body ใน handler โดยไม่ต้องแก้ไขฟังก์ชัน นอกจากนี้ยังหมายความว่าฟังก์ชันจะทำงานร่วมกับ ecosystem I/O composition ทั้งหมดของ Go: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader` และอื่นๆ
+</Callout>
+
+export const quizIoBufio = [
+  {
+    q: "io.ReadAll(r) คืนค่าอะไร?",
+    options: [
+      "string, error",
+      "[]byte, error",
+      "int, error",
+      "io.Reader, error"
+    ],
+    answer: 1
+  },
+  {
+    q: "หลังจาก bufio.Scanner.Scan() คืนค่า false ต้องตรวจสอบอะไร?",
+    options: [
+      "scanner.Text() สำหรับข้อมูลที่เหลือ",
+      "scanner.Bytes() สำหรับ raw bytes",
+      "scanner.Err() เพื่อแยกแยะ EOF จาก error จริง",
+      "ไม่ต้องตรวจสอบอะไร — false หมายถึง EOF ที่สะอาดเสมอ"
+    ],
+    answer: 2
+  },
+  {
+    q: "Type ใดที่ implement ทั้ง io.Reader และ io.Writer?",
+    options: [
+      "strings.Reader",
+      "bytes.Buffer",
+      "bufio.Scanner",
+      "io.Discard"
+    ],
+    answer: 1
+  },
+  {
+    q: "ทำไมควรรับ io.Reader ในฟังก์ชันแทนที่จะรับ *os.File?",
+    options: [
+      "*os.File ทำให้เกิด memory leak บน Linux",
+      "io.Reader เร็วกว่า *os.File",
+      "การรับ io.Reader ทำให้ฟังก์ชันทำงานกับทุกแหล่ง: ไฟล์, buffer, string, network — โดยไม่ต้องเปลี่ยนโค้ด",
+      "Go ไม่อนุญาตให้ใช้ *os.File เป็น parameter ของฟังก์ชัน"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="stdlib/io-bufio" questions={quizIoBufio} />
+
+<ProgressTracker client:visible id="stdlib/io-bufio" />

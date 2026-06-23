@@ -1,0 +1,222 @@
+---
+title: 'Control Flow'
+description: 'if with init statement, for as the only loop keyword, range, and switch without automatic fallthrough.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## if statements
+
+A basic `if` in Go looks familiar, but parentheses around the condition are omitted — the braces are always required:
+
+```go
+if x > 0 {
+    fmt.Println("positive")
+}
+```
+
+Go adds an **init statement** separated by a semicolon before the condition. Variables declared in the init are scoped to the entire `if/else` block:
+
+```go
+if err := doWork(); err != nil {
+    fmt.Println("error:", err)
+    return
+}
+// err is not in scope here
+```
+
+This pattern is idiomatic for operations that return `(value, error)` — it keeps the error variable close to the check and avoids polluting the outer scope.
+
+## for — Go's only loop
+
+Go has **one loop keyword**: `for`. It covers all three common loop shapes.
+
+**C-style loop** — init; condition; post:
+
+```go
+for i := 0; i < 5; i++ {
+    fmt.Println(i)
+}
+```
+
+**Condition-only loop** (equivalent to `while` in other languages):
+
+```go
+n := 1
+for n < 100 {
+    n *= 2
+}
+```
+
+**Infinite loop** — omit the condition entirely; use `break` to exit:
+
+```go
+for {
+    if done() {
+        break
+    }
+}
+```
+
+## for range
+
+`range` iterates over arrays, slices, strings, maps, and channels. It returns an index and a value on each iteration:
+
+```go
+fruits := []string{"apple", "banana", "cherry"}
+for i, v := range fruits {
+    fmt.Println(i, v)
+}
+
+// Discard the index with _
+for _, v := range fruits {
+    fmt.Println(v)
+}
+
+// Range over a string yields runes (Unicode code points), not bytes
+for i, r := range "Go!" {
+    fmt.Println(i, r)
+}
+```
+
+## switch
+
+Go's `switch` evaluates cases top to bottom and **stops at the first match** — there is no automatic fallthrough to the next case. You do not need `break` at the end of each case:
+
+```go
+switch day {
+case "Monday", "Tuesday", "Wednesday", "Thursday", "Friday":
+    fmt.Println("weekday")
+case "Saturday", "Sunday":
+    fmt.Println("weekend")
+default:
+    fmt.Println("unknown")
+}
+```
+
+To fall through explicitly, use the `fallthrough` keyword. To match multiple values, list them comma-separated in one case.
+
+**Switch-true** (expressionless switch) acts as a cleaner if/else chain:
+
+```go
+switch {
+case score >= 90:
+    fmt.Println("A")
+case score >= 80:
+    fmt.Println("B")
+default:
+    fmt.Println("C or below")
+}
+```
+
+export const controlFlowCode = `package main
+
+import "fmt"
+
+func classify(n int) string {
+\tswitch {
+\tcase n < 0:
+\t\treturn "negative"
+\tcase n == 0:
+\t\treturn "zero"
+\tcase n < 10:
+\t\treturn "small"
+\tdefault:
+\t\treturn "large"
+\t}
+}
+
+func main() {
+\t// C-style for loop
+\tfmt.Println("-- C-style loop --")
+\tfor i := 1; i <= 3; i++ {
+\t\tfmt.Println(i)
+\t}
+
+\t// Condition-only loop (while equivalent)
+\tfmt.Println("-- condition-only loop --")
+\tn := 1
+\tfor n < 10 {
+\t\tn *= 2
+\t}
+\tfmt.Println("n =", n)
+
+\t// for range over slice
+\tfmt.Println("-- range over slice --")
+\tfruits := []string{"apple", "banana", "cherry"}
+\tfor i, v := range fruits {
+\t\tfmt.Println(i, v)
+\t}
+
+\t// switch
+\tfmt.Println("-- switch classify --")
+\tfor _, val := range []int{-5, 0, 7, 42} {
+\t\tfmt.Println(val, "->", classify(val))
+\t}
+
+\t// if with init statement
+\tfmt.Println("-- if with init --")
+\tif x := 16; x%2 == 0 {
+\t\tfmt.Println(x, "is even")
+\t} else {
+\t\tfmt.Println(x, "is odd")
+\t}
+}`;
+
+<Playground client:visible code={controlFlowCode} />
+
+<Callout title="`for` is Go's only loop keyword">
+Go has no `while`, `do-while`, `until`, or `loop` keyword. Every iteration — whether bounded, conditional, or infinite — uses `for`. The three forms (C-style; condition-only; no-condition) cover every pattern. If you want a `while` loop, write `for condition` with the init and post omitted. This deliberate constraint keeps the language smaller and every loop form immediately recognisable.
+</Callout>
+
+export const quizControlFlow = [
+  {
+    q: "What is the Go equivalent of a while loop in other languages?",
+    options: [
+      "while condition { }",
+      "for condition { }",
+      "loop condition { }",
+      "for ; condition ; { }"
+    ],
+    answer: 1
+  },
+  {
+    q: "In Go's switch statement, what happens when a case matches but has no fallthrough keyword?",
+    options: [
+      "Execution continues to the next case automatically",
+      "A compile error is raised",
+      "Execution stops at the end of the matched case and exits the switch",
+      "The default case always runs after the matched case"
+    ],
+    answer: 2
+  },
+  {
+    q: "What scope do variables declared in an if init statement have?",
+    options: [
+      "Package scope",
+      "File scope",
+      "The entire enclosing function",
+      "Only the if/else block including all branches"
+    ],
+    answer: 3
+  },
+  {
+    q: "When ranging over a string with `for i, r := range s`, what type is r?",
+    options: [
+      "byte (uint8)",
+      "rune (int32) — a Unicode code point",
+      "string",
+      "int"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="basics/control-flow" questions={quizControlFlow} />
+
+<ProgressTracker client:visible id="basics/control-flow" />

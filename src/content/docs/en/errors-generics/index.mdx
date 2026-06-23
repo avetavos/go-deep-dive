@@ -5,8 +5,129 @@ sidebar:
   order: 1
 ---
 
-## Errors & Generics
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-This module covers Go's explicit error model — errors are values, not exceptions — and the modern generics system added in Go 1.18. You will learn to wrap errors with context using `fmt.Errorf("%w", err)`, define custom error types that carry structured data, unwrap error chains with `errors.Is` and `errors.As`, and write generic functions and data structures using type parameters and constraints (`~int`, union types, `comparable`).
+## Error handling in Go
 
-> This module is coming soon. Check back for lessons on error wrapping, custom errors, and generics with type parameters.
+Most languages handle failures through exceptions — a special control-flow mechanism that unwinds the call stack until a `catch` block intercepts the problem. Go takes a radically different approach: **errors are ordinary values**.
+
+A function that can fail returns two values: the result and an `error`. The caller receives both and decides what to do. There is no hidden control flow, no stack unwinding, no unchecked exceptions. Every error-producing callsite is visible in the code, which makes programs easier to audit and reason about.
+
+The canonical pattern you will see everywhere in Go:
+
+```go
+result, err := doSomething()
+if err != nil {
+    // handle the failure — return, log, wrap, or recover
+}
+// err is nil: safe to use result
+```
+
+`nil` means success. A non-nil error means something went wrong and `result` should not be trusted.
+
+## The error interface
+
+Go's `error` type is defined as a single-method interface in the standard library:
+
+```go
+type error interface {
+    Error() string
+}
+```
+
+Any type that implements `Error() string` satisfies the `error` interface. This means you can pass simple string-based errors, richly structured errors, and everything in between — all through the same interface. `nil` is a valid `error` value and signals the absence of any error.
+
+## What this module covers
+
+| Lesson | Topic |
+|--------|-------|
+| This page | Philosophy overview and first runnable example |
+| Error Values | `errors.New`, `fmt.Errorf`, sentinel errors, `errors.Is` |
+| Wrapping & Custom Errors | `%w`, `errors.As`, custom error types |
+| Panic & Recover | When to panic, `recover`, deferring cleanup |
+| Generics | Type parameters, constraints, `~T`, union types |
+
+## A first look
+
+Here is a minimal function that returns `(string, error)`, demonstrating the fundamental shape of Go error handling:
+
+```go
+package main
+
+import (
+    "errors"
+    "fmt"
+)
+
+func greet(name string) (string, error) {
+    if name == "" {
+        return "", errors.New("name must not be empty")
+    }
+    return fmt.Sprintf("Hello, %s!", name), nil
+}
+
+func main() {
+    msg, err := greet("Gopher")
+    if err != nil {
+        fmt.Println("error:", err)
+        return
+    }
+    fmt.Println(msg) // Hello, Gopher!
+
+    _, err = greet("")
+    if err != nil {
+        fmt.Println("error:", err) // error: name must not be empty
+    }
+}
+```
+
+`errors.New` creates a simple error value from a static string. The function returns `nil` as the error on the happy path and a non-nil error on the failure path. The caller checks `if err != nil` immediately after the call — this is the idiom you will write hundreds of times in Go.
+
+export const quizErrorsGenericsOverview = [
+  {
+    q: "In Go, what does a function signal by returning a non-nil error?",
+    options: [
+      "It panics with the error message",
+      "It throws an exception the caller must catch",
+      "It returns a value the caller can inspect and handle explicitly",
+      "It logs the error and returns a zero value"
+    ],
+    answer: 2
+  },
+  {
+    q: "What is the definition of the built-in error interface?",
+    options: [
+      "interface{ Err() string }",
+      "interface{ Error() string }",
+      "interface{ Message() string }",
+      "interface{ String() error }"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which package provides errors.New and errors.Is?",
+    options: [
+      "fmt",
+      "log",
+      "errors",
+      "io"
+    ],
+    answer: 2
+  },
+  {
+    q: "Generics were added to Go in version:",
+    options: [
+      "1.16",
+      "1.17",
+      "1.18",
+      "1.21"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="errors-generics/index" questions={quizErrorsGenericsOverview} />
+
+<ProgressTracker client:visible id="errors-generics/index" />

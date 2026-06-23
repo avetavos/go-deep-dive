@@ -1,0 +1,190 @@
+---
+title: fmt, strings, and strconv
+description: 'Format verbs (%v %+v %d %s %q %T), strings package (Contains/Split/Join/ReplaceAll/Builder), and strconv (Atoi/Itoa/ParseFloat).'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## fmt — formatted I/O
+
+The `fmt` package is the entry point for almost all output in Go. Three functions cover the vast majority of use cases:
+
+- `fmt.Println(args...)` — prints each argument separated by spaces, followed by a newline.
+- `fmt.Printf(format, args...)` — prints using a format string with verbs.
+- `fmt.Sprintf(format, args...)` — returns the formatted string instead of printing it.
+
+### Format verbs
+
+| Verb | Meaning |
+|------|---------|
+| `%v` | Default representation |
+| `%+v` | Struct with field names |
+| `%#v` | Go-syntax representation |
+| `%T` | Type of the value |
+| `%d` | Decimal integer |
+| `%s` | String (unquoted) |
+| `%q` | Double-quoted string with Go escaping |
+| `%f` | Floating-point decimal |
+
+```go
+type Person struct { Name string; Age int }
+p := Person{"Alice", 30}
+fmt.Printf("%v\n",  p)   // {Alice 30}
+fmt.Printf("%+v\n", p)   // {Name:Alice Age:30}
+fmt.Printf("%#v\n", p)   // main.Person{Name:"Alice", Age:30}
+fmt.Printf("%T\n",  p)   // main.Person
+```
+
+## strings — text manipulation
+
+The `strings` package provides functions for searching, splitting, joining, and transforming strings. Strings in Go are immutable UTF-8 byte sequences; these functions return new strings rather than modifying in place.
+
+```go
+s := "hello, world"
+strings.Contains(s, "world")         // true
+strings.HasPrefix(s, "hello")        // true
+strings.Split(s, ", ")               // ["hello" "world"]
+strings.Join([]string{"a","b"}, "-") // "a-b"
+strings.ReplaceAll(s, "l", "L")      // "heLLo, worLd"
+strings.ToUpper(s)                   // "HELLO, WORLD"
+strings.TrimSpace("  hi  ")          // "hi"
+```
+
+### strings.Builder — efficient concatenation
+
+When building a string from many pieces in a loop, use `strings.Builder` instead of `+=`. The `+=` operator allocates a new string on every iteration; `Builder` writes into a growing buffer and only allocates the final string once.
+
+```go
+var b strings.Builder
+for i := 0; i < 5; i++ {
+    fmt.Fprintf(&b, "item%d ", i)
+}
+result := strings.TrimSpace(b.String()) // "item0 item1 item2 item3 item4"
+```
+
+## strconv — string-to-number conversions
+
+`strconv` converts between strings and numeric types. The most common functions:
+
+```go
+n, err   := strconv.Atoi("42")          // string → int
+s        := strconv.Itoa(42)            // int → string
+f, err   := strconv.ParseFloat("3.14", 64) // string → float64
+b, err   := strconv.ParseBool("true")   // string → bool
+```
+
+`Atoi` and `ParseFloat` return `(value, error)` because the input might not be a valid number. Always check the error before using the value.
+
+export const fmtStringsCode = `package main
+
+import (
+\t"fmt"
+\t"strconv"
+\t"strings"
+)
+
+type Person struct {
+\tName string
+\tAge  int
+}
+
+func main() {
+\t// fmt verbs
+\tp := Person{Name: "Alice", Age: 30}
+\tfmt.Printf("%v\\n", p)
+\tfmt.Printf("%+v\\n", p)
+\tfmt.Printf("%#v\\n", p)
+\tfmt.Printf("%T\\n", p)
+\tfmt.Printf("%d %s %q\\n", 42, "hello", "world")
+
+\t// Sprintf builds a string
+\ts := fmt.Sprintf("Name: %s, Age: %d", p.Name, p.Age)
+\tfmt.Println(s)
+
+\t// strings package
+\ttext := "  Go is great  "
+\tfmt.Println(strings.TrimSpace(text))
+\tfmt.Println(strings.Contains(text, "great"))
+\tfmt.Println(strings.ToUpper(strings.TrimSpace(text)))
+
+\twords := strings.Split("one,two,three", ",")
+\tfmt.Println(words)
+\tfmt.Println(strings.Join(words, " | "))
+\tfmt.Println(strings.ReplaceAll("aabbcc", "b", "x"))
+
+\t// strings.Builder — efficient concatenation
+\tvar b strings.Builder
+\tfor i := 0; i < 3; i++ {
+\t\tfmt.Fprintf(&b, "item%d ", i)
+\t}
+\tfmt.Println(strings.TrimSpace(b.String()))
+
+\t// strconv
+\tn, err := strconv.Atoi("123")
+\tif err == nil {
+\t\tfmt.Println(n + 1)
+\t}
+\tfmt.Println(strconv.Itoa(456))
+\tf, err := strconv.ParseFloat("3.14", 64)
+\tif err == nil {
+\t\tfmt.Printf("%.2f\\n", f)
+\t}
+}`;
+
+<Playground client:visible code={fmtStringsCode} />
+
+<Callout title="%+v and %#v are your debugging friends">
+When you are unsure what is inside a struct, reach for `%+v` first — it prints field names alongside values so you can immediately see which field holds which data. Use `%#v` when you want a copy-pasteable Go literal (useful for writing test fixtures). For production logs, prefer structured logging (`log/slog`) over `fmt.Printf`, but in development and tests `%+v` saves a lot of time.
+</Callout>
+
+export const quizFmtStrings = [
+  {
+    q: "Which format verb prints a struct with its field names?",
+    options: [
+      "%v",
+      "%s",
+      "%+v",
+      "%T"
+    ],
+    answer: 2
+  },
+  {
+    q: "What does strings.ReplaceAll(\"aabbcc\", \"b\", \"x\") return?",
+    options: [
+      "\"aaxbcc\"",
+      "\"aaxxcc\"",
+      "\"aabbxx\"",
+      "\"xxbbcc\""
+    ],
+    answer: 1
+  },
+  {
+    q: "Why is strings.Builder preferred over += for building strings in a loop?",
+    options: [
+      "Builder is the only way to append strings in Go",
+      "Builder avoids allocating a new string on every concatenation",
+      "Builder provides thread safety automatically",
+      "+= panics when the string is longer than 1024 bytes"
+    ],
+    answer: 1
+  },
+  {
+    q: "strconv.Atoi(\"42\") returns which types?",
+    options: [
+      "string, error",
+      "float64, error",
+      "int, error",
+      "int64, error"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="stdlib/fmt-strings" questions={quizFmtStrings} />
+
+<ProgressTracker client:visible id="stdlib/fmt-strings" />

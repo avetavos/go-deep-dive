@@ -1,0 +1,178 @@
+---
+title: Panic and Recover
+description: 'panic, defer + recover, when panic is appropriate versus returning errors.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is panic?
+
+A **panic** stops normal execution of the current goroutine. The goroutine immediately stops running its current function, begins unwinding the call stack, and runs any deferred functions it encounters on the way out. If nothing intercepts the panic, the program crashes and prints a stack trace.
+
+Panics happen in two ways:
+
+- **Runtime errors** — the Go runtime triggers them automatically for nil pointer dereferences, out-of-bounds slice/array accesses, type assertion failures on non-interface types, and similar impossible operations.
+- **Explicit calls** — you call `panic(value)` with any value you like (commonly a string or an error).
+
+```go
+panic("something that should never happen")
+panic(fmt.Errorf("invariant violated: %v", state))
+```
+
+Both forms unwind the stack the same way. The only difference is what value `recover()` returns.
+
+## defer + recover
+
+`recover()` is a built-in function that intercepts a panic. It only works when called **inside a deferred function** — calling `recover()` outside a defer always returns `nil`.
+
+The canonical pattern:
+
+```go
+defer func() {
+    if r := recover(); r != nil {
+        // r is the value passed to panic()
+        fmt.Println("recovered:", r)
+    }
+}()
+```
+
+When the deferred function calls `recover()` and the goroutine is panicking, `recover()` stops the panic, returns the panic value, and allows the deferred function to finish normally. After the deferred function returns, the **function that panicked returns** — not to where `panic` was called, but to its own caller with zero values for any named return variables (unless you set them in the deferred function).
+
+A common use is converting a panic into a returned error at a package boundary:
+
+```go
+func safeCall(fn func()) (err error) {
+    defer func() {
+        if r := recover(); r != nil {
+            err = fmt.Errorf("recovered: %v", r)
+        }
+    }()
+    fn()
+    return nil
+}
+```
+
+## When to use panic
+
+Panic is not a general-purpose error-handling tool. The rule: use `panic` for **programmer errors and impossible states** — conditions that can only occur if the code itself is wrong, not because of bad input or environmental conditions.
+
+Appropriate uses:
+
+- **Violated invariants** — a state that should be structurally impossible has been reached, indicating a bug in the program.
+- **Package initialization failures** — `init()` cannot proceed because a required resource is missing or misconfigured. Panicking here is acceptable because the program cannot run correctly regardless.
+- **Unreachable branches** — marking a `default` case or exhaustive switch branch that should never execute (as documentation and a safety net).
+
+Not appropriate:
+
+- File not found, network timeout, invalid user input, missing database rows — these are expected runtime conditions that callers must handle. Return `(T, error)` for all of these.
+
+Library code has an extra obligation: a library should almost never panic on bad caller input. If an internal operation might panic (e.g., parsing with `regexp.MustCompile`), convert it to an error at the boundary before returning to the caller.
+
+## Panic vs error: a quick guide
+
+| Situation | Use |
+|-----------|-----|
+| Invalid user input | return error |
+| File not found | return error |
+| Nil pointer impossible by design | panic |
+| Uninitialized required dependency | panic in init |
+| Index out of range | panic (runtime) |
+
+export const panicRecoverCode = `package main
+
+import "fmt"
+
+func safeDivide(a, b int) (result int, err error) {
+\tdefer func() {
+\t\tif r := recover(); r != nil {
+\t\t\terr = fmt.Errorf("recovered panic: %v", r)
+\t\t}
+\t}()
+\tif b == 0 {
+\t\tpanic("division by zero")
+\t}
+\treturn a / b, nil
+}
+
+func mustPositive(n int) int {
+\tif n <= 0 {
+\t\tpanic(fmt.Sprintf("expected positive, got %d", n))
+\t}
+\treturn n
+}
+
+func main() {
+\tresult, err := safeDivide(10, 2)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Println("10 / 2 =", result)
+\t}
+
+\tresult, err = safeDivide(10, 0)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Println("10 / 0 =", result)
+\t}
+
+\tfmt.Println(mustPositive(5))
+}`;
+
+<Playground client:visible code={panicRecoverCode} />
+
+<Callout title="Do not use panic for ordinary errors">
+Panic is for programmer errors and impossible states — things that should never happen in a correctly written program. For any error a caller might reasonably expect (missing record, bad input, network failure), return `(T, error)`. Library code should especially avoid panicking on bad user input; convert panics to errors at package boundaries when needed.
+</Callout>
+
+export const quizPanicRecover = [
+  {
+    q: "What does recover() return if called outside a deferred function?",
+    options: [
+      "The last panic value",
+      "nil",
+      "An error",
+      "It panics again"
+    ],
+    answer: 1
+  },
+  {
+    q: "After recover() intercepts a panic inside a deferred function, what happens?",
+    options: [
+      "Execution resumes from the line that called panic()",
+      "The deferred function finishes, then the function that panicked returns normally",
+      "The program exits with status 1",
+      "The goroutine is killed silently"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which of these is an appropriate use of panic?",
+    options: [
+      "A user submits an invalid email address",
+      "A required configuration value is missing at program startup (init)",
+      "A database query returns no rows",
+      "A network request times out"
+    ],
+    answer: 1
+  },
+  {
+    q: "deferred functions run in what order relative to other defers?",
+    options: [
+      "FIFO — first deferred runs first",
+      "LIFO — last deferred runs first (stack order)",
+      "Random order",
+      "All defers run in parallel"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="errors-generics/panic-recover" questions={quizPanicRecover} />
+
+<ProgressTracker client:visible id="errors-generics/panic-recover" />

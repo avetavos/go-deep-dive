@@ -1,0 +1,178 @@
+---
+title: Panic และ Recover
+description: 'panic, defer + recover, เมื่อไหร่ที่ panic เหมาะสมเทียบกับการคืนค่า error'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## panic คืออะไร?
+
+**panic** หยุดการทำงานปกติของ goroutine ปัจจุบัน goroutine หยุดรันฟังก์ชันปัจจุบันทันที เริ่มคลาย call stack และรัน deferred functions ที่พบระหว่างทาง ถ้าไม่มีอะไรดักจับ panic โปรแกรมจะ crash พร้อมพิมพ์ stack trace
+
+panic เกิดขึ้นสองแบบ:
+
+- **Runtime errors** — Go runtime ทำให้เกิดอัตโนมัติสำหรับ nil pointer dereferences, การเข้าถึง slice/array นอก bounds, type assertion failures บน non-interface types และ operation ที่เป็นไปไม่ได้ที่คล้ายกัน
+- **การเรียกโดยตรง** — เรียก `panic(value)` ด้วยค่าใดก็ได้ (มักเป็น string หรือ error)
+
+```go
+panic("something that should never happen")
+panic(fmt.Errorf("invariant violated: %v", state))
+```
+
+ทั้งสองรูปแบบคลาย stack เหมือนกัน ความแตกต่างเดียวคือค่าที่ `recover()` คืนให้
+
+## defer + recover
+
+`recover()` เป็น built-in function ที่ดักจับ panic ทำงานได้เฉพาะเมื่อเรียก **ภายใน deferred function** เท่านั้น การเรียก `recover()` นอก defer จะคืน `nil` เสมอ
+
+รูปแบบ canonical:
+
+```go
+defer func() {
+    if r := recover(); r != nil {
+        // r is the value passed to panic()
+        fmt.Println("recovered:", r)
+    }
+}()
+```
+
+เมื่อ deferred function เรียก `recover()` และ goroutine กำลัง panic อยู่ `recover()` จะหยุด panic คืนค่า panic และให้ deferred function ทำงานต่อได้ปกติ หลังจาก deferred function คืนค่า **ฟังก์ชันที่ panic จะคืนค่า** ไม่ใช่กลับไปที่จุดที่เรียก `panic` แต่คืนค่าไปยัง caller ของมัน พร้อม zero values สำหรับ named return variables (ยกเว้นจะกำหนดใน deferred function)
+
+การใช้งานทั่วไปคือแปลง panic เป็น error ที่ package boundary:
+
+```go
+func safeCall(fn func()) (err error) {
+    defer func() {
+        if r := recover(); r != nil {
+            err = fmt.Errorf("recovered: %v", r)
+        }
+    }()
+    fn()
+    return nil
+}
+```
+
+## เมื่อไหร่ควรใช้ panic
+
+panic ไม่ใช่เครื่องมือ error handling ทั่วไป กฎ: ใช้ `panic` สำหรับ **programmer errors และสถานะที่เป็นไปไม่ได้** เงื่อนไขที่เกิดขึ้นได้เฉพาะเมื่อ code มีข้อผิดพลาด ไม่ใช่เพราะ input ไม่ดีหรือสภาวะแวดล้อม
+
+กรณีที่เหมาะสม:
+
+- **Invariant ถูกละเมิด** — state ที่ควรเป็นไปไม่ได้ตาม structure เกิดขึ้นแล้ว แสดงว่ามี bug ในโปรแกรม
+- **Package initialization failures** — `init()` ไม่สามารถดำเนินต่อได้เพราะ resource ที่จำเป็นขาดหายหรือตั้งค่าผิด การ panic ที่นี่ยอมรับได้เพราะโปรแกรมไม่สามารถทำงานได้ถูกต้องอยู่แล้ว
+- **Unreachable branches** — ทำเครื่องหมาย `default` case หรือ exhaustive switch branch ที่ไม่ควรรันเด็ดขาด (เป็นทั้ง documentation และ safety net)
+
+กรณีที่ไม่เหมาะสม:
+
+- ไม่พบไฟล์, network timeout, input ผู้ใช้ไม่ถูกต้อง, ไม่พบ database rows สิ่งเหล่านี้คือสภาวะ runtime ที่คาดเดาได้ซึ่ง caller ต้องจัดการ คืน `(T, error)` สำหรับทั้งหมดนี้
+
+library code มีข้อผูกพันเพิ่มเติม: library ไม่ควร panic กับ input ของ caller ที่ไม่ดี ถ้า operation ภายในอาจ panic (เช่น parsing ด้วย `regexp.MustCompile`) ให้แปลงเป็น error ที่ boundary ก่อนคืนให้ caller
+
+## Panic vs error: แนวทางเร็ว
+
+| สถานการณ์ | ใช้ |
+|-----------|-----|
+| Input ผู้ใช้ไม่ถูกต้อง | return error |
+| ไม่พบไฟล์ | return error |
+| Nil pointer ที่เป็นไปไม่ได้ตาม design | panic |
+| dependency ที่จำเป็นไม่ได้ถูก initialize | panic ใน init |
+| Index out of range | panic (runtime) |
+
+export const panicRecoverCode = `package main
+
+import "fmt"
+
+func safeDivide(a, b int) (result int, err error) {
+\tdefer func() {
+\t\tif r := recover(); r != nil {
+\t\t\terr = fmt.Errorf("recovered panic: %v", r)
+\t\t}
+\t}()
+\tif b == 0 {
+\t\tpanic("division by zero")
+\t}
+\treturn a / b, nil
+}
+
+func mustPositive(n int) int {
+\tif n <= 0 {
+\t\tpanic(fmt.Sprintf("expected positive, got %d", n))
+\t}
+\treturn n
+}
+
+func main() {
+\tresult, err := safeDivide(10, 2)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Println("10 / 2 =", result)
+\t}
+
+\tresult, err = safeDivide(10, 0)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Println("10 / 0 =", result)
+\t}
+
+\tfmt.Println(mustPositive(5))
+}`;
+
+<Playground client:visible code={panicRecoverCode} />
+
+<Callout title="อย่าใช้ panic สำหรับ error ทั่วไป">
+panic ไว้สำหรับ programmer errors และสถานะที่เป็นไปไม่ได้ — สิ่งที่ไม่ควรเกิดขึ้นในโปรแกรมที่เขียนถูกต้อง สำหรับ error ที่ caller อาจคาดเดาได้ (ไม่พบ record, input ไม่ถูกต้อง, network failure) ให้คืน `(T, error)` library code โดยเฉพาะควรหลีกเลี่ยงการ panic กับ input ผู้ใช้ที่ไม่ดี และควรแปลง panic เป็น error ที่ package boundary เมื่อจำเป็น
+</Callout>
+
+export const quizPanicRecover = [
+  {
+    q: "recover() คืนค่าอะไรถ้าเรียกนอก deferred function?",
+    options: [
+      "ค่า panic ล่าสุด",
+      "nil",
+      "error",
+      "เกิด panic ซ้ำ"
+    ],
+    answer: 1
+  },
+  {
+    q: "หลังจาก recover() ดักจับ panic ใน deferred function แล้ว จะเกิดอะไรขึ้น?",
+    options: [
+      "การทำงานกลับไปที่บรรทัดที่เรียก panic()",
+      "deferred function ทำงานจนจบ แล้วฟังก์ชันที่ panic คืนค่าปกติ",
+      "โปรแกรมออกด้วย status 1",
+      "goroutine ถูกยกเลิกเงียบ ๆ"
+    ],
+    answer: 1
+  },
+  {
+    q: "กรณีใดที่เหมาะสมในการใช้ panic?",
+    options: [
+      "ผู้ใช้ส่ง email address ไม่ถูกต้อง",
+      "ค่า configuration ที่จำเป็นขาดหายไปตอน startup (init)",
+      "database query ไม่พบ row",
+      "network request หมดเวลา"
+    ],
+    answer: 1
+  },
+  {
+    q: "deferred functions ทำงานตามลำดับใด?",
+    options: [
+      "FIFO — deferred แรกทำงานก่อน",
+      "LIFO — deferred ล่าสุดทำงานก่อน (stack order)",
+      "ลำดับสุ่ม",
+      "defer ทุกอันทำงานพร้อมกัน"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="errors-generics/panic-recover" questions={quizPanicRecover} />
+
+<ProgressTracker client:visible id="errors-generics/panic-recover" />

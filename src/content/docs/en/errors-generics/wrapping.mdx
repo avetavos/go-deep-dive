@@ -1,0 +1,215 @@
+---
+title: Wrapping Errors
+description: 'Wrapping with fmt.Errorf and %w, unwrapping with errors.Is and errors.As, and custom error types.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why wrap errors?
+
+When a function calls another and it fails, returning the raw error loses context. The caller sees "database error" but has no idea which operation triggered it, which request it belonged to, or at what layer it occurred. Wrapping adds a layer of context — what were you trying to do? — while preserving the original error so it can still be inspected.
+
+The idiomatic pattern in Go:
+
+```go
+if err != nil {
+    return fmt.Errorf("description: %w", err)
+}
+```
+
+The `%w` verb is the key. It wraps the original error inside the new one, keeping the full chain intact for callers who need to inspect it.
+
+## fmt.Errorf and %w
+
+`fmt.Errorf` creates a new error whose message incorporates other values — but how it incorporates an error argument depends on the verb you choose:
+
+- **`%v`** formats the error's message string and embeds it as plain text. The original error type is gone. The chain is cut.
+- **`%w`** records the original error by value inside the new error. The message still contains the original message, but the original is also accessible programmatically.
+
+```go
+base := errors.New("connection refused")
+
+// %v — message only, chain is severed
+e1 := fmt.Errorf("dial: %v", base)
+fmt.Println(errors.Is(e1, base)) // false
+
+// %w — wraps, chain is preserved
+e2 := fmt.Errorf("dial: %w", base)
+fmt.Println(errors.Is(e2, base)) // true
+```
+
+Use `%w` when you want callers upstream to be able to identify or extract the original error. Use `%v` only when you intentionally want to discard the error type — for example, when logging and the chain is irrelevant.
+
+## errors.Is — checking identity through a chain
+
+`errors.Is(err, target)` walks the entire unwrap chain of `err` and returns `true` if any error in the chain matches `target`. Matching is done by identity (`==`) by default, not by message string.
+
+```go
+var ErrNotFound = errors.New("not found")
+
+err := fmt.Errorf("getUser: %w", fmt.Errorf("queryDB: %w", ErrNotFound))
+
+fmt.Println(errors.Is(err, ErrNotFound)) // true — found deep in the chain
+```
+
+This works regardless of how deeply the target is nested. You define a sentinel error once (a package-level `var`) and check for it anywhere in the call stack.
+
+## errors.As — extracting a type from the chain
+
+`errors.As(err, &target)` also walks the chain, but instead of checking identity, it checks type. If any error in the chain can be assigned to `target`'s type, it performs the assignment and returns `true`.
+
+```go
+var ve *ValidationError
+if errors.As(err, &ve) {
+    fmt.Println(ve.Field) // access fields on the concrete type
+}
+```
+
+Use `errors.As` when you have a custom error type that carries extra information — field names, HTTP status codes, retry hints — and you need to access those fields, not just check that the error exists.
+
+## Custom error types
+
+Any struct that implements `Error() string` satisfies the `error` interface. Custom types let you carry structured context alongside the message:
+
+```go
+type ValidationError struct {
+    Field   string
+    Message string
+}
+
+func (e *ValidationError) Error() string {
+    return fmt.Sprintf("validation: field %q %s", e.Field, e.Message)
+}
+```
+
+To make a custom error type part of a wrapping chain, implement `Unwrap() error`:
+
+```go
+type AppError struct {
+    Code int
+    Err  error
+}
+
+func (e *AppError) Error() string  { return fmt.Sprintf("code %d: %v", e.Code, e.Err) }
+func (e *AppError) Unwrap() error  { return e.Err }
+```
+
+With `Unwrap` in place, `errors.Is` and `errors.As` can see through `AppError` to reach whatever it wraps.
+
+export const wrappingCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+)
+
+var ErrDatabase = errors.New("database error")
+
+type ValidationError struct {
+\tField   string
+\tMessage string
+}
+
+func (e *ValidationError) Error() string {
+\treturn fmt.Sprintf("validation: field %q %s", e.Field, e.Message)
+}
+
+func queryDB(id int) (string, error) {
+\tif id < 0 {
+\t\treturn "", ErrDatabase
+\t}
+\tif id == 0 {
+\t\treturn "", &ValidationError{Field: "id", Message: "must be positive"}
+\t}
+\treturn "Alice", nil
+}
+
+func getUser(id int) (string, error) {
+\tname, err := queryDB(id)
+\tif err != nil {
+\t\treturn "", fmt.Errorf("getUser %d: %w", id, err)
+\t}
+\treturn name, nil
+}
+
+func main() {
+\t_, err := getUser(-1)
+\tif err != nil {
+\t\tfmt.Println(err)
+\t\tfmt.Println("is ErrDatabase:", errors.Is(err, ErrDatabase))
+\t}
+
+\t_, err = getUser(0)
+\tif err != nil {
+\t\tfmt.Println(err)
+\t\tvar ve *ValidationError
+\t\tif errors.As(err, &ve) {
+\t\t\tfmt.Printf("field=%q msg=%q\\n", ve.Field, ve.Message)
+\t\t}
+\t}
+
+\tname, err := getUser(1)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\treturn
+\t}
+\tfmt.Println("name:", name)
+}`;
+
+<Playground client:visible code={wrappingCode} />
+
+<Callout title="Wrap to add context; use errors.Is/As to inspect">
+Use `%w` (not `%v`) when you want callers to be able to introspect the error chain. `errors.Is` checks identity (sentinel errors). `errors.As` checks type (structured errors with fields). Use `%v` only when you are discarding the original error type on purpose.
+</Callout>
+
+export const quizWrapping = [
+  {
+    q: "What is the difference between %v and %w in fmt.Errorf?",
+    options: [
+      "%v wraps the error (preserves type); %w embeds as a string",
+      "%w wraps the error (preserves type for unwrapping); %v embeds as a string only",
+      "They are identical",
+      "%w is only for sentinel errors"
+    ],
+    answer: 1
+  },
+  {
+    q: "errors.Is(err, ErrNotFound) returns true when:",
+    options: [
+      "err == ErrNotFound exactly",
+      "err's message string contains ErrNotFound.Error()",
+      "Any error in err's unwrap chain matches ErrNotFound",
+      "ErrNotFound is nil"
+    ],
+    answer: 2
+  },
+  {
+    q: "errors.As(err, &target) does what?",
+    options: [
+      "Compares err to target by value",
+      "Walks the error chain and assigns the first error matching target's type",
+      "Converts err to a string",
+      "Panics if no match is found"
+    ],
+    answer: 1
+  },
+  {
+    q: "To make a custom error type unwrappable, you implement:",
+    options: [
+      "Unwrap() error on the type",
+      "Wrap() error on the type",
+      "errors.Register(myErr)",
+      "fmt.Stringer interface"
+    ],
+    answer: 0
+  }
+];
+
+<Quiz client:visible id="errors-generics/wrapping" questions={quizWrapping} />
+
+<ProgressTracker client:visible id="errors-generics/wrapping" />

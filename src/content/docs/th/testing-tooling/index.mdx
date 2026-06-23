@@ -1,12 +1,133 @@
 ---
 title: 'Testing & Tooling'
-description: 'go test, table-driven tests, benchmarks, race detector, go vet, และ toolchain ของ Go'
+description: 'ภาพรวมของ testing package ในตัวของ Go และ go toolchain — สิ่งที่โมดูลนี้ครอบคลุมพร้อม demo แบบ runnable ของ pure function ที่เราจะทดสอบในบทเรียนถัดไป'
 sidebar:
   order: 1
 ---
 
-## Testing และ Tooling ใน Go
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-Go มี testing framework ในตัวที่ไม่ต้องพึ่ง third-party libraries โมดูลนี้สอนรูปแบบ table-driven tests ซึ่งเป็น idiomatic ของ Go, การเขียน benchmarks ด้วย `testing.B`, การใช้ race detector (`go test -race`) เพื่อตรวจจับ data races, และเครื่องมือ toolchain สำคัญ เช่น `go vet`, `gofmt`, และ `staticcheck` สำหรับรักษาคุณภาพโค้ด
+## เรื่องราวของ testing ใน Go
 
-> โมดูลนี้กำลังจะมาเร็ว ๆ นี้ คอยติดตามบทเรียนเกี่ยวกับ go test, table-driven tests, benchmarks, race detector, และ go vet
+ภาษาส่วนใหญ่ต้องการ testing framework จาก third-party แต่ Go มีทุกอย่างที่จำเป็นอยู่ใน standard library แล้ว package `testing` มี `*testing.T` สำหรับ unit tests, `*testing.B` สำหรับ benchmarks, และ `*testing.F` สำหรับ fuzzing — ทั้งหมดขับเคลื่อนด้วยคำสั่งเดียว: `go test`
+
+`go` toolchain ที่ติดตั้งมาพร้อมกับ Go ทุกเวอร์ชันยังรวมถึง:
+
+| เครื่องมือ | วัตถุประสงค์ |
+|------|---------|
+| `go test` | รัน tests และ benchmarks |
+| `go build` | compile packages และ binary |
+| `go run` | compile และรันในขั้นตอนเดียว |
+| `go fmt` | จัดรูปแบบ source code (เรียกใช้ `gofmt`) |
+| `go vet` | static analysis สำหรับข้อผิดพลาดทั่วไป |
+| `go mod` | จัดการ module และ dependency |
+| `go doc` | เรียกดู package documentation |
+
+## สิ่งที่โมดูลนี้ครอบคลุม
+
+1. **go-test** — การเขียนไฟล์ `_test.go`, `func TestXxx(t *testing.T)`, และ table-driven tests ด้วย `t.Run`
+2. **benchmarks** — การวัด performance ด้วย `func BenchmarkXxx(b *testing.B)` และการอ่านผลลัพธ์จาก `-benchmem`
+3. **modules** — การจัดการ dependency ด้วย `go mod init`, `go.mod`, `go.sum`, และ `go get`
+4. **go-tooling** — คำสั่งประจำวัน: `go run`, `go build`, `go fmt`, `go vet`, และ `go doc`
+
+## ฟังก์ชันที่คุ้มค่าแก่การทดสอบ
+
+วิธีที่ดีที่สุดในการทำความเข้าใจ testing tools ของ Go คือเริ่มต้นด้วย pure function — ฟังก์ชันที่ไม่มี side effect ไม่มี I/O มีแค่ input และ output Playground ด้านล่างรัน `Fibonacci` และ `IsPrime` จาก `main` ในบทเรียนถัดไปคุณจะเขียนไฟล์ `_test.go` สำหรับฟังก์ชันแบบนี้โดยตรง
+
+export const indexCode = `package main
+
+import "fmt"
+
+// Fibonacci returns the nth Fibonacci number (0-indexed).
+// fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, ...
+func Fibonacci(n int) int {
+\tif n <= 1 {
+\t\treturn n
+\t}
+\treturn Fibonacci(n-1) + Fibonacci(n-2)
+}
+
+// IsPrime reports whether n is a prime number.
+func IsPrime(n int) bool {
+\tif n < 2 {
+\t\treturn false
+\t}
+\tfor i := 2; i*i <= n; i++ {
+\t\tif n%i == 0 {
+\t\t\treturn false
+\t\t}
+\t}
+\treturn true
+}
+
+func main() {
+\t// Print the first 10 Fibonacci numbers
+\tfmt.Println("Fibonacci sequence:")
+\tfor i := 0; i < 10; i++ {
+\t\tfmt.Printf("  fib(%d) = %d\\n", i, Fibonacci(i))
+\t}
+
+\t// Find primes up to 30
+\tfmt.Println("Primes up to 30:")
+\tfor n := 2; n <= 30; n++ {
+\t\tif IsPrime(n) {
+\t\t\tfmt.Printf("  %d\\n", n)
+\t\t}
+\t}
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="ทำไม pure function จึงเป็นจุดเริ่มต้นที่ดีที่สุดสำหรับ testing">
+Pure function — ฟังก์ชันที่ขึ้นอยู่กับ argument เท่านั้นและคืนค่าเดิมเสมอสำหรับ input เดิม — คือจุดเริ่มต้นที่เหมาะที่สุดสำหรับ testing ไม่มี database ที่ต้อง mock ไม่มี HTTP server ที่ต้องตั้งค่า และไม่มี shared state ที่ต้อง reset ระหว่าง runs `Fibonacci` และ `IsPrime` ทั้งคู่มีคุณสมบัตินี้: เรียกพันครั้งด้วย input เดิมก็ได้ผลลัพธ์เดิม บทเรียนถัดไปแสดงให้เห็นว่า `testing` package ของ Go ทำให้การเขียน test เหล่านี้แทบไม่ต้องใช้ความพยายามเลย
+</Callout>
+
+export const quizIndex = [
+  {
+    q: "คำสั่งใดรัน tests ทั้งหมดใน module ปัจจุบันและทุก sub-package?",
+    options: [
+      "go test",
+      "go test ./...",
+      "go run test",
+      "go check ./..."
+    ],
+    answer: 1
+  },
+  {
+    q: "package ใดใน Go standard library ที่ให้ *testing.T และ *testing.B?",
+    options: [
+      "testing/unit",
+      "test",
+      "testing",
+      "stdlib/test"
+    ],
+    answer: 2
+  },
+  {
+    q: "อะไรทำให้ฟังก์ชันเป็น candidate ที่ดีสำหรับ unit test แรก?",
+    options: [
+      "มันเปิด database connection",
+      "มันเป็น pure — ขึ้นอยู่กับ argument เท่านั้นโดยไม่มี side effect",
+      "มันใช้ goroutines",
+      "มันเขียนลงไฟล์"
+    ],
+    answer: 1
+  },
+  {
+    q: "เครื่องมือใดจัดรูปแบบ Go source code ตาม canonical style?",
+    options: [
+      "go lint",
+      "go check",
+      "go fmt",
+      "go style"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="testing-tooling/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="testing-tooling/index" />

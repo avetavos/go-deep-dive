@@ -1,0 +1,190 @@
+---
+title: fmt, strings และ strconv
+description: 'Format verbs (%v %+v %d %s %q %T), strings package (Contains/Split/Join/ReplaceAll/Builder) และ strconv (Atoi/Itoa/ParseFloat)'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## fmt — Formatted I/O
+
+Package `fmt` คือจุดเริ่มต้นของ output เกือบทั้งหมดใน Go มีสามฟังก์ชันหลักที่ครอบคลุมกรณีการใช้งานส่วนใหญ่:
+
+- `fmt.Println(args...)` — พิมพ์แต่ละ argument คั่นด้วยช่องว่าง แล้วขึ้นบรรทัดใหม่
+- `fmt.Printf(format, args...)` — พิมพ์โดยใช้ format string ที่มี verb
+- `fmt.Sprintf(format, args...)` — คืนค่า string ที่ฟอร์แมตแล้วแทนที่จะพิมพ์
+
+### Format verbs
+
+| Verb | ความหมาย |
+|------|---------|
+| `%v` | การแสดงผลแบบ default |
+| `%+v` | Struct พร้อมชื่อ field |
+| `%#v` | การแสดงผลแบบ Go syntax |
+| `%T` | Type ของค่า |
+| `%d` | เลขฐานสิบ (decimal integer) |
+| `%s` | String (ไม่มีเครื่องหมายคำพูด) |
+| `%q` | String ในเครื่องหมายคำพูดคู่พร้อม Go escaping |
+| `%f` | ทศนิยม (floating-point decimal) |
+
+```go
+type Person struct { Name string; Age int }
+p := Person{"Alice", 30}
+fmt.Printf("%v\n",  p)   // {Alice 30}
+fmt.Printf("%+v\n", p)   // {Name:Alice Age:30}
+fmt.Printf("%#v\n", p)   // main.Person{Name:"Alice", Age:30}
+fmt.Printf("%T\n",  p)   // main.Person
+```
+
+## strings — การจัดการข้อความ
+
+Package `strings` ให้บริการฟังก์ชันสำหรับการค้นหา แยก รวม และแปลง string ใน Go นั้น string เป็น immutable UTF-8 byte sequence ดังนั้นฟังก์ชันเหล่านี้จะคืนค่า string ใหม่แทนที่จะแก้ไข in-place
+
+```go
+s := "hello, world"
+strings.Contains(s, "world")         // true
+strings.HasPrefix(s, "hello")        // true
+strings.Split(s, ", ")               // ["hello" "world"]
+strings.Join([]string{"a","b"}, "-") // "a-b"
+strings.ReplaceAll(s, "l", "L")      // "heLLo, worLd"
+strings.ToUpper(s)                   // "HELLO, WORLD"
+strings.TrimSpace("  hi  ")          // "hi"
+```
+
+### strings.Builder — การต่อ string อย่างมีประสิทธิภาพ
+
+เมื่อสร้าง string จากหลายส่วนในลูป ให้ใช้ `strings.Builder` แทน `+=` เพราะ `+=` จะสร้าง string ใหม่ทุกครั้งที่วนซ้ำ ในขณะที่ `Builder` เขียนลงใน buffer ที่ขยายตัวได้และ allocate string สุดท้ายเพียงครั้งเดียว
+
+```go
+var b strings.Builder
+for i := 0; i < 5; i++ {
+    fmt.Fprintf(&b, "item%d ", i)
+}
+result := strings.TrimSpace(b.String()) // "item0 item1 item2 item3 item4"
+```
+
+## strconv — การแปลงระหว่าง string และตัวเลข
+
+`strconv` แปลงระหว่าง string และ numeric type ฟังก์ชันที่พบบ่อยที่สุด:
+
+```go
+n, err   := strconv.Atoi("42")          // string → int
+s        := strconv.Itoa(42)            // int → string
+f, err   := strconv.ParseFloat("3.14", 64) // string → float64
+b, err   := strconv.ParseBool("true")   // string → bool
+```
+
+`Atoi` และ `ParseFloat` คืนค่า `(value, error)` เพราะ input อาจไม่ใช่ตัวเลขที่ถูกต้อง ควรตรวจสอบ error ก่อนใช้ค่าเสมอ
+
+export const fmtStringsCode = `package main
+
+import (
+\t"fmt"
+\t"strconv"
+\t"strings"
+)
+
+type Person struct {
+\tName string
+\tAge  int
+}
+
+func main() {
+\t// fmt verbs
+\tp := Person{Name: "Alice", Age: 30}
+\tfmt.Printf("%v\\n", p)
+\tfmt.Printf("%+v\\n", p)
+\tfmt.Printf("%#v\\n", p)
+\tfmt.Printf("%T\\n", p)
+\tfmt.Printf("%d %s %q\\n", 42, "hello", "world")
+
+\t// Sprintf builds a string
+\ts := fmt.Sprintf("Name: %s, Age: %d", p.Name, p.Age)
+\tfmt.Println(s)
+
+\t// strings package
+\ttext := "  Go is great  "
+\tfmt.Println(strings.TrimSpace(text))
+\tfmt.Println(strings.Contains(text, "great"))
+\tfmt.Println(strings.ToUpper(strings.TrimSpace(text)))
+
+\twords := strings.Split("one,two,three", ",")
+\tfmt.Println(words)
+\tfmt.Println(strings.Join(words, " | "))
+\tfmt.Println(strings.ReplaceAll("aabbcc", "b", "x"))
+
+\t// strings.Builder — efficient concatenation
+\tvar b strings.Builder
+\tfor i := 0; i < 3; i++ {
+\t\tfmt.Fprintf(&b, "item%d ", i)
+\t}
+\tfmt.Println(strings.TrimSpace(b.String()))
+
+\t// strconv
+\tn, err := strconv.Atoi("123")
+\tif err == nil {
+\t\tfmt.Println(n + 1)
+\t}
+\tfmt.Println(strconv.Itoa(456))
+\tf, err := strconv.ParseFloat("3.14", 64)
+\tif err == nil {
+\t\tfmt.Printf("%.2f\\n", f)
+\t}
+}`;
+
+<Playground client:visible code={fmtStringsCode} />
+
+<Callout title="%+v และ %#v คือเพื่อนที่ดีในการ debug">
+เมื่อไม่แน่ใจว่ามีอะไรอยู่ใน struct ให้ใช้ `%+v` ก่อน — มันพิมพ์ชื่อ field พร้อมค่าเพื่อให้เห็นทันทีว่า field ไหนเก็บข้อมูลอะไร ใช้ `%#v` เมื่อต้องการ Go literal ที่ copy-paste ได้ (มีประโยชน์สำหรับเขียน test fixture) สำหรับ production logs ควรใช้ structured logging เช่น `log/slog` แทน `fmt.Printf` แต่ในการพัฒนาและทดสอบ `%+v` ช่วยประหยัดเวลาได้มาก
+</Callout>
+
+export const quizFmtStrings = [
+  {
+    q: "Format verb ใดที่พิมพ์ struct พร้อมชื่อ field?",
+    options: [
+      "%v",
+      "%s",
+      "%+v",
+      "%T"
+    ],
+    answer: 2
+  },
+  {
+    q: "strings.ReplaceAll(\"aabbcc\", \"b\", \"x\") คืนค่าอะไร?",
+    options: [
+      "\"aaxbcc\"",
+      "\"aaxxcc\"",
+      "\"aabbxx\"",
+      "\"xxbbcc\""
+    ],
+    answer: 1
+  },
+  {
+    q: "ทำไม strings.Builder จึงเป็นที่นิยมกว่า += ในการสร้าง string ในลูป?",
+    options: [
+      "Builder เป็นวิธีเดียวในการต่อ string ใน Go",
+      "Builder หลีกเลี่ยงการ allocate string ใหม่ทุกครั้งที่ต่อ",
+      "Builder มี thread safety ในตัวโดยอัตโนมัติ",
+      "+= จะ panic เมื่อ string ยาวกว่า 1024 bytes"
+    ],
+    answer: 1
+  },
+  {
+    q: "strconv.Atoi(\"42\") คืนค่าประเภทใด?",
+    options: [
+      "string, error",
+      "float64, error",
+      "int, error",
+      "int64, error"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="stdlib/fmt-strings" questions={quizFmtStrings} />
+
+<ProgressTracker client:visible id="stdlib/fmt-strings" />

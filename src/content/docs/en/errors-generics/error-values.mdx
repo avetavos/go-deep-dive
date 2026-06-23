@@ -1,0 +1,176 @@
+---
+title: Error Values
+description: 'The error interface, returning (T, error), the if err != nil idiom, errors.New, fmt.Errorf, and sentinel errors.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The error interface
+
+Go's `error` type is the simplest interface in the standard library:
+
+```go
+type error interface {
+    Error() string
+}
+```
+
+Any type that implements a single method — `Error() string` — satisfies this interface and can be used wherever an `error` is expected. The `nil` value is a valid `error` and universally means "no error occurred." There is nothing special about the `error` type at the language level; it is an ordinary interface that happens to be predeclared.
+
+## Returning errors from functions
+
+The idiomatic Go convention is to return `(T, error)` as the last two return values from any function that can fail. The caller always receives both and must inspect the error before trusting the result:
+
+```go
+result, err := riskyOperation()
+if err != nil {
+    // do not use result — it is meaningless
+    return fmt.Errorf("riskyOperation: %v", err)
+}
+// err is nil: result is valid
+```
+
+Returning the error to the caller is the norm. Swallowing errors silently — ignoring `err` with `_` — should be deliberate and rare, reserved for cases where failure is genuinely irrelevant (e.g., closing a read-only file after all reads succeeded).
+
+## Creating errors
+
+Go provides two standard ways to create a new error value:
+
+**`errors.New`** creates an error from a static string. Use it when the message never changes:
+
+```go
+var errTimeout = errors.New("operation timed out")
+```
+
+**`fmt.Errorf`** creates a formatted error message. Use it when you need to include runtime values like names, keys, or counts:
+
+```go
+err := fmt.Errorf("user %d not found in database %q", userID, dbName)
+```
+
+Note: `%v` formats the value inline and does not attach wrapping metadata. Wrapping — using `%w` to chain errors so `errors.Is` and `errors.As` can unwrap the chain — is covered in the next lesson.
+
+## Sentinel errors
+
+A **sentinel error** is a package-level variable that represents a specific, well-known failure condition:
+
+```go
+var ErrNotFound  = errors.New("not found")
+var ErrPermission = errors.New("permission denied")
+```
+
+Declaring sentinels at package scope lets callers test for them by identity. Use `errors.Is` rather than `==` so the check still works when the error has been wrapped with additional context:
+
+```go
+if errors.Is(err, ErrNotFound) {
+    // handle the not-found case
+}
+```
+
+Sentinels work best for conditions that callers need to branch on. Avoid creating a sentinel for every possible failure — reserve them for errors that callers genuinely handle differently from the generic failure case.
+
+## The if err != nil pattern
+
+The explicit `if err != nil` check may feel repetitive at first. It is intentional. Go treats every failure as a decision point: you must choose to propagate the error, wrap it with context, retry, fall back to a default, or log and continue. The language does not make that choice for you.
+
+This discipline produces code where every error-producing call is visible at the callsite. When you read a Go function, you can see exactly which operations can fail and what the caller does about each one — no implicit propagation, no invisible exception paths.
+
+export const errorValuesCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+)
+
+var ErrNotFound = errors.New("not found")
+var ErrPermission = errors.New("permission denied")
+
+func lookup(key string) (int, error) {
+\tswitch key {
+\tcase "age":
+\t\treturn 30, nil
+\tcase "secret":
+\t\treturn 0, ErrPermission
+\tdefault:
+\t\treturn 0, fmt.Errorf("lookup %q: %w", key, ErrNotFound)
+\t}
+}
+
+func main() {
+\tv, err := lookup("age")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\treturn
+\t}
+\tfmt.Println("age:", v)
+
+\t_, err = lookup("x")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\tfmt.Println("is ErrNotFound:", errors.Is(err, ErrNotFound))
+\t}
+
+\t_, err = lookup("secret")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\tfmt.Println("is ErrPermission:", errors.Is(err, ErrPermission))
+\t}
+}`;
+
+<Playground client:visible code={errorValuesCode} />
+
+<Callout title="Errors are ordinary values">
+In Go, an error is just a value like any other. There is no special syntax to throw or catch it. Returning `nil` means success; returning a non-nil error means failure. This makes error handling explicit, composable, and easy to reason about — every function call site is self-documenting about what can go wrong.
+</Callout>
+
+export const quizErrorValues = [
+  {
+    q: "What does returning nil as the error value mean?",
+    options: [
+      "The function panicked and recovered",
+      "No error occurred — the call succeeded",
+      "The error was ignored",
+      "The caller should retry"
+    ],
+    answer: 1
+  },
+  {
+    q: "Which function creates a new error value from a static string?",
+    options: [
+      "fmt.Errorf",
+      "errors.New",
+      "log.Fatal",
+      "panic"
+    ],
+    answer: 1
+  },
+  {
+    q: "A sentinel error is declared with:",
+    options: [
+      "const ErrX = \"x\"",
+      "var ErrX = errors.New(\"x\")",
+      "type ErrX struct{}",
+      "func ErrX() error"
+    ],
+    answer: 1
+  },
+  {
+    q: "When should you use fmt.Errorf instead of errors.New?",
+    options: [
+      "When you want to add dynamic context (values, names) to the message",
+      "When you want to wrap an existing error with %w",
+      "When you need a global sentinel",
+      "Both A and B"
+    ],
+    answer: 3
+  }
+];
+
+<Quiz client:visible id="errors-generics/error-values" questions={quizErrorValues} />
+
+<ProgressTracker client:visible id="errors-generics/error-values" />

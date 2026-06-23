@@ -1,0 +1,148 @@
+---
+title: Go Modules
+description: 'go mod init, go.mod, go.sum, adding dependencies with go get, go mod tidy, and semantic import versioning.'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a Go module?
+
+A **module** is a collection of Go packages that are versioned together and distributed as a unit. Every modern Go project starts with a module. The module system replaced the old `GOPATH` workflow in Go 1.11 and became the default in Go 1.16.
+
+> Playground note: `go mod` commands require the `go` binary and a file system — they cannot run in the in-browser runner. Follow the steps below in your terminal.
+
+## Initialising a module
+
+```bash
+mkdir myapp && cd myapp
+go mod init github.com/yourname/myapp
+```
+
+This creates a `go.mod` file — the module's manifest:
+
+```go
+module github.com/yourname/myapp
+
+go 1.22
+```
+
+The module path (`github.com/yourname/myapp`) is both the import path prefix for your own packages and the identifier other modules use when they depend on yours. It does not have to be a real URL during development, but it must be unique if you publish to the Go module proxy.
+
+## go.mod and go.sum
+
+After adding a dependency you will find two files in the root of your module:
+
+**go.mod** — declares the module path, the minimum Go version, and all direct and indirect dependencies:
+
+```
+module github.com/yourname/myapp
+
+go 1.22
+
+require (
+    github.com/go-chi/chi/v5 v5.1.0
+    golang.org/x/text v0.14.0 // indirect
+)
+```
+
+**go.sum** — a cryptographic checksum ledger. Every dependency's zip archive and `go.mod` are hashed here. The Go toolchain verifies these hashes on every build to guarantee reproducibility and protect against supply-chain attacks. Commit both files to version control.
+
+## Adding a dependency
+
+```bash
+# Add the latest version of a module
+go get github.com/go-chi/chi/v5
+
+# Add a specific version
+go get github.com/go-chi/chi/v5@v5.1.0
+
+# Upgrade a dependency to its latest patch/minor release
+go get -u github.com/go-chi/chi/v5
+```
+
+After `go get`, your source code can import the package:
+
+```go
+import "github.com/go-chi/chi/v5"
+```
+
+## go mod tidy
+
+Over time your code and your dependencies can drift apart — you might delete an import or add one without running `go get`. `go mod tidy` fixes both:
+
+```bash
+go mod tidy
+```
+
+It adds any missing `require` lines, removes `require` lines for packages no longer imported, and updates `go.sum` to match. Run it before every commit.
+
+## Semantic import versioning
+
+Go enforces a rule called **semantic import versioning**: if a module releases a v2 or higher, the import path must include the major version suffix.
+
+```bash
+# v1 — no suffix needed
+go get github.com/foo/bar@v1.2.3
+# import "github.com/foo/bar"
+
+# v2+ — /v2 suffix is part of the import path
+go get github.com/foo/bar/v2@v2.0.0
+# import "github.com/foo/bar/v2"
+```
+
+This means two major versions of the same module can coexist in the same binary without conflict. The import path change is intentional: a v2 API is allowed to be incompatible with v1.
+
+<Callout title="A module is a versioned collection of packages">
+Think of a module as the unit of distribution and versioning, and a package as the unit of compilation. One module contains many packages. When you run `go get`, you are adding a module (and all its packages become available). When you write `import`, you are importing a specific package path within a module. The two concepts are closely related but distinct.
+</Callout>
+
+export const quizModules = [
+  {
+    q: "Which command initialises a new Go module in the current directory?",
+    options: [
+      "go init",
+      "go new module",
+      "go mod init <module-path>",
+      "go create module"
+    ],
+    answer: 2
+  },
+  {
+    q: "What is the purpose of go.sum?",
+    options: [
+      "It lists only the direct dependencies of the module",
+      "It stores cryptographic checksums to guarantee reproducibility and detect tampering",
+      "It is an optional cache file that can be deleted safely",
+      "It replaces go.mod in Go 1.22+"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does go mod tidy do?",
+    options: [
+      "Upgrades all dependencies to their latest versions",
+      "Removes the go.sum file and regenerates it",
+      "Adds missing and removes unused require entries, then updates go.sum",
+      "Formats the go.mod file"
+    ],
+    answer: 2
+  },
+  {
+    q: "A module releases v2.0.0 with breaking changes. How must the import path change?",
+    options: [
+      "It stays the same — the version tag in go.mod handles it",
+      "A /v2 suffix is appended to the import path",
+      "The module must be renamed entirely",
+      "You add a replace directive in go.mod"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="testing-tooling/modules" questions={quizModules} />
+
+<ProgressTracker client:visible id="testing-tooling/modules" />
