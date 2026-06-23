@@ -1,6 +1,6 @@
-# Go for TypeScript Developers
+# Go Deep Dive
 
-A bilingual, interactive course that teaches Go to TypeScript developers using a comparison-first approach. Every concept is introduced from the TypeScript perspective first, then mapped to the Go equivalent. All runnable examples execute entirely in the browser — no backend or local Go installation required for reading the course.
+A bilingual (EN / TH), interactive course that teaches the Go language in depth — on its own terms, using CSP and Go's own idioms. All runnable examples execute entirely in the browser; no backend or local Go installation is required for reading the course.
 
 ## Tech Stack
 
@@ -36,99 +36,111 @@ Lessons live at:
 
 ```
 src/content/docs/
-  en/              # English content — served at /en/...
-    intro/
-    go-101/
-    go-only/
-    concurrency/
-    api-echo/
-    advanced/
-    tooling/
-    index.mdx      # EN landing page (splash template)
-  th/              # Thai content — served at /th/...
+  en/                        # English content — served at /en/...
+    index.mdx                # EN landing page (splash template)
+    basics/
+    types-data/
+    methods-interfaces/
+    concurrency/             # Complete — 7 lessons
+    errors-generics/
+    stdlib/
+    testing-tooling/
+  th/                        # Thai content — served at /th/...
+    index.mdx                # TH landing page (splash template)
     (same module directories)
-    index.mdx      # TH landing page (splash template)
 ```
 
 ### The 7 Modules
 
-| Directory | Module | Topics |
-| --------- | ------ | ------ |
-| `intro` | Introduction & Setup | Why Go for TS devs, mental-model shifts, toolchain setup |
-| `go-101` | Go 101 — Fundamentals | Variables, functions, structs, interfaces, errors, packages |
-| `go-only` | Go You Won't Find in TypeScript | Pointers, value semantics, defer/panic/recover, embedding |
-| `concurrency` | Concurrency | Goroutines, channels, select, context, sync primitives |
-| `api-echo` | Building an API with Echo | Routing, middleware, binding, errors, testing (Express/Nest ↔ Echo) |
-| `advanced` | Advanced Go | Generics, reflection, table-driven tests, benchmarks, pprof |
-| `tooling` | Tooling, Testing & Deployment | gofmt, go vet, golint, go test, Docker multi-stage, cross-compile, CI |
+| Directory | Module | Topics | Status |
+| --------- | ------ | ------ | ------ |
+| `basics` | Basics & Syntax | Variables, constants, types, control flow, functions, packages | Coming soon |
+| `types-data` | Types & Data | Arrays, slices, maps, structs, pointers | Coming soon |
+| `methods-interfaces` | Methods & Interfaces | Methods, interface design, composition, embedding | Coming soon |
+| `concurrency` | Concurrency | Goroutines, channels, select, sync primitives, context, patterns | **Complete** |
+| `errors-generics` | Errors & Generics | Error wrapping, custom errors, errors.Is/As, generics | Coming soon |
+| `stdlib` | Standard Library | fmt, strings, io, net/http, encoding/json, time | Coming soon |
+| `testing-tooling` | Testing & Tooling | go test, table-driven tests, benchmarks, race detector, go vet | Coming soon |
 
 ### Lesson File IDs
 
-Content IDs follow the `<module>/<slug>` convention, e.g. `go-101/variables`. The Starlight sidebar uses `autogenerate: { directory }` per locale root, so new `.mdx` files are picked up automatically.
+Content IDs follow the `<module>/<slug>` convention, e.g. `concurrency/goroutines`. The Starlight sidebar uses `autogenerate: { directory }` per locale root, so new `.mdx` files are picked up automatically. Set `sidebar: order: N` in each lesson's frontmatter to control the ordering within a module (Starlight defaults to alphabetical otherwise).
 
-### 7-Section Lesson Template
+### Lesson Template
 
-Each lesson MDX file follows this structure:
+Each lesson MDX file follows this structure (see any file in `src/content/docs/en/concurrency/` as the golden template):
 
-1. **Intro** — one-paragraph framing of the concept
-2. **Concept** — prose explanation
-3. **TsGo** — `<TsGo ts={...} go={...} />` side-by-side comparison component
-4. **Playground** — `<Playground code={...} />` runnable Go snippet (omitted for setup/toolchain lessons)
-5. **GoOnly** — `<GoOnly>` callout for Go-specific nuances
-6. **Quiz** — `<Quiz questions={...} />` comprehension check
-7. **ProgressTracker** — `<ProgressTracker id="module/slug" />` (always last)
+1. **Frontmatter** — `title`, `description`, `sidebar: order: N`
+2. **Imports** — `Playground`, `Callout`, `Quiz`, `ProgressTracker` (relative, four levels up)
+3. **Concept intro** — one-paragraph framing
+4. **Concept prose** — explanation with inline code spans and tables
+5. **Hoisted `export const ...Code`** + `<Playground client:visible code={...} />` — complete runnable Go program
+6. **`<Callout title="...">`** — key point or gotcha
+7. **Hoisted `export const quiz...`** + `<Quiz client:visible id="module/slug" questions={...} />`
+8. **`<ProgressTracker client:visible id="module/slug" />`** — always last
 
-Code snippets are hoisted into `export const` template literals and passed to the
-components by reference (e.g. `export const fooCode = \`...\`` then `<Playground code={fooCode} />`).
+Code snippets are hoisted into `export const` template literals and passed to components by reference:
 
-> **⚠️ Escaping gotcha:** inside those backtick template literals, escape
-> sequences in your Go/TS code **must be double-backslashed** — write `\\n`, `\\t`,
-> etc. A single `\n` is consumed by JS template-literal parsing and becomes a real
-> newline *before* the code reaches the renderer, which breaks Go string literals
-> ("string literal not terminated"). The line breaks between statements are real
-> newlines; only escape sequences *inside* string literals need doubling.
+```mdx
+export const myCode = `package main
+...`;
+
+<Playground client:visible code={myCode} />
+```
+
+> **Escaping inside template literals:** Go `\n` and `\t` inside string literals
+> must be written as `\\n` and `\\t` — a single backslash is consumed by the JS
+> template literal parser before the code reaches the renderer. Real newlines
+> between Go statements are fine as-is.
+
+### Bilingual Parity
+
+EN and TH lesson files must share identical: `export const` variable names, component `id=` props, code block content, and quiz `answer` indices (0-based). Only frontmatter `title`/`description` and prose are translated. This makes cross-language content audits trivial.
 
 ## How Runnable Code Works
 
-The Go runner is a build of [yaegi](https://github.com/traefik/yaegi) — a Go interpreter — compiled to WebAssembly. When a reader clicks "Run" in a `<Playground>`:
+The Go runner is a build of [yaegi](https://github.com/traefik/yaegi) — a pure-Go interpreter — compiled to WebAssembly. When a reader clicks "Run" in a `<Playground>`:
 
-1. The browser loads `public/go-runner.wasm` once (cached).
+1. The browser loads `public/go-runner.wasm` once (cached after first load, ~8 MB gzip).
 2. The snippet is passed to the WASM module via `public/wasm_exec.js`.
 3. Output is captured and displayed inline.
 
-**Coverage:** most of the Go standard library, basic generics, and goroutines with channels. Echo/network snippets and anything requiring real file I/O are not runnable in the browser — these lessons include an "Open in Go Playground" fallback link and a note to run locally.
+**Coverage:** most of the Go standard library including `fmt`, `sync`, `sync/atomic`, `context`, and `time`. Snippets requiring real file I/O, OS signals, or network connections are not runnable in the browser — use the "Open in Go Playground" fallback link.
+
+## Components
+
+| Component | Props | Purpose |
+| --------- | ----- | ------- |
+| `Playground.tsx` | `{ code: string }` | Runs a complete Go program in WASM and shows output |
+| `Callout.astro` | `{ title?: string }` | Highlighted key-point aside (slot content) |
+| `Quiz.tsx` | `{ id, questions: {q, options, answer}[] }` | Multiple-choice quiz; `answer` is 0-based index |
+| `ProgressTracker.tsx` | `{ id: string }` | Marks a lesson complete; state persisted in localStorage |
+
+Progress and quiz scores are stored in `localStorage` under the key `godd:v1`.
 
 ## Deployment
 
 The site is fully static (`output: 'static'` in `astro.config.mjs`). Build output lands in `dist/`. Deploy to any static host.
 
-> **Note on hosts:** the in-browser Go runner ships as a ~38 MB `public/go-runner.wasm`
-> (served compressed, ~8 MB). **Cloudflare Pages won't work** — its 25 MiB per-file
-> upload limit rejects the wasm. Use GitHub Pages, Netlify, or Vercel.
+> **Note on hosts:** `public/go-runner.wasm` is ~38 MB uncompressed (~8 MB gzip).
+> **Cloudflare Pages will not work** — its 25 MiB per-file upload limit rejects the wasm.
+> Use GitHub Pages, Netlify, or Vercel.
 
 ### GitHub Pages (configured)
 
-This repo deploys to GitHub Pages via `.github/workflows/deploy.yml` (build with
-`withastro/action`, publish with `actions/deploy-pages`). The prebuilt wasm is
-committed, so CI needs **no Go toolchain**.
+This repo deploys to GitHub Pages via `.github/workflows/deploy.yml` (build with `withastro/action@v3`, publish with `actions/deploy-pages@v4`). The prebuilt wasm is committed, so CI needs **no Go toolchain**.
 
 One-time setup:
 
-1. Create a GitHub repo and push (`main` branch).
+1. Create a GitHub repo named `go-deep-dive` under your account and push (`main` branch).
 2. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
 3. Confirm the base path in `astro.config.mjs` matches your setup:
-   - **Project site** (`https://USER.github.io/REPO/`): `site: 'https://USER.github.io'`, `base: '/REPO'` (currently `avetavos` / `go-for-typescript-developers`).
-   - **User/org site** (`USER.github.io` repo) or **custom domain**: set `site` and **remove `base`** (served at root).
+   - **Project site** (`https://USER.github.io/go-deep-dive/`): `site: 'https://USER.github.io'`, `base: '/go-deep-dive'` (current default).
+   - **User/org site** (`USER.github.io` repo) or **custom domain**: set `site` to your domain and **remove `base`** (served at root). Also update the hardcoded `/go-deep-dive/en/concurrency/` link in `src/content/docs/en/index.mdx`.
 
-The base path is wired through the runtime: the WASM loader resolves
-`go-runner.wasm` / `wasm_exec.js` via `import.meta.env.BASE_URL`, and the landing
-pages' links include the base. If you change `base`, update the hardcoded links in
-`src/content/docs/{en,th}/index.mdx` (hero actions + cards) to match.
+### Other static hosts (served at root)
 
-### Other static hosts (served at root — no `base` needed)
-
-If deploying to Netlify, Vercel static, or a custom domain, **remove the `base`
-option** from `astro.config.mjs` (and revert the landing-page links to `/en/...`):
+If deploying to Netlify, Vercel static, or a custom domain, **remove the `base` option** from `astro.config.mjs` and update the landing-page link in `src/content/docs/en/index.mdx`:
 
 - **Netlify** — build command `npm run build`, publish dir `dist`
 - **Vercel** — static preset, no serverless functions needed
