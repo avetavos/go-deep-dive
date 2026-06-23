@@ -1,0 +1,166 @@
+---
+title: Context
+description: 'context.Context, WithCancel, WithTimeout, WithDeadline, value propagation, and ctx.Done().'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is context.Context?
+
+`context.Context` is a standard interface that carries:
+
+- A **cancellation signal** — a goroutine can check `ctx.Done()` to learn that it should stop working
+- An optional **deadline or timeout** — work is automatically cancelled when the clock expires
+- **Request-scoped key/value pairs** — small amounts of metadata like a request ID or authentication token
+
+The context package solves a concrete problem: when a server request is cancelled (the user closes the browser, the upstream times out), how does every in-flight goroutine spawned for that request know to stop? Passing `context.Context` as the first argument to every I/O function is the Go-standard answer.
+
+## Creating contexts
+
+```go
+// Root contexts — never carry cancellation
+context.Background()   // top-level root, use in main or test setup
+context.TODO()         // placeholder when you are unsure which context to use
+
+// Derived contexts — add cancellation/timeout on top of a parent
+ctx, cancel := context.WithCancel(parent)
+ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+ctx, cancel := context.WithDeadline(parent, time.Now().Add(5*time.Second))
+ctx2       := context.WithValue(parent, key, value)
+```
+
+Derived contexts form a tree. Cancelling a parent automatically cancels all its children.
+
+## The cancellation contract
+
+When you call `context.WithCancel` or `context.WithTimeout`, you receive two values: the derived context and a `cancel` function. You **must** call `cancel()` when the work is done — even if the context expires naturally. If you don't, the parent context keeps a reference to the child until the parent is also cancelled, which leaks resources.
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel() // always
+```
+
+## Listening for cancellation
+
+Inside a goroutine, `ctx.Done()` returns a channel that is closed when the context is cancelled or times out. Use `select` to multiplex it with real work:
+
+```go
+select {
+case result := <-workCh:
+    return result, nil
+case <-ctx.Done():
+    return "", ctx.Err() // context.Canceled or context.DeadlineExceeded
+}
+```
+
+## context.WithValue
+
+`context.WithValue` attaches a key/value pair to the context. Use only for request-scoped data that crosses API boundaries (request ID, auth token). Do **not** use it as a general-purpose parameter-passing mechanism — put those in function arguments instead.
+
+To avoid key collisions with other packages, always use a package-private, unexported type as the key:
+
+```go
+type contextKey string
+const requestIDKey contextKey = "requestID"
+```
+
+export const contextCode = `package main
+
+import (
+\t"context"
+\t"fmt"
+)
+
+func fetchData(ctx context.Context, id int) (string, error) {
+\tselect {
+\tcase <-ctx.Done():
+\t\treturn "", ctx.Err()
+\tdefault:
+\t\treturn fmt.Sprintf("data-%d", id), nil
+\t}
+}
+
+type ctxKey string
+
+func main() {
+\t// WithCancel: normal fetch succeeds
+\tctx, cancel := context.WithCancel(context.Background())
+\tdefer cancel()
+
+\tresult, err := fetchData(ctx, 1)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Println("got:", result)
+\t}
+
+\t// Cancel, then try again — now the context is done
+\tcancel()
+\tresult2, err2 := fetchData(ctx, 2)
+\tif err2 != nil {
+\t\tfmt.Println("cancelled:", err2)
+\t} else {
+\t\tfmt.Println("got:", result2)
+\t}
+
+\t// WithValue: attach request-scoped metadata
+\tctx3 := context.WithValue(context.Background(), ctxKey("requestID"), "abc-123")
+\trid := ctx3.Value(ctxKey("requestID")).(string)
+\tfmt.Println("requestID:", rid)
+}`;
+
+<Playground client:visible code={contextCode} />
+
+<Callout title="Always defer cancel() to avoid context leaks">
+Every call to `context.WithCancel`, `context.WithTimeout`, or `context.WithDeadline` must be paired with a call to the returned `cancel` function. If `cancel` is never called, the parent context holds an internal reference to the child context until the parent itself is cancelled. In a long-running server, this accumulates into a goroutine and memory leak. The idiomatic pattern is always: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`.
+</Callout>
+
+export const quizContext = [
+  {
+    q: "What is the correct idiomatic way to handle the cancel function from context.WithCancel?",
+    options: [
+      "Call cancel() only when an error occurs",
+      "Call cancel() only after all goroutines using the context have finished",
+      "Always defer cancel() immediately after the context is created",
+      "Ignore cancel() — the context will be garbage collected automatically"
+    ],
+    answer: 2
+  },
+  {
+    q: "What channel does ctx.Done() return, and when is it closed?",
+    options: [
+      "A chan struct{} closed when the context is cancelled or its deadline passes",
+      "A chan error that receives the cancellation reason",
+      "A chan bool that receives true on timeout and false on cancel",
+      "nil, unless you call context.WithDeadline"
+    ],
+    answer: 0
+  },
+  {
+    q: "What does ctx.Err() return when the context deadline has exceeded?",
+    options: [
+      "nil",
+      "context.Canceled",
+      "context.DeadlineExceeded",
+      "io.EOF"
+    ],
+    answer: 2
+  },
+  {
+    q: "Why should you use an unexported package-private type as a context.WithValue key?",
+    options: [
+      "To improve performance by avoiding string comparison",
+      "To prevent key collisions with other packages that might use the same key string",
+      "Because string keys are not allowed by the context package",
+      "To satisfy the fmt.Stringer interface requirement"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/context" questions={quizContext} />
+
+<ProgressTracker client:visible id="concurrency/context" />

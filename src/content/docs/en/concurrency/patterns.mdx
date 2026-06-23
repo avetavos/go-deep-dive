@@ -1,0 +1,157 @@
+---
+title: Concurrency Patterns
+description: 'Worker pool, fan-out/fan-in, and pipeline — the three foundational Go concurrency patterns.'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Three foundational patterns
+
+Go's goroutines and channels compose naturally into a small set of well-understood patterns. Once you recognise them, you can combine them to build arbitrarily complex concurrent systems.
+
+## Pipeline
+
+A **pipeline** is a series of stages connected by channels. Each stage receives values from an upstream channel, transforms them, and sends results to a downstream channel. Stages run concurrently — while stage 2 is processing item N, stage 1 is already working on item N+1.
+
+```
+generate → square → print
+```
+
+Pipelines are ideal for stream processing where each transformation is independent and the stages can be composed like Unix pipes.
+
+## Fan-out / fan-in
+
+**Fan-out** starts multiple goroutines that read from the same input channel, parallelising work. **Fan-in** merges multiple output channels into one for the consumer to read. Together they implement a parallel processing stage inside a pipeline.
+
+## Worker pool
+
+A **worker pool** is a fixed set of goroutines that all consume from a shared jobs channel. The pool size caps resource usage (goroutines, connections, file handles) while still processing work concurrently. It is the Go equivalent of a thread pool.
+
+```
+main → jobs channel → [worker 1, worker 2, worker 3] → results
+```
+
+The runnable example below combines all three patterns: a pipeline with a generator and a squaring stage, followed by a worker pool that processes a batch of jobs deterministically.
+
+export const patternsCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+)
+
+// --- Pipeline ---
+
+func generate(nums ...int) <-chan int {
+\tout := make(chan int, len(nums))
+\tfor _, n := range nums {
+\t\tout <- n
+\t}
+\tclose(out)
+\treturn out
+}
+
+func square(in <-chan int) <-chan int {
+\tout := make(chan int, cap(in))
+\tgo func() {
+\t\tfor n := range in {
+\t\t\tout <- n * n
+\t\t}
+\t\tclose(out)
+\t}()
+\treturn out
+}
+
+// --- Worker pool ---
+
+func workerPool(jobs <-chan int, results []int, wg *sync.WaitGroup) {
+\tfor j := range jobs {
+\t\tresults[j-1] = j * 2
+\t\twg.Done()
+\t}
+}
+
+func main() {
+\t// Pipeline: 1,2,3,4,5 -> squares
+\tnums := generate(1, 2, 3, 4, 5)
+\tsquares := square(nums)
+\tfor v := range squares {
+\t\tfmt.Println(v)
+\t}
+
+\t// Worker pool: 3 workers, 5 jobs, each job doubles its index
+\tconst numJobs = 5
+\tjobs := make(chan int, numJobs)
+\tresults := make([]int, numJobs)
+\tvar wg sync.WaitGroup
+
+\tfor w := 0; w < 3; w++ {
+\t\tgo workerPool(jobs, results, &wg)
+\t}
+\tfor j := 1; j <= numJobs; j++ {
+\t\twg.Add(1)
+\t\tjobs <- j
+\t}
+\tclose(jobs)
+\twg.Wait()
+
+\tfor _, r := range results {
+\t\tfmt.Println(r)
+\t}
+}`;
+
+<Playground client:visible code={patternsCode} />
+
+<Callout title="Gotcha: goroutine leaks when nobody drains a channel">
+If a goroutine is blocked sending to a channel and the receiver exits without draining it, the goroutine is **leaked** — it lives forever in the runtime, wasting memory and a goroutine slot. The fix is always to ensure either: (a) the channel is buffered large enough to accept all sends, (b) a receiver always drains the channel to `close`, or (c) the sender also selects on `ctx.Done()` so it can exit when the work is abandoned. In production, run `go tool pprof` on the goroutine profile to detect leaks.
+</Callout>
+
+export const quizPatterns = [
+  {
+    q: "In a worker pool, what limits the number of concurrent goroutines processing jobs?",
+    options: [
+      "The size of the jobs channel buffer",
+      "GOMAXPROCS",
+      "The fixed number of worker goroutines launched before the jobs are sent",
+      "sync.WaitGroup's internal counter"
+    ],
+    answer: 2
+  },
+  {
+    q: "In the pipeline pattern, what makes the stages run concurrently?",
+    options: [
+      "The go keyword inside each stage function",
+      "Each stage runs in its own goroutine and communicates with adjacent stages via channels",
+      "The pipeline function is called with go pipeline()",
+      "Channels automatically parallelise work when read from"
+    ],
+    answer: 1
+  },
+  {
+    q: "What is fan-out in the context of Go concurrency?",
+    options: [
+      "Closing a channel so all receivers unblock simultaneously",
+      "Spreading work from one input channel across multiple goroutines reading from that channel",
+      "Broadcasting the same value to multiple channels using a single send",
+      "Using select with multiple send cases"
+    ],
+    answer: 1
+  },
+  {
+    q: "A goroutine is blocked on `out <- result` and the consumer has already returned. What is this called and how do you prevent it?",
+    options: [
+      "A deadlock — use sync.Mutex to protect the send",
+      "A data race — use sync/atomic for the send",
+      "A goroutine leak — prevent by using context cancellation or ensuring the consumer always drains the channel",
+      "A stack overflow — use a buffered channel sized to 1"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="concurrency/patterns" questions={quizPatterns} />
+
+<ProgressTracker client:visible id="concurrency/patterns" />

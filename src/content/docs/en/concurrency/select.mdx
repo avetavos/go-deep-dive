@@ -1,0 +1,150 @@
+---
+title: Select
+description: 'Multiplexing channels with select, the default clause for non-blocking operations, and timeouts.'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The select statement
+
+`select` is Go's way to wait on multiple channel operations simultaneously. It blocks until one of its cases is ready, then executes that case. If multiple cases are ready at the same time, one is chosen at **random** — this is a deliberate language design choice to avoid starvation.
+
+```go
+select {
+case v := <-ch1:
+    fmt.Println("received from ch1:", v)
+case ch2 <- 99:
+    fmt.Println("sent to ch2")
+}
+```
+
+A `select` case can be a send or a receive — whichever operation can proceed without blocking.
+
+## The default clause
+
+Adding a `default` case makes the `select` non-blocking. If no channel is ready, the `default` branch runs immediately:
+
+```go
+select {
+case v := <-ch:
+    fmt.Println("got", v)
+default:
+    fmt.Println("nothing ready yet")
+}
+```
+
+This is the idiomatic way to poll a channel without blocking.
+
+## Timeouts
+
+A common pattern is combining `select` with `time.After`, which returns a channel that receives a value after the specified duration:
+
+```go
+select {
+case result := <-work:
+    fmt.Println("done:", result)
+case <-time.After(2 * time.Second):
+    fmt.Println("timed out")
+}
+```
+
+For production code where many timeouts are set, prefer `context.WithTimeout` (covered in the Context lesson) because it propagates cancellation and avoids timer leaks.
+
+## Runnable example
+
+The snippet below demonstrates all three select behaviours in sequence — deterministically by using separate selects with pre-loaded buffered channels, followed by a `default` branch demo.
+
+export const selectCode = `package main
+
+import "fmt"
+
+func main() {
+\t// Pre-load two buffered channels so both are ready
+\tch1 := make(chan string, 1)
+\tch2 := make(chan string, 1)
+\tch1 <- "one"
+\tch2 <- "two"
+
+\t// Drain ch1 with its own select — guaranteed to receive "one"
+\tselect {
+\tcase msg := <-ch1:
+\t\tfmt.Println("ch1:", msg)
+\t}
+
+\t// Drain ch2 with its own select — guaranteed to receive "two"
+\tselect {
+\tcase msg := <-ch2:
+\t\tfmt.Println("ch2:", msg)
+\t}
+
+\t// default makes select non-blocking
+\tch3 := make(chan int)
+\tselect {
+\tcase v := <-ch3:
+\t\tfmt.Println("received", v)
+\tdefault:
+\t\tfmt.Println("no value ready, default taken")
+\t}
+
+\t// Fan-in: merge two result channels into one
+\tr1 := make(chan int, 1)
+\tr2 := make(chan int, 1)
+\tr1 <- 10
+\tr2 <- 20
+\tfor i := 0; i < 2; i++ {
+\t\tselect {
+\t\tcase v := <-r1:
+\t\t\tfmt.Println("r1:", v)
+\t\tcase v := <-r2:
+\t\t\tfmt.Println("r2:", v)
+\t\t}
+\t}
+
+\tfmt.Println("done")
+}`;
+
+<Playground client:visible code={selectCode} />
+
+<Callout title="Gotcha: empty select blocks forever">
+A `select` with no cases — `select {}` — blocks the current goroutine forever. This is occasionally used intentionally to keep `main` alive (a leaner alternative to `for {}`), but it is more commonly a mistake. Always ensure your select has at least one reachable case or a `default`. A `select` with only a `default` and no channel cases executes the `default` immediately every time — useful for a non-blocking poll, but an infinite loop if placed inside `for` without additional logic.
+</Callout>
+
+export const quizSelect = [
+  {
+    q: "What does Go do when multiple cases in a select are simultaneously ready?",
+    options: [
+      "The first case listed wins (deterministic priority)",
+      "A compile error is raised",
+      "One case is chosen at random",
+      "All ready cases execute in order"
+    ],
+    answer: 2
+  },
+  {
+    q: "What is the effect of adding a `default` case to a select?",
+    options: [
+      "The select blocks until at least one channel is ready, then falls through to default",
+      "The select becomes non-blocking — if no channel is ready, the default branch runs immediately",
+      "The default runs only when all channels are closed",
+      "It prevents the goroutine from being preempted"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does `time.After(d)` return?",
+    options: [
+      "A time.Duration value",
+      "A blocking function that sleeps for d",
+      "A `<-chan time.Time` that receives once after duration d elapses",
+      "A context with a deadline set to now + d"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="concurrency/select" questions={quizSelect} />
+
+<ProgressTracker client:visible id="concurrency/select" />

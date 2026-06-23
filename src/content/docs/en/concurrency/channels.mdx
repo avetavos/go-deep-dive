@@ -1,0 +1,156 @@
+---
+title: Channels
+description: 'Creating channels, sending and receiving, unbuffered vs buffered, channel directions, close, range, and the comma-ok idiom.'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a channel?
+
+A **channel** is a typed conduit through which goroutines communicate. Sending a value into a channel and receiving from it are the two operations that transfer both data and synchronization in a single step.
+
+```go
+ch := make(chan int)   // unbuffered channel of int
+ch <- 42              // send  (blocks until a receiver is ready)
+v  := <-ch            // receive (blocks until a sender is ready)
+```
+
+The type system enforces what flows through a channel. A `chan string` will not accept an `int`.
+
+## Unbuffered vs buffered
+
+| | Unbuffered | Buffered |
+|--|-----------|---------|
+| **Created with** | `make(chan T)` | `make(chan T, capacity)` |
+| **Send blocks?** | Yes — until a receiver is ready | No — until the buffer is full |
+| **Receive blocks?** | Yes — until a sender is ready | No — until the buffer is empty |
+| **Synchronizes?** | Yes — sender and receiver meet at the same moment | No — the buffer decouples timing |
+
+Unbuffered channels provide the strongest synchronization guarantee: the sender knows the receiver has the value before it continues.
+
+## Channel directions
+
+You can restrict a channel parameter to send-only or receive-only to encode the intent at the type level:
+
+```go
+func producer(out chan<- int) { out <- 1 }   // send-only
+func consumer(in <-chan int)  { v := <-in; _ = v }  // receive-only
+```
+
+A bidirectional `chan T` is assignable to either direction. The compiler enforces that a receive-only channel cannot be sent to, and vice versa.
+
+## Closing a channel and ranging over it
+
+The sender calls `close(ch)` to signal that no more values will be sent. Receivers can use a `for range` loop to drain all values until close:
+
+```go
+close(ch)
+for v := range ch { // exits when ch is closed and empty
+    fmt.Println(v)
+}
+```
+
+## The comma-ok receive idiom
+
+A receive expression can return a second boolean that tells you whether the channel is still open:
+
+```go
+v, ok := <-ch
+// ok == true  → v is a real value
+// ok == false → channel is closed and drained; v is the zero value
+```
+
+export const channelsCode = `package main
+
+import "fmt"
+
+func producer(ch chan<- int, n int) {
+\tfor i := 1; i <= n; i++ {
+\t\tch <- i
+\t}
+\tclose(ch)
+}
+
+func main() {
+\t// Unbuffered channel: producer runs in a goroutine
+\tch := make(chan int)
+\tgo producer(ch, 5)
+\tfor v := range ch {
+\t\tfmt.Println(v)
+\t}
+
+\t// Buffered channel: all sends fit in the buffer
+\tbuf := make(chan string, 3)
+\tbuf <- "a"
+\tbuf <- "b"
+\tbuf <- "c"
+\tclose(buf)
+\tfor s := range buf {
+\t\tfmt.Println(s)
+\t}
+
+\t// Comma-ok: distinguish real value from closed zero value
+\tdone := make(chan bool, 1)
+\tdone <- true
+\tclose(done)
+\tv1, ok1 := <-done
+\tfmt.Println(v1, ok1)  // true true
+\tv2, ok2 := <-done
+\tfmt.Println(v2, ok2)  // false false
+}`;
+
+<Playground client:visible code={channelsCode} />
+
+<Callout title="Gotcha: send on a closed channel panics">
+Calling `close(ch)` and then sending to `ch` causes a runtime panic. Receiving from a closed channel never panics — it returns the zero value for the type, and the comma-ok second return value will be `false`. The rule of thumb: only the **sender** closes a channel, and only when it knows it will send nothing more. Never close a channel from the receiver side.
+</Callout>
+
+export const quizChannels = [
+  {
+    q: "What happens when you receive from an unbuffered channel when no goroutine is sending?",
+    options: [
+      "You receive the zero value of the channel's type",
+      "A panic is raised",
+      "The goroutine blocks until a sender is ready",
+      "The receive returns immediately with ok == false"
+    ],
+    answer: 2
+  },
+  {
+    q: "You call close(ch) on a buffered channel that still has 3 items in it. What happens when you range over it?",
+    options: [
+      "The range loop panics immediately",
+      "The range loop yields all 3 remaining items, then exits",
+      "The range loop exits immediately without yielding any items",
+      "The range loop blocks waiting for more items"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does the second return value ok in `v, ok := <-ch` tell you?",
+    options: [
+      "Whether the send succeeded without blocking",
+      "Whether the channel has capacity remaining",
+      "Whether the received value is non-zero",
+      "Whether the channel is still open (true) or closed and drained (false)"
+    ],
+    answer: 3
+  },
+  {
+    q: "Which channel direction annotation restricts a parameter to receive-only?",
+    options: [
+      "chan<- T",
+      "<-chan T",
+      "chan T",
+      "readonly chan T"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/channels" questions={quizChannels} />
+
+<ProgressTracker client:visible id="concurrency/channels" />

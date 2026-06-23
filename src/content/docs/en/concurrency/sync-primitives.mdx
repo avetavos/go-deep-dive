@@ -1,0 +1,177 @@
+---
+title: Sync Primitives
+description: 'sync.Mutex, sync.RWMutex, sync.Once, sync/atomic, and when to use channels vs mutexes.'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## When channels are not enough
+
+Channels excel at transferring ownership of data between goroutines. But sometimes you simply need to protect a shared value that many goroutines read and write — a cache, a counter, a connection pool. For these cases the `sync` package provides lower-level primitives.
+
+## sync.Mutex
+
+A `sync.Mutex` is a mutual exclusion lock. Only one goroutine can hold the lock at a time; all others block on `Lock()` until the holder calls `Unlock()`.
+
+```go
+var mu sync.Mutex
+var count int
+
+mu.Lock()
+count++
+mu.Unlock()
+```
+
+Always use `defer mu.Unlock()` immediately after `mu.Lock()` so the lock is released even if the function panics or returns early.
+
+## sync.RWMutex
+
+`sync.RWMutex` is an optimized variant for the read-heavy case. Multiple goroutines can hold a **read lock** simultaneously with `RLock/RUnlock`. A **write lock** (`Lock/Unlock`) is exclusive — it waits for all readers to finish, then blocks new readers until the writer is done.
+
+Use it when reads are far more frequent than writes (e.g., an in-memory cache).
+
+## sync.Once
+
+`sync.Once` executes a function exactly once, regardless of how many goroutines call `Do` concurrently. The canonical use case is lazy, thread-safe initialization:
+
+```go
+var once sync.Once
+var instance *Config
+
+func getConfig() *Config {
+    once.Do(func() {
+        instance = loadConfig()
+    })
+    return instance
+}
+```
+
+## sync/atomic
+
+The `sync/atomic` package provides lock-free operations on integer and pointer types using CPU hardware instructions. For simple counters or flags, atomics are faster than a mutex because there is no lock contention or context switching.
+
+Key operations: `atomic.AddInt64`, `atomic.LoadInt64`, `atomic.StoreInt64`, `atomic.CompareAndSwapInt64`.
+
+## Channels vs mutexes — a practical guide
+
+| Use channels when... | Use mutexes when... |
+|----------------------|---------------------|
+| Transferring ownership of data | Protecting a shared cache or struct |
+| Coordinating goroutine lifecycles | Managing a simple counter or flag |
+| Pipelines and fan-out patterns | Read-heavy data with sync.RWMutex |
+
+export const syncCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+\t"sync/atomic"
+)
+
+type SafeCounter struct {
+\tmu sync.Mutex
+\tv  int
+}
+
+func (c *SafeCounter) Inc() {
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\tc.v++
+}
+
+func (c *SafeCounter) Value() int {
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\treturn c.v
+}
+
+func main() {
+\t// sync.Mutex: 100 goroutines each increment once -> 100
+\tvar wg sync.WaitGroup
+\tc := &SafeCounter{}
+\tfor i := 0; i < 100; i++ {
+\t\twg.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg.Done()
+\t\t\tc.Inc()
+\t\t}()
+\t}
+\twg.Wait()
+\tfmt.Println("counter:", c.Value()) // 100
+
+\t// sync.Once: function runs exactly once despite 3 calls
+\tvar once sync.Once
+\tfor i := 0; i < 3; i++ {
+\t\tonce.Do(func() {
+\t\t\tfmt.Println("only once")
+\t\t})
+\t}
+
+\t// sync/atomic: 50 goroutines each add 1 -> 50
+\tvar atomicCount int64
+\tfor i := 0; i < 50; i++ {
+\t\twg.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg.Done()
+\t\t\tatomic.AddInt64(&atomicCount, 1)
+\t\t}()
+\t}
+\twg.Wait()
+\tfmt.Println("atomic count:", atomic.LoadInt64(&atomicCount)) // 50
+}`;
+
+<Playground client:visible code={syncCode} />
+
+<Callout title="Data races: find them with go run -race">
+A data race occurs when two goroutines access the same variable concurrently and at least one access is a write, with no synchronization between them. The result is undefined behaviour. Go ships a built-in race detector: run `go run -race main.go` or `go test -race ./...` to instrument your binary. The detector adds roughly 2–20x runtime overhead and is not suitable for production, but it is mandatory in CI. Mutexes, channels, and atomics all eliminate races.
+</Callout>
+
+export const quizSync = [
+  {
+    q: "What is the difference between sync.Mutex and sync.RWMutex?",
+    options: [
+      "RWMutex allows multiple concurrent readers; Mutex does not",
+      "RWMutex is only safe for use in a single goroutine",
+      "Mutex is deprecated in favour of RWMutex",
+      "RWMutex requires a separate unlock call for each lock call"
+    ],
+    answer: 0
+  },
+  {
+    q: "How many times will the function passed to sync.Once.Do execute, even if 100 goroutines call Do?",
+    options: [
+      "100 times — once per goroutine",
+      "It depends on GOMAXPROCS",
+      "Exactly once",
+      "Zero times — Do is lazy and only runs on the first explicit call"
+    ],
+    answer: 2
+  },
+  {
+    q: "When should you prefer sync/atomic over sync.Mutex for a shared integer counter?",
+    options: [
+      "Never — atomic is only for pointers",
+      "When the counter operation is a single load, store, or add and you want to avoid lock contention overhead",
+      "Only when GOMAXPROCS equals 1",
+      "When the counter is modified from more than 8 goroutines simultaneously"
+    ],
+    answer: 1
+  },
+  {
+    q: "What does `go test -race` do?",
+    options: [
+      "Runs tests as fast as possible using all CPU cores",
+      "Compiles the test binary with race detector instrumentation to detect concurrent memory access violations",
+      "Disables the GC during tests to catch memory leaks",
+      "Runs tests multiple times in parallel to find flaky tests"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/sync-primitives" questions={quizSync} />
+
+<ProgressTracker client:visible id="concurrency/sync-primitives" />

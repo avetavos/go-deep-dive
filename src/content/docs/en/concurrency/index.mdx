@@ -1,5 +1,108 @@
 ---
-title: Concurrency
-description: Goroutines, channels, select, and the Go concurrency model.
+title: 'Concurrency: The Go Way'
+description: 'An introduction to Go''s concurrency model — goroutines, channels, CSP, and what this module covers.'
 ---
-Coming soon.
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The Go concurrency model
+
+Most languages bolt concurrency on top of shared-memory threads. Go was designed from the ground up around a different idea: **Communicating Sequential Processes (CSP)**, formalized by Tony Hoare in 1978. The Go proverb that captures it best is:
+
+> *Do not communicate by sharing memory; instead, share memory by communicating.*
+
+In practice this means:
+
+- **Goroutines** are independently executing functions. They are cheap — a few kilobytes of stack that grows on demand — so you can have hundreds of thousands running concurrently.
+- **Channels** are typed conduits. Goroutines send values into a channel and receive values from another, transferring both data and synchronization in one operation.
+- **The scheduler** multiplexes goroutines onto a pool of OS threads (GOMAXPROCS threads by default, one per CPU core). You never manage threads directly.
+
+This design makes concurrent programs easier to reason about. When data flows through channels, ownership is clear: the sender had it, now the receiver has it. No mutex needed for that transfer.
+
+## What this module covers
+
+| Lesson | Topic |
+|--------|-------|
+| This page | Model overview and first runnable example |
+| Goroutines | `go f()`, the scheduler, `sync.WaitGroup` |
+| Channels | Create, send, receive, buffered vs unbuffered, `close`, `range` |
+| Select | Multiplexing channels, `default`, timeouts |
+| Sync primitives | `sync.Mutex`, `sync.Once`, `sync/atomic` |
+| Context | `context.Context`, cancellation, propagation |
+| Patterns | Worker pool, fan-out/fan-in, pipeline |
+
+## Your first concurrent Go program
+
+The snippet below launches three goroutines in parallel. Each goroutine writes its result into a pre-allocated slice indexed by its own id, so output is always in order. `sync.WaitGroup` blocks `main` until all three are finished.
+
+export const indexCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+)
+
+func main() {
+\tvar wg sync.WaitGroup
+\tresults := make([]string, 3)
+
+\tfor i := 0; i < 3; i++ {
+\t\twg.Add(1)
+\t\tgo func(id int) {
+\t\t\tdefer wg.Done()
+\t\t\tresults[id] = fmt.Sprintf("goroutine %d says hello", id)
+\t\t}(i)
+\t}
+
+\twg.Wait()
+\tfor _, r := range results {
+\t\tfmt.Println(r)
+\t}
+\tfmt.Println("main exits")
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="Key point: always pass i by value">
+The loop variable `i` changes on every iteration. Closing over it directly inside `go func() { ... }()` means every goroutine may see the same final value of `i`. Always pass loop variables as an explicit argument — `go func(id int) { ... }(i)` — so each goroutine gets its own snapshot. In Go 1.22+ the loop variable is re-bound per iteration, but passing explicitly is still the clearest pattern.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: "What does the Go proverb 'share memory by communicating' mean in practice?",
+    options: [
+      "Use global variables protected by a mutex",
+      "Transfer data ownership via channels rather than sharing pointers under a lock",
+      "Avoid all shared state by running goroutines in separate processes",
+      "Use sync.Map for every shared variable"
+    ],
+    answer: 1
+  },
+  {
+    q: "What is the default number of OS threads Go uses to run goroutines?",
+    options: [
+      "Always 1",
+      "Always 4",
+      "Equal to GOMAXPROCS, which defaults to the number of CPU cores",
+      "Equal to the number of goroutines"
+    ],
+    answer: 2
+  },
+  {
+    q: "Why is `wg.Add(1)` called BEFORE `go func()`?",
+    options: [
+      "It is a style convention only; placement does not matter",
+      "If Add runs inside the goroutine, the scheduler may reach wg.Wait() before the goroutine starts, causing Wait to return prematurely",
+      "go func() blocks until Add is called",
+      "sync.WaitGroup requires Add to be called from the main goroutine"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="concurrency/index" />

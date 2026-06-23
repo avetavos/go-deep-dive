@@ -1,0 +1,131 @@
+---
+title: Goroutines
+description: 'How goroutines work, the Go scheduler, goroutine cost, and waiting with sync.WaitGroup.'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a goroutine?
+
+A **goroutine** is a function executing concurrently with other goroutines in the same address space. You launch one with a single keyword:
+
+```go
+go f(args)
+```
+
+That is the entire syntax. `go` schedules `f` to run concurrently, then the calling goroutine proceeds immediately without waiting for `f` to return.
+
+## Why goroutines are cheap
+
+An OS thread typically starts with a 1–8 MB fixed stack. A goroutine starts with roughly **2–8 KB** of stack that grows and shrinks automatically as needed (up to 1 GB by default). The Go runtime multiplexes goroutines onto OS threads using an **M:N scheduler** (M goroutines over N threads). Context switches between goroutines happen in user-space and are orders of magnitude cheaper than kernel thread switches.
+
+In production, it is common to have tens of thousands of goroutines running simultaneously.
+
+## The Go scheduler: M, P, G
+
+The scheduler operates on three concepts:
+
+| Symbol | Meaning |
+|--------|---------|
+| **G** | Goroutine — a unit of concurrent work |
+| **M** | Machine — an OS thread |
+| **P** | Processor — a scheduling context (GOMAXPROCS of these exist) |
+
+Each P holds a run queue of Gs. An M must hold a P to run Gs. When a G blocks on I/O, its M releases the P so another M can pick it up — this is how the scheduler achieves concurrency without burning threads on blocked goroutines.
+
+## Waiting with sync.WaitGroup
+
+`sync.WaitGroup` is the standard way to wait for a fixed number of goroutines to finish.
+
+- `wg.Add(n)` — increment the counter by n (always before the `go` statement)
+- `wg.Done()` — decrement the counter by 1 (call with `defer` inside the goroutine)
+- `wg.Wait()` — block until the counter reaches zero
+
+export const goroutinesCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+)
+
+func worker(id int, results []string, wg *sync.WaitGroup) {
+\tdefer wg.Done()
+\tsum := 0
+\tfor j := 1; j <= 5; j++ {
+\t\tsum += j
+\t}
+\tresults[id-1] = fmt.Sprintf("worker %d: sum 1..5 = %d", id, sum)
+}
+
+func main() {
+\tvar wg sync.WaitGroup
+\tresults := make([]string, 3)
+
+\tfor i := 1; i <= 3; i++ {
+\t\twg.Add(1)
+\t\tgo worker(i, results, &wg)
+\t}
+
+\twg.Wait()
+
+\tfor _, r := range results {
+\t\tfmt.Println(r)
+\t}
+\tfmt.Println("all workers done")
+}`;
+
+<Playground client:visible code={goroutinesCode} />
+
+<Callout title="Gotcha: goroutines started in main may not run if main returns">
+If `main` returns before a goroutine has a chance to execute, that goroutine is silently killed. The Go runtime exits as soon as the `main` goroutine returns — it does not wait for background goroutines. Always use `sync.WaitGroup`, a channel, or another synchronization mechanism to ensure `main` stays alive long enough for goroutines to finish.
+</Callout>
+
+export const quizGoroutines = [
+  {
+    q: "What is the approximate initial stack size of a new goroutine?",
+    options: [
+      "1 MB (same as an OS thread)",
+      "2–8 KB, growing dynamically as needed",
+      "64 KB, fixed",
+      "It depends on the operating system"
+    ],
+    answer: 1
+  },
+  {
+    q: "Where must wg.Add(1) be called relative to the go statement?",
+    options: [
+      "Inside the goroutine, as the first statement",
+      "Anywhere — it doesn't matter",
+      "Before the go statement, in the calling goroutine",
+      "After wg.Wait()"
+    ],
+    answer: 2
+  },
+  {
+    q: "What happens if main returns while goroutines are still running?",
+    options: [
+      "The runtime waits for all goroutines to finish",
+      "Only daemon goroutines are killed; worker goroutines finish",
+      "All goroutines are killed immediately — the process exits",
+      "A panic is raised"
+    ],
+    answer: 2
+  },
+  {
+    q: "What does GOMAXPROCS control?",
+    options: [
+      "The maximum number of goroutines that can be created",
+      "The number of OS threads (Ps) that can run Go code simultaneously",
+      "The maximum goroutine stack size",
+      "The number of CPU cores the OS assigns to the process"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/goroutines" questions={quizGoroutines} />
+
+<ProgressTracker client:visible id="concurrency/goroutines" />
