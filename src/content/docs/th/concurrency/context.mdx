@@ -1,0 +1,150 @@
+---
+title: Context
+description: 'context.Context, WithCancel, WithTimeout, WithDeadline, การส่งต่อ value, และ ctx.Done()'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## context.Context คืออะไร?
+
+`context.Context` เป็น standard interface ที่ carry:
+
+- **Cancellation signal** — goroutine สามารถตรวจสอบ `ctx.Done()` เพื่อรู้ว่าควรหยุดทำงาน
+- **Deadline หรือ timeout** ที่เป็น optional — งานถูก cancel อัตโนมัติเมื่อถึงเวลา
+- **Request-scoped key/value pairs** — metadata ขนาดเล็กเช่น request ID หรือ auth token
+
+Package context แก้ปัญหาที่เป็นรูปธรรม: เมื่อ server request ถูก cancel (user ปิด browser, upstream timeout) goroutines ที่รันสำหรับ request นั้นจะรู้ได้อย่างไรว่าควรหยุด? การส่ง `context.Context` เป็น argument แรกให้ทุก I/O function คือคำตอบมาตรฐานของ Go
+
+## การสร้าง Contexts
+
+```go
+// Root contexts — ไม่มี cancellation
+context.Background()   // root ระดับบนสุด ใช้ใน main หรือ test setup
+context.TODO()         // placeholder เมื่อยังไม่แน่ใจจะใช้ context ไหน
+
+// Derived contexts — เพิ่ม cancellation/timeout บน parent
+ctx, cancel := context.WithCancel(parent)
+ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+ctx, cancel := context.WithDeadline(parent, time.Now().Add(5*time.Second))
+ctx2       := context.WithValue(parent, key, value)
+```
+
+Derived contexts สร้าง tree การ cancel parent จะ cancel ลูกทั้งหมดอัตโนมัติ
+
+## Cancellation Contract
+
+เมื่อเรียก `context.WithCancel` หรือ `context.WithTimeout` คุณได้รับสองค่า: derived context และ `cancel` function คุณ **ต้อง** เรียก `cancel()` เมื่องานเสร็จ — แม้ context จะหมดอายุตามธรรมชาติ ถ้าไม่เรียก parent context จะถือ reference ถึง child context จนกว่า parent จะถูก cancel ด้วย ซึ่งทำให้ leak ทรัพยากร
+
+## ฟัง Cancellation
+
+ใน goroutine `ctx.Done()` return channel ที่ถูกปิดเมื่อ context ถูก cancel หรือ timeout ใช้ `select` เพื่อรวมกับงานจริง:
+
+```go
+select {
+case result := <-workCh:
+    return result, nil
+case <-ctx.Done():
+    return "", ctx.Err() // context.Canceled หรือ context.DeadlineExceeded
+}
+```
+
+export const contextCode = `package main
+
+import (
+\t"context"
+\t"fmt"
+)
+
+func fetchData(ctx context.Context, id int) (string, error) {
+\tselect {
+\tcase <-ctx.Done():
+\t\treturn "", ctx.Err()
+\tdefault:
+\t\treturn fmt.Sprintf("data-%d", id), nil
+\t}
+}
+
+type ctxKey string
+
+func main() {
+\t// WithCancel: fetch ปกติสำเร็จ
+\tctx, cancel := context.WithCancel(context.Background())
+\tdefer cancel()
+
+\tresult, err := fetchData(ctx, 1)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Println("got:", result)
+\t}
+
+\t// Cancel แล้วลองอีกครั้ง — context เป็น done แล้ว
+\tcancel()
+\tresult2, err2 := fetchData(ctx, 2)
+\tif err2 != nil {
+\t\tfmt.Println("cancelled:", err2)
+\t} else {
+\t\tfmt.Println("got:", result2)
+\t}
+
+\t// WithValue: แนบ request-scoped metadata
+\tctx3 := context.WithValue(context.Background(), ctxKey("requestID"), "abc-123")
+\trid := ctx3.Value(ctxKey("requestID")).(string)
+\tfmt.Println("requestID:", rid)
+}`;
+
+<Playground client:visible code={contextCode} />
+
+<Callout title="defer cancel() เสมอเพื่อหลีกเลี่ยง context leak">
+ทุกการเรียก `context.WithCancel`, `context.WithTimeout`, หรือ `context.WithDeadline` ต้องมีการเรียก `cancel` function คู่กัน ถ้าไม่เรียก `cancel` parent context จะถือ internal reference ถึง child context จนกว่า parent จะถูก cancel เองใน server ที่รันนาน ๆ สิ่งนี้สะสมเป็น goroutine และ memory leak Pattern idiomatic เสมอ: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`
+</Callout>
+
+export const quizContext = [
+  {
+    q: "วิธี idiomatic ที่ถูกต้องในการจัดการ cancel function จาก context.WithCancel คืออะไร?",
+    options: [
+      "เรียก cancel() เฉพาะเมื่อเกิด error",
+      "เรียก cancel() หลังจาก goroutines ทั้งหมดที่ใช้ context เสร็จแล้ว",
+      "defer cancel() ทันทีหลังสร้าง context เสมอ",
+      "ไม่สนใจ cancel() — context จะถูก garbage collect อัตโนมัติ"
+    ],
+    answer: 2
+  },
+  {
+    q: "ctx.Done() return channel อะไร และถูกปิดเมื่อไหร่?",
+    options: [
+      "chan struct{} ที่ถูกปิดเมื่อ context ถูก cancel หรือ deadline ผ่านไป",
+      "chan error ที่รับ cancellation reason",
+      "chan bool ที่รับ true เมื่อ timeout และ false เมื่อ cancel",
+      "nil ยกเว้นเมื่อเรียก context.WithDeadline"
+    ],
+    answer: 0
+  },
+  {
+    q: "ctx.Err() return อะไรเมื่อ deadline ของ context เกินแล้ว?",
+    options: [
+      "nil",
+      "context.Canceled",
+      "context.DeadlineExceeded",
+      "io.EOF"
+    ],
+    answer: 2
+  },
+  {
+    q: "ทำไมควรใช้ unexported package-private type เป็น context.WithValue key?",
+    options: [
+      "เพื่อปรับปรุง performance โดยหลีกเลี่ยง string comparison",
+      "เพื่อป้องกัน key collisions กับ packages อื่นที่อาจใช้ key string เดียวกัน",
+      "เพราะ context package ไม่อนุญาต string keys",
+      "เพื่อ satisfy fmt.Stringer interface requirement"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/context" questions={quizContext} />
+
+<ProgressTracker client:visible id="concurrency/context" />

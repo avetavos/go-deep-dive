@@ -1,0 +1,165 @@
+---
+title: Sync Primitives
+description: 'sync.Mutex, sync.RWMutex, sync.Once, sync/atomic, และเมื่อไหร่ควรใช้ channels vs mutexes'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## เมื่อ Channels ไม่เพียงพอ
+
+Channels เหมาะสำหรับการถ่ายโอน ownership ของข้อมูลระหว่าง goroutines แต่บางครั้งคุณแค่ต้องการป้องกัน shared value ที่ goroutines หลายตัวอ่านและเขียน — cache, counter, connection pool สำหรับกรณีเหล่านี้ package `sync` มี primitives ระดับต่ำกว่า
+
+## sync.Mutex
+
+`sync.Mutex` คือ mutual exclusion lock goroutine เดียวเท่านั้นที่ถือ lock ได้ในแต่ละเวลา ที่เหลือบล็อกบน `Lock()` จนกว่าผู้ถือเรียก `Unlock()`
+
+```go
+var mu sync.Mutex
+var count int
+
+mu.Lock()
+count++
+mu.Unlock()
+```
+
+ใช้ `defer mu.Unlock()` ทันทีหลัง `mu.Lock()` เสมอเพื่อให้ lock ถูก release แม้ function จะ panic หรือ return ก่อนเวลา
+
+## sync.RWMutex
+
+`sync.RWMutex` คือ variant ที่ optimize สำหรับกรณีที่อ่านบ่อย goroutines หลายตัวสามารถถือ **read lock** พร้อมกันได้ด้วย `RLock/RUnlock` **Write lock** (`Lock/Unlock`) เป็น exclusive — รอให้ reader ทั้งหมดเสร็จก่อน แล้วบล็อก reader ใหม่จนกว่า writer เสร็จ
+
+## sync.Once
+
+`sync.Once` รัน function ได้ครั้งเดียว ไม่ว่าจะมี goroutines กี่ตัวเรียก `Do` พร้อมกัน use case มาตรฐานคือ lazy, thread-safe initialization:
+
+```go
+var once sync.Once
+var instance *Config
+
+func getConfig() *Config {
+    once.Do(func() {
+        instance = loadConfig()
+    })
+    return instance
+}
+```
+
+## sync/atomic
+
+Package `sync/atomic` มี lock-free operations บน integer และ pointer types โดยใช้ CPU hardware instructions สำหรับ counter หรือ flag ง่าย ๆ atomics เร็วกว่า mutex เพราะไม่มี lock contention
+
+export const syncCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+\t"sync/atomic"
+)
+
+type SafeCounter struct {
+\tmu sync.Mutex
+\tv  int
+}
+
+func (c *SafeCounter) Inc() {
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\tc.v++
+}
+
+func (c *SafeCounter) Value() int {
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\treturn c.v
+}
+
+func main() {
+\t// sync.Mutex: 100 goroutines increment ทีละ 1 -> 100
+\tvar wg sync.WaitGroup
+\tc := &SafeCounter{}
+\tfor i := 0; i < 100; i++ {
+\t\twg.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg.Done()
+\t\t\tc.Inc()
+\t\t}()
+\t}
+\twg.Wait()
+\tfmt.Println("counter:", c.Value()) // 100
+
+\t// sync.Once: function รันครั้งเดียวแม้เรียก 3 ครั้ง
+\tvar once sync.Once
+\tfor i := 0; i < 3; i++ {
+\t\tonce.Do(func() {
+\t\t\tfmt.Println("only once")
+\t\t})
+\t}
+
+\t// sync/atomic: 50 goroutines add 1 -> 50
+\tvar atomicCount int64
+\tfor i := 0; i < 50; i++ {
+\t\twg.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg.Done()
+\t\t\tatomic.AddInt64(&atomicCount, 1)
+\t\t}()
+\t}
+\twg.Wait()
+\tfmt.Println("atomic count:", atomic.LoadInt64(&atomicCount)) // 50
+}`;
+
+<Playground client:visible code={syncCode} />
+
+<Callout title="Data races: ตรวจหาด้วย go run -race">
+Data race เกิดขึ้นเมื่อ goroutines สองตัวเข้าถึง variable เดียวกันพร้อมกันและอย่างน้อยหนึ่งเป็นการเขียน โดยไม่มี synchronization ผลลัพธ์คือ undefined behaviour Go มี race detector ในตัว: รัน `go run -race main.go` หรือ `go test -race ./...` เพื่อ instrument binary ของคุณ Detector เพิ่ม overhead ประมาณ 2–20x และไม่เหมาะสำหรับ production แต่ต้องใช้ใน CI
+</Callout>
+
+export const quizSync = [
+  {
+    q: "ความแตกต่างระหว่าง sync.Mutex และ sync.RWMutex คืออะไร?",
+    options: [
+      "RWMutex อนุญาต readers พร้อมกันหลายตัว Mutex ไม่อนุญาต",
+      "RWMutex ปลอดภัยเฉพาะใน goroutine เดียว",
+      "Mutex ถูก deprecated แทนด้วย RWMutex",
+      "RWMutex ต้องเรียก unlock แยกสำหรับแต่ละ lock call"
+    ],
+    answer: 0
+  },
+  {
+    q: "function ที่ส่งให้ sync.Once.Do จะรันกี่ครั้ง แม้ว่า 100 goroutines จะเรียก Do?",
+    options: [
+      "100 ครั้ง — ทีละหนึ่งต่อ goroutine",
+      "ขึ้นอยู่กับ GOMAXPROCS",
+      "ครั้งเดียวเท่านั้น",
+      "ศูนย์ครั้ง — Do เป็น lazy และรันเฉพาะเมื่อเรียกชัดเจนครั้งแรก"
+    ],
+    answer: 2
+  },
+  {
+    q: "ควรใช้ sync/atomic แทน sync.Mutex สำหรับ shared integer counter เมื่อไหร่?",
+    options: [
+      "ไม่เลย — atomic ใช้ได้เฉพาะกับ pointers",
+      "เมื่อ operation บน counter เป็น single load, store, หรือ add และต้องการหลีกเลี่ยง lock contention overhead",
+      "เฉพาะเมื่อ GOMAXPROCS เท่ากับ 1",
+      "เมื่อ counter ถูกแก้ไขจากมากกว่า 8 goroutines พร้อมกัน"
+    ],
+    answer: 1
+  },
+  {
+    q: "`go test -race` ทำอะไร?",
+    options: [
+      "รัน tests เร็วที่สุดโดยใช้ CPU cores ทั้งหมด",
+      "Compile test binary ด้วย race detector instrumentation เพื่อตรวจจับ concurrent memory access violations",
+      "ปิด GC ระหว่าง tests เพื่อหา memory leaks",
+      "รัน tests หลายครั้งแบบขนานเพื่อหา flaky tests"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/sync-primitives" questions={quizSync} />
+
+<ProgressTracker client:visible id="concurrency/sync-primitives" />

@@ -1,0 +1,144 @@
+---
+title: Select
+description: 'การรวม channels หลายตัวด้วย select, default clause สำหรับ non-blocking, และ timeouts'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## คำสั่ง select
+
+`select` เป็นวิธีของ Go ในการรอหลาย channel operations พร้อมกัน มันบล็อกจนกว่า case หนึ่งพร้อม แล้วรัน case นั้น ถ้าหลาย case พร้อมพร้อมกัน จะเลือกหนึ่งแบบ **สุ่ม** — นี่คือการออกแบบภาษาโดยตั้งใจเพื่อหลีกเลี่ยง starvation
+
+```go
+select {
+case v := <-ch1:
+    fmt.Println("received from ch1:", v)
+case ch2 <- 99:
+    fmt.Println("sent to ch2")
+}
+```
+
+`select` case สามารถเป็น send หรือ receive — คำสั่งไหนก็ได้ที่ดำเนินต่อได้โดยไม่บล็อก
+
+## Default Clause
+
+การเพิ่ม `default` case ทำให้ `select` เป็น non-blocking ถ้าไม่มี channel พร้อม branch `default` จะรันทันที:
+
+```go
+select {
+case v := <-ch:
+    fmt.Println("got", v)
+default:
+    fmt.Println("nothing ready yet")
+}
+```
+
+## Timeouts
+
+Pattern ทั่วไปคือการรวม `select` กับ `time.After` ซึ่ง return channel ที่รับค่าหลังจาก duration ที่กำหนด:
+
+```go
+select {
+case result := <-work:
+    fmt.Println("done:", result)
+case <-time.After(2 * time.Second):
+    fmt.Println("timed out")
+}
+```
+
+สำหรับ production ที่ตั้ง timeouts หลายจุด ให้ใช้ `context.WithTimeout` แทนเพื่อ propagate cancellation และหลีกเลี่ยง timer leak
+
+export const selectCode = `package main
+
+import "fmt"
+
+func main() {
+\t// โหลด buffered channels สองตัวล่วงหน้า
+\tch1 := make(chan string, 1)
+\tch2 := make(chan string, 1)
+\tch1 <- "one"
+\tch2 <- "two"
+
+\t// ดึง ch1 ด้วย select ของตัวเอง — รับ "one" แน่นอน
+\tselect {
+\tcase msg := <-ch1:
+\t\tfmt.Println("ch1:", msg)
+\t}
+
+\t// ดึง ch2 ด้วย select ของตัวเอง — รับ "two" แน่นอน
+\tselect {
+\tcase msg := <-ch2:
+\t\tfmt.Println("ch2:", msg)
+\t}
+
+\t// default ทำให้ select เป็น non-blocking
+\tch3 := make(chan int)
+\tselect {
+\tcase v := <-ch3:
+\t\tfmt.Println("received", v)
+\tdefault:
+\t\tfmt.Println("no value ready, default taken")
+\t}
+
+\t// Fan-in: รวม result channels สองตัวเป็นหนึ่ง
+\tr1 := make(chan int, 1)
+\tr2 := make(chan int, 1)
+\tr1 <- 10
+\tr2 <- 20
+\tfor i := 0; i < 2; i++ {
+\t\tselect {
+\t\tcase v := <-r1:
+\t\t\tfmt.Println("r1:", v)
+\t\tcase v := <-r2:
+\t\t\tfmt.Println("r2:", v)
+\t\t}
+\t}
+
+\tfmt.Println("done")
+}`;
+
+<Playground client:visible code={selectCode} />
+
+<Callout title="ข้อควรระวัง: select ว่างบล็อกตลอดไป">
+`select` ที่ไม่มี case — `select {}` — บล็อก goroutine ปัจจุบันตลอดไป บางครั้งใช้โดยตั้งใจเพื่อให้ `main` มีชีวิตอยู่ แต่มักเป็นความผิดพลาด ตรวจสอบให้แน่ใจว่า select ของคุณมี case ที่เข้าถึงได้หรือ `default` เสมอ `select` ที่มีเฉพาะ `default` โดยไม่มี channel case จะรัน `default` ทุกครั้ง — มีประโยชน์สำหรับการ poll แบบ non-blocking แต่จะเป็น infinite loop ถ้าอยู่ใน `for` โดยไม่มี logic เพิ่ม
+</Callout>
+
+export const quizSelect = [
+  {
+    q: "Go ทำอะไรเมื่อหลาย case ใน select พร้อมพร้อมกัน?",
+    options: [
+      "Case แรกที่ระบุชนะ (deterministic priority)",
+      "เกิด compile error",
+      "เลือก case หนึ่งแบบสุ่ม",
+      "ทุก case ที่พร้อมรันตามลำดับ"
+    ],
+    answer: 2
+  },
+  {
+    q: "การเพิ่ม `default` case ใน select มีผลอย่างไร?",
+    options: [
+      "select บล็อกจนกว่า channel หนึ่งพร้อม แล้ว fallthrough ไป default",
+      "select เป็น non-blocking — ถ้าไม่มี channel พร้อม default branch รันทันที",
+      "default รันเฉพาะเมื่อ channels ทั้งหมดถูกปิด",
+      "ป้องกันไม่ให้ goroutine ถูกขัดจังหวะ"
+    ],
+    answer: 1
+  },
+  {
+    q: "`time.After(d)` return อะไร?",
+    options: [
+      "ค่า time.Duration",
+      "ฟังก์ชัน blocking ที่ sleep เป็นเวลา d",
+      "`<-chan time.Time` ที่รับหนึ่งครั้งหลังจาก duration d ผ่านไป",
+      "context ที่มี deadline เป็น now + d"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="concurrency/select" questions={quizSelect} />
+
+<ProgressTracker client:visible id="concurrency/select" />

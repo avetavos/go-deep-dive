@@ -1,0 +1,131 @@
+---
+title: Goroutines
+description: 'Goroutines ทำงานอย่างไร, Go scheduler, ต้นทุนของ goroutine, และการรอด้วย sync.WaitGroup'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Goroutine คืออะไร?
+
+**Goroutine** คือฟังก์ชันที่ทำงานพร้อมกันกับ goroutines อื่น ๆ ในพื้นที่ address เดียวกัน คุณสร้างมันด้วย keyword เดียว:
+
+```go
+go f(args)
+```
+
+นั่นคือ syntax ทั้งหมด `go` จัดตาราง `f` ให้รัน concurrent แล้ว goroutine ที่เรียกก็ดำเนินต่อทันทีโดยไม่รอให้ `f` return
+
+## ทำไม Goroutines ถึงถูก
+
+OS thread โดยทั่วไปเริ่มต้นด้วย stack ขนาดคงที่ 1–8 MB แต่ goroutine เริ่มต้นด้วย stack ขนาดประมาณ **2–8 KB** ที่ขยายและหดตัวได้อัตโนมัติตามต้องการ Go runtime จัดสรร goroutines ลง OS threads โดยใช้ **M:N scheduler** (M goroutines บน N threads) Context switch ระหว่าง goroutines เกิดขึ้นใน user-space และถูกกว่า kernel thread switch หลายเท่า
+
+ในระบบ production การมี goroutines หลายหมื่นตัวรันพร้อมกันเป็นเรื่องปกติ
+
+## Go Scheduler: M, P, G
+
+Scheduler ทำงานบนสามแนวคิด:
+
+| สัญลักษณ์ | ความหมาย |
+|--------|---------|
+| **G** | Goroutine — หน่วยงาน concurrent |
+| **M** | Machine — OS thread |
+| **P** | Processor — scheduling context (มี GOMAXPROCS ตัว) |
+
+แต่ละ P มี run queue ของ Gs M ต้องถือ P ถึงจะรัน G ได้ เมื่อ G บล็อกบน I/O M ของมันจะปล่อย P เพื่อให้ M อื่นรับช่วงต่อ
+
+## รอด้วย sync.WaitGroup
+
+`sync.WaitGroup` เป็นวิธีมาตรฐานในการรอ goroutines จำนวนคงที่ให้เสร็จ:
+
+- `wg.Add(n)` — เพิ่ม counter ขึ้น n (เสมอก่อน `go` statement)
+- `wg.Done()` — ลด counter ลง 1 (เรียกด้วย `defer` ใน goroutine)
+- `wg.Wait()` — บล็อกจนกว่า counter จะถึงศูนย์
+
+export const goroutinesCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+)
+
+func worker(id int, results []string, wg *sync.WaitGroup) {
+\tdefer wg.Done()
+\tsum := 0
+\tfor j := 1; j <= 5; j++ {
+\t\tsum += j
+\t}
+\tresults[id-1] = fmt.Sprintf("worker %d: sum 1..5 = %d", id, sum)
+}
+
+func main() {
+\tvar wg sync.WaitGroup
+\tresults := make([]string, 3)
+
+\tfor i := 1; i <= 3; i++ {
+\t\twg.Add(1)
+\t\tgo worker(i, results, &wg)
+\t}
+
+\twg.Wait()
+
+\tfor _, r := range results {
+\t\tfmt.Println(r)
+\t}
+\tfmt.Println("all workers done")
+}`;
+
+<Playground client:visible code={goroutinesCode} />
+
+<Callout title="ข้อควรระวัง: goroutines ที่เริ่มใน main อาจไม่รันถ้า main return ก่อน">
+ถ้า `main` return ก่อนที่ goroutine จะมีโอกาสรัน goroutine นั้นจะถูกยกเลิกอย่างเงียบ ๆ Go runtime exit ทันทีที่ `main` goroutine return — มันไม่รอ background goroutines ใช้ `sync.WaitGroup`, channel, หรือ synchronization mechanism อื่น ๆ เพื่อให้ `main` มีชีวิตนานพอให้ goroutines เสร็จสิ้น
+</Callout>
+
+export const quizGoroutines = [
+  {
+    q: "ขนาด stack เริ่มต้นโดยประมาณของ goroutine ใหม่คือเท่าไหร่?",
+    options: [
+      "1 MB (เหมือน OS thread)",
+      "2–8 KB ขยายตัวแบบ dynamic ตามต้องการ",
+      "64 KB คงที่",
+      "ขึ้นอยู่กับระบบปฏิบัติการ"
+    ],
+    answer: 1
+  },
+  {
+    q: "ต้องเรียก wg.Add(1) ที่ไหนสัมพันธ์กับ go statement?",
+    options: [
+      "ใน goroutine เป็น statement แรก",
+      "ที่ไหนก็ได้ — ไม่สำคัญ",
+      "ก่อน go statement ใน calling goroutine",
+      "หลัง wg.Wait()"
+    ],
+    answer: 2
+  },
+  {
+    q: "เกิดอะไรขึ้นถ้า main return ขณะที่ goroutines ยังรันอยู่?",
+    options: [
+      "Runtime รอให้ goroutines ทั้งหมดเสร็จ",
+      "เฉพาะ daemon goroutines ถูกยกเลิก worker goroutines เสร็จตามปกติ",
+      "Goroutines ทั้งหมดถูกยกเลิกทันที — process exit",
+      "เกิด panic"
+    ],
+    answer: 2
+  },
+  {
+    q: "GOMAXPROCS ควบคุมอะไร?",
+    options: [
+      "จำนวนสูงสุดของ goroutines ที่สร้างได้",
+      "จำนวน OS threads (Ps) ที่สามารถรัน Go code พร้อมกันได้",
+      "ขนาด stack สูงสุดของ goroutine",
+      "จำนวน CPU cores ที่ OS กำหนดให้ process"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/goroutines" questions={quizGoroutines} />
+
+<ProgressTracker client:visible id="concurrency/goroutines" />

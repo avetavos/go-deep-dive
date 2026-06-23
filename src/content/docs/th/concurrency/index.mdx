@@ -1,5 +1,106 @@
 ---
-title: Concurrency
-description: Goroutines, channels, select, and the Go concurrency model.
+title: 'Concurrency: แบบฉบับ Go'
+description: 'แนะนำโมเดล Concurrency ของ Go — goroutines, channels, CSP และสิ่งที่โมดูลนี้จะสอน'
 ---
-Coming soon.
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## โมเดล Concurrency ของ Go
+
+ภาษาส่วนใหญ่เพิ่ม concurrency เข้าไปบน shared-memory threads ภายหลัง แต่ Go ถูกออกแบบตั้งแต่ต้นรอบแนวคิดที่แตกต่างออกไปเรียกว่า **Communicating Sequential Processes (CSP)** ซึ่ง Tony Hoare เป็นผู้นิยามในปี 1978 คำพูดของ Go ที่สรุปได้ชัดที่สุดคือ:
+
+> *อย่าสื่อสารโดยการแชร์หน่วยความจำ ให้แชร์หน่วยความจำโดยการสื่อสารแทน*
+
+ในทางปฏิบัติหมายความว่า:
+
+- **Goroutines** คือฟังก์ชันที่ทำงานอิสระ ใช้ทรัพยากรน้อยมาก — stack เริ่มต้นเพียงไม่กี่ KB ที่ขยายตัวได้ตามต้องการ — จึงสามารถมีได้หลายแสนตัวที่รันพร้อมกัน
+- **Channels** คือท่อส่งข้อมูลแบบ typed goroutines ส่งค่าเข้า channel และรับค่าจาก channel อีกตัว ทั้งการส่งข้อมูลและการ synchronize เกิดขึ้นในคำสั่งเดียว
+- **Scheduler** จัดสรร goroutines ลงบน OS threads (GOMAXPROCS threads ตามค่าเริ่มต้น หนึ่งตัวต่อ CPU core) คุณไม่ต้องจัดการ threads โดยตรง
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | หัวข้อ |
+|--------|-------|
+| หน้านี้ | ภาพรวมโมเดลและตัวอย่างแรกที่รันได้ |
+| Goroutines | `go f()`, scheduler, `sync.WaitGroup` |
+| Channels | สร้าง, ส่ง, รับ, unbuffered vs buffered, `close`, `range` |
+| Select | รวม channels หลายตัว, `default`, timeouts |
+| Sync Primitives | `sync.Mutex`, `sync.Once`, `sync/atomic` |
+| Context | `context.Context`, การยกเลิก, การส่งต่อ |
+| Patterns | Worker pool, fan-out/fan-in, pipeline |
+
+## โปรแกรม concurrent ตัวแรกของคุณ
+
+snippet ด้านล่างสร้าง goroutines 3 ตัวแบบขนาน แต่ละตัวเขียนผลลัพธ์ลงใน slice ที่จัดสรรไว้ล่วงหน้า indexed ตาม id ของตัวเอง ทำให้ผลลัพธ์เรียงลำดับเสมอ `sync.WaitGroup` บล็อก `main` จนกว่าทั้งสามตัวจะเสร็จสิ้น
+
+export const indexCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+)
+
+func main() {
+\tvar wg sync.WaitGroup
+\tresults := make([]string, 3)
+
+\tfor i := 0; i < 3; i++ {
+\t\twg.Add(1)
+\t\tgo func(id int) {
+\t\t\tdefer wg.Done()
+\t\t\tresults[id] = fmt.Sprintf("goroutine %d says hello", id)
+\t\t}(i)
+\t}
+
+\twg.Wait()
+\tfor _, r := range results {
+\t\tfmt.Println(r)
+\t}
+\tfmt.Println("main exits")
+}`;
+
+<Playground client:visible code={indexCode} />
+
+<Callout title="ข้อควรระวัง: ส่ง i เป็น value เสมอ">
+ตัวแปร loop `i` เปลี่ยนค่าในทุก iteration การ close over มันโดยตรงใน `go func() { ... }()` หมายความว่า goroutine ทุกตัวอาจเห็นค่าสุดท้ายของ `i` ค่าเดียวกัน ให้ส่ง loop variable เป็น argument ชัดเจน — `go func(id int) { ... }(i)` — เพื่อให้แต่ละ goroutine มี snapshot ของตัวเอง ใน Go 1.22+ ตัวแปร loop จะถูก bind ใหม่ทุก iteration แต่การส่งชัดเจนยังคงเป็นแบบแผนที่ชัดเจนที่สุด
+</Callout>
+
+export const quizIndex = [
+  {
+    q: "คำพูด Go 'share memory by communicating' หมายความว่าอะไรในทางปฏิบัติ?",
+    options: [
+      "ใช้ global variables ที่ป้องกันด้วย mutex",
+      "ถ่ายโอน ownership ของข้อมูลผ่าน channels แทนการแชร์ pointer ภายใต้ lock",
+      "หลีกเลี่ยง shared state ทั้งหมดโดยรัน goroutines ใน process แยกต่างหาก",
+      "ใช้ sync.Map สำหรับทุก shared variable"
+    ],
+    answer: 1
+  },
+  {
+    q: "จำนวน OS threads เริ่มต้นที่ Go ใช้รัน goroutines คือเท่าไหร่?",
+    options: [
+      "เสมอ 1",
+      "เสมอ 4",
+      "เท่ากับ GOMAXPROCS ซึ่ง default เป็นจำนวน CPU cores",
+      "เท่ากับจำนวน goroutines"
+    ],
+    answer: 2
+  },
+  {
+    q: "ทำไม `wg.Add(1)` ถึงต้องเรียกก่อน `go func()`?",
+    options: [
+      "เป็นแค่ convention ด้านสไตล์เท่านั้น ตำแหน่งไม่สำคัญ",
+      "ถ้า Add รันใน goroutine scheduler อาจไปถึง wg.Wait() ก่อนที่ goroutine จะเริ่ม ทำให้ Wait คืนค่าก่อนเวลา",
+      "go func() บล็อกจนกว่า Add จะถูกเรียก",
+      "sync.WaitGroup กำหนดให้ Add ต้องเรียกจาก main goroutine"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="concurrency/index" />

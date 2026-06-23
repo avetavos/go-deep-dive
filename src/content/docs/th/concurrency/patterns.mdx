@@ -1,0 +1,157 @@
+---
+title: Concurrency Patterns
+description: 'Worker pool, fan-out/fan-in, และ pipeline — สาม pattern concurrency พื้นฐานของ Go'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## สาม Pattern พื้นฐาน
+
+Goroutines และ channels ของ Go ประกอบกันตาม pattern ที่เข้าใจดีจำนวนน้อย เมื่อคุณจำแนกได้ คุณสามารถรวมกันสร้างระบบ concurrent ที่ซับซ้อนได้
+
+## Pipeline
+
+**Pipeline** คือชุด stages ที่เชื่อมต่อด้วย channels แต่ละ stage รับค่าจาก upstream channel แปลงมัน แล้วส่ง result ลง downstream channel Stages รัน concurrent — ขณะที่ stage 2 กำลัง process item N, stage 1 กำลังทำงานกับ item N+1 แล้ว
+
+```
+generate → square → print
+```
+
+Pipelines เหมาะสำหรับ stream processing ที่แต่ละ transformation เป็นอิสระ
+
+## Fan-out / Fan-in
+
+**Fan-out** เริ่ม goroutines หลายตัวที่อ่านจาก input channel เดียวกัน เพื่อทำงานแบบขนาน **Fan-in** รวม output channels หลายตัวเป็นหนึ่งเพื่อ consumer อ่าน รวมกันทำให้ parallel processing stage ใน pipeline
+
+## Worker Pool
+
+**Worker pool** คือ goroutines จำนวนคงที่ที่ consume จาก shared jobs channel ขนาด pool จำกัดการใช้ทรัพยากร (goroutines, connections, file handles) ขณะที่ยังประมวลผล concurrent
+
+```
+main → jobs channel → [worker 1, worker 2, worker 3] → results
+```
+
+ตัวอย่างที่รันได้ด้านล่างรวมทั้งสาม patterns: pipeline ที่มี generator และ squaring stage ตามด้วย worker pool ที่ประมวลผล batch of jobs แบบ deterministic
+
+export const patternsCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+)
+
+// --- Pipeline ---
+
+func generate(nums ...int) <-chan int {
+\tout := make(chan int, len(nums))
+\tfor _, n := range nums {
+\t\tout <- n
+\t}
+\tclose(out)
+\treturn out
+}
+
+func square(in <-chan int) <-chan int {
+\tout := make(chan int, cap(in))
+\tgo func() {
+\t\tfor n := range in {
+\t\t\tout <- n * n
+\t\t}
+\t\tclose(out)
+\t}()
+\treturn out
+}
+
+// --- Worker Pool ---
+
+func workerPool(jobs <-chan int, results []int, wg *sync.WaitGroup) {
+\tfor j := range jobs {
+\t\tresults[j-1] = j * 2
+\t\twg.Done()
+\t}
+}
+
+func main() {
+\t// Pipeline: 1,2,3,4,5 -> squares
+\tnums := generate(1, 2, 3, 4, 5)
+\tsquares := square(nums)
+\tfor v := range squares {
+\t\tfmt.Println(v)
+\t}
+
+\t// Worker pool: 3 workers, 5 jobs แต่ละงาน double index
+\tconst numJobs = 5
+\tjobs := make(chan int, numJobs)
+\tresults := make([]int, numJobs)
+\tvar wg sync.WaitGroup
+
+\tfor w := 0; w < 3; w++ {
+\t\tgo workerPool(jobs, results, &wg)
+\t}
+\tfor j := 1; j <= numJobs; j++ {
+\t\twg.Add(1)
+\t\tjobs <- j
+\t}
+\tclose(jobs)
+\twg.Wait()
+
+\tfor _, r := range results {
+\t\tfmt.Println(r)
+\t}
+}`;
+
+<Playground client:visible code={patternsCode} />
+
+<Callout title="ข้อควรระวัง: goroutine leak เมื่อไม่มีใด drain channel">
+ถ้า goroutine บล็อกอยู่บน `out <- result` และ receiver ออกไปโดยไม่ drain มัน goroutine นั้นจะถูก **leaked** — มันอยู่ใน runtime ตลอดไป เปลืองหน่วยความจำและ goroutine slot วิธีแก้คือตรวจสอบให้แน่ใจว่า: (a) channel มี buffer พอสำหรับ sends ทั้งหมด, (b) receiver drain channel จนกว่า `close`, หรือ (c) sender ก็ select บน `ctx.Done()` ด้วย ใน production รัน `go tool pprof` บน goroutine profile เพื่อตรวจจับ leak
+</Callout>
+
+export const quizPatterns = [
+  {
+    q: "ใน worker pool อะไรจำกัดจำนวน goroutines ที่ process jobs พร้อมกัน?",
+    options: [
+      "ขนาด buffer ของ jobs channel",
+      "GOMAXPROCS",
+      "จำนวน worker goroutines คงที่ที่ launch ก่อนส่ง jobs",
+      "internal counter ของ sync.WaitGroup"
+    ],
+    answer: 2
+  },
+  {
+    q: "ใน pipeline pattern อะไรทำให้ stages รัน concurrent?",
+    options: [
+      "keyword go ใน stage function แต่ละตัว",
+      "แต่ละ stage รันใน goroutine ของตัวเองและสื่อสารกับ adjacent stages ผ่าน channels",
+      "pipeline function ถูกเรียกด้วย go pipeline()",
+      "Channels parallelise งานอัตโนมัติเมื่ออ่านจาก"
+    ],
+    answer: 1
+  },
+  {
+    q: "Fan-out ในบริบท Go concurrency หมายความว่าอะไร?",
+    options: [
+      "การปิด channel เพื่อให้ receivers ทั้งหมด unblock พร้อมกัน",
+      "การกระจายงานจาก input channel หนึ่งไปยัง goroutines หลายตัวที่อ่านจาก channel นั้น",
+      "การ broadcast ค่าเดียวกันไปยัง channels หลายตัวด้วย send เดียว",
+      "การใช้ select กับ send cases หลายตัว"
+    ],
+    answer: 1
+  },
+  {
+    q: "goroutine บล็อกบน `out <- result` และ consumer return แล้ว สิ่งนี้เรียกว่าอะไรและป้องกันอย่างไร?",
+    options: [
+      "Deadlock — ใช้ sync.Mutex ป้องกัน send",
+      "Data race — ใช้ sync/atomic สำหรับ send",
+      "Goroutine leak — ป้องกันด้วย context cancellation หรือให้ consumer drain channel เสมอ",
+      "Stack overflow — ใช้ buffered channel ขนาด 1"
+    ],
+    answer: 2
+  }
+];
+
+<Quiz client:visible id="concurrency/patterns" questions={quizPatterns} />
+
+<ProgressTracker client:visible id="concurrency/patterns" />

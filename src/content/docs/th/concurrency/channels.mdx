@@ -1,0 +1,154 @@
+---
+title: Channels
+description: 'การสร้าง channel, การส่งและรับ, unbuffered vs buffered, ทิศทาง channel, close, range, และ comma-ok idiom'
+---
+
+import Playground from '../../../../components/Playground.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Channel คืออะไร?
+
+**Channel** คือท่อส่งข้อมูลแบบ typed ที่ goroutines ใช้สื่อสาร การส่งค่าเข้า channel และรับจาก channel เป็นสองคำสั่งที่ถ่ายโอนทั้งข้อมูลและการ synchronize ในขั้นตอนเดียว
+
+```go
+ch := make(chan int)   // unbuffered channel ของ int
+ch <- 42              // ส่ง (บล็อกจนกว่า receiver พร้อม)
+v  := <-ch            // รับ (บล็อกจนกว่า sender พร้อม)
+```
+
+Type system บังคับสิ่งที่ไหลผ่าน channel `chan string` ไม่ยอมรับ `int`
+
+## Unbuffered vs Buffered
+
+| | Unbuffered | Buffered |
+|--|-----------|---------|
+| **สร้างด้วย** | `make(chan T)` | `make(chan T, capacity)` |
+| **Send บล็อก?** | ใช่ — จนกว่า receiver พร้อม | ไม่ — จนกว่า buffer เต็ม |
+| **Receive บล็อก?** | ใช่ — จนกว่า sender พร้อม | ไม่ — จนกว่า buffer ว่าง |
+| **Synchronize?** | ใช่ — sender และ receiver พบกันในเวลาเดียวกัน | ไม่ — buffer แยกเวลาออกจากกัน |
+
+Unbuffered channels ให้ synchronization guarantee ที่แข็งแกร่งที่สุด: sender รู้ว่า receiver ได้รับค่าแล้วก่อนที่จะดำเนินต่อ
+
+## ทิศทางของ Channel
+
+คุณสามารถจำกัด channel parameter ให้เป็น send-only หรือ receive-only เพื่อแสดง intent ใน type:
+
+```go
+func producer(out chan<- int) { out <- 1 }   // send-only
+func consumer(in <-chan int)  { v := <-in; _ = v }  // receive-only
+```
+
+## การปิด Channel และ Range
+
+Sender เรียก `close(ch)` เพื่อบอกว่าจะไม่มีค่าอีกแล้ว Receivers ใช้ `for range` loop เพื่อดึงค่าทั้งหมดจนกว่าจะ close:
+
+```go
+close(ch)
+for v := range ch { // exit เมื่อ ch ถูกปิดและว่าง
+    fmt.Println(v)
+}
+```
+
+## Comma-ok Receive Idiom
+
+Receive expression สามารถ return boolean ตัวที่สองที่บอกว่า channel ยังเปิดอยู่หรือไม่:
+
+```go
+v, ok := <-ch
+// ok == true  → v เป็นค่าจริง
+// ok == false → channel ถูกปิดและดึงออกหมดแล้ว v เป็น zero value
+```
+
+export const channelsCode = `package main
+
+import "fmt"
+
+func producer(ch chan<- int, n int) {
+\tfor i := 1; i <= n; i++ {
+\t\tch <- i
+\t}
+\tclose(ch)
+}
+
+func main() {
+\t// Unbuffered channel: producer รันใน goroutine
+\tch := make(chan int)
+\tgo producer(ch, 5)
+\tfor v := range ch {
+\t\tfmt.Println(v)
+\t}
+
+\t// Buffered channel: ส่งทั้งหมดพอดี buffer
+\tbuf := make(chan string, 3)
+\tbuf <- "a"
+\tbuf <- "b"
+\tbuf <- "c"
+\tclose(buf)
+\tfor s := range buf {
+\t\tfmt.Println(s)
+\t}
+
+\t// Comma-ok: แยกค่าจริงจาก zero value ของ channel ที่ปิด
+\tdone := make(chan bool, 1)
+\tdone <- true
+\tclose(done)
+\tv1, ok1 := <-done
+\tfmt.Println(v1, ok1)  // true true
+\tv2, ok2 := <-done
+\tfmt.Println(v2, ok2)  // false false
+}`;
+
+<Playground client:visible code={channelsCode} />
+
+<Callout title="ข้อควรระวัง: ส่งเข้า channel ที่ปิดแล้วจะ panic">
+การเรียก `close(ch)` แล้วส่งเข้า `ch` จะทำให้เกิด runtime panic การรับจาก channel ที่ปิดแล้วไม่มีทาง panic — มันจะ return zero value ของ type นั้น และ return value ตัวที่สอง comma-ok จะเป็น `false` หลักง่าย ๆ: เฉพาะ **sender** เท่านั้นที่ปิด channel และปิดก็ต่อเมื่อรู้ว่าจะไม่ส่งอีกแล้ว อย่าปิด channel จากฝั่ง receiver
+</Callout>
+
+export const quizChannels = [
+  {
+    q: "เกิดอะไรขึ้นเมื่อคุณรับจาก unbuffered channel ขณะที่ไม่มี goroutine กำลังส่ง?",
+    options: [
+      "คุณได้รับ zero value ของ type ของ channel",
+      "เกิด panic",
+      "Goroutine บล็อกจนกว่า sender พร้อม",
+      "Receive return ทันทีด้วย ok == false"
+    ],
+    answer: 2
+  },
+  {
+    q: "คุณเรียก close(ch) บน buffered channel ที่ยังมี 3 items อยู่ใน buffer เกิดอะไรขึ้นเมื่อ range?",
+    options: [
+      "Range loop panic ทันที",
+      "Range loop ให้ 3 items ที่เหลือทั้งหมด แล้ว exit",
+      "Range loop exit ทันทีโดยไม่ให้ items ใด ๆ",
+      "Range loop บล็อกรอ items เพิ่ม"
+    ],
+    answer: 1
+  },
+  {
+    q: "return value ตัวที่สอง ok ใน `v, ok := <-ch` บอกอะไร?",
+    options: [
+      "ว่า send สำเร็จโดยไม่บล็อก",
+      "ว่า channel ยังมี capacity เหลือ",
+      "ว่าค่าที่รับไม่ใช่ zero value",
+      "ว่า channel ยังเปิดอยู่ (true) หรือถูกปิดและดึงออกหมดแล้ว (false)"
+    ],
+    answer: 3
+  },
+  {
+    q: "annotation ทิศทาง channel ใดที่จำกัด parameter ให้รับเท่านั้น?",
+    options: [
+      "chan<- T",
+      "<-chan T",
+      "chan T",
+      "readonly chan T"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="concurrency/channels" questions={quizChannels} />
+
+<ProgressTracker client:visible id="concurrency/channels" />
