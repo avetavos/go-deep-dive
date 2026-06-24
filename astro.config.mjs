@@ -19,6 +19,9 @@ export default defineConfig({
         th: { label: 'ไทย', lang: 'th' },
       },
       customCss: ['./src/styles/custom.css'],
+      head: [
+        { tag: 'script', attrs: { type: 'module', src: '/go-deep-dive/enhance.js' } },
+      ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/avetavos/go-deep-dive' }],
       sidebar: [
         { label: 'Basics & Syntax', items: [{ autogenerate: { directory: 'basics' } }] },

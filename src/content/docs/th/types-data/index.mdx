@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## ภาพรวม Type ใน Go
 
@@ -18,18 +19,19 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 **Reference-like types** — ตัวแปรเก็บ header ขนาดเล็กที่ชี้ไปยังโครงสร้างข้อมูลจริงซึ่งถูก allocate ไว้ที่อื่น การ assign จะ copy แค่ header ดังนั้นตัวแปรสองตัวอาจชี้ไปข้อมูลชุดเดียวกันได้ ได้แก่ **slice**, **map**, **channel**, **function**, และ **pointer**
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  ภาพรวม Type ใน Go                                               │
-│                                                                  │
-│  Value types (copy on assign)    Reference-like (header copied) │
-│  ─────────────────────────────   ──────────────────────────────  │
-│  bool, int, float64, string      *T  (pointer)                  │
-│  [N]T  (array)                   []T (slice)                     │
-│  struct { … }                    map[K]V                         │
-│                                  chan T, func(…)                 │
-└──────────────────────────────────────────────────────────────────┘
-```
+export const typeTaxonomyDiagram = `flowchart TD
+  Root["Go Type Taxonomy"]
+  Root --> Value["Value types (copy on assign)"]
+  Root --> Ref["Reference-like (header copied)"]
+  Value --> V1["bool, int, float64, string"]
+  Value --> V2["[N]T (array)"]
+  Value --> V3["struct { ... }"]
+  Ref --> R1["*T (pointer)"]
+  Ref --> R2["[]T (slice)"]
+  Ref --> R3["map[K]V"]
+  Ref --> R4["chan T, func(...)"]`;
+
+<Mermaid code={typeTaxonomyDiagram} title="Go types split into value types (copied on assign) and reference-like types (header copied)" />
 
 ## เนื้อหาในโมดูลนี้
 

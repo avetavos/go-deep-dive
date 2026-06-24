@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Arrays: the foundation
 
@@ -25,14 +26,18 @@ Arrays are value types: assigning `a2 := a1` copies every element. They are usef
 
 A **slice** is a lightweight header — three words — that describes a window into an underlying array:
 
-```
-slice header
-┌──────────┐
-│ pointer  │ ──► backing array [ 10 | 20 | 30 | 40 | 50 ]
-│ len = 3  │         ↑ index 0
-│ cap = 5  │
-└──────────┘
-```
+export const sliceHeaderDiagram = `flowchart LR
+  subgraph Header["slice header"]
+    P["pointer"]
+    L["len = 3"]
+    C["cap = 5"]
+  end
+  subgraph Backing["backing array"]
+    A0["10"] --> A1["20"] --> A2["30"] --> A3["40"] --> A4["50"]
+  end
+  P --> A0`;
+
+<Mermaid code={sliceHeaderDiagram} title="A slice header points into a backing array; len=3 is visible, cap=5 reaches the end" />
 
 - **`len`** — number of elements currently accessible through the slice.
 - **`cap`** — number of elements from the slice's start to the end of the backing array.
