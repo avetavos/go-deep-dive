@@ -31,3 +31,6 @@ html.read-mode .sl-container, html.read-mode .sl-markdown-content { max-width: 5
 
 /* inline code chips inside the .callout dark box: dark text on a light chip for contrast */
 .callout :not(pre) > code { background: var(--sl-color-accent-high); color: var(--sl-color-accent-low); border: 0; padding: .05rem .35rem; border-radius: 5px; font-weight: 600; }
+
+/* Runner toolbar buttons: cancel Starlight flow margin so buttons stay aligned */
+.sl-markdown-content :is([class*="__run"],[class*="__open"],[class*="__copy"],[class*="__btn"],[class*="__fork"]) { margin-top: 0; }
