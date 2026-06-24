@@ -28,8 +28,6 @@ html.read-mode .main-frame { padding-inline-start: 0 !important; padding-top: 0 
 html.read-mode .main-pane { width: 100%; }
 html.read-mode .sl-container, html.read-mode .sl-markdown-content { max-width: 50rem; margin-inline: auto; }
 
-/* inline code chips inside the .tip dark box: dark text on a light chip for contrast */
-.tip :not(pre) > code { background: var(--sl-color-accent-high); color: var(--sl-color-accent-low); border: 0; padding: .05rem .35rem; border-radius: 5px; font-weight: 600; }
 
 /* inline code chips inside the .callout dark box: dark text on a light chip for contrast */
 .callout :not(pre) > code { background: var(--sl-color-accent-high); color: var(--sl-color-accent-low); border: 0; padding: .05rem .35rem; border-radius: 5px; font-weight: 600; }
