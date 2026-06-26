@@ -21,6 +21,15 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       head: [
         { tag: 'script', attrs: { type: 'module', src: '/go-deep-dive/enhance.js' } },
+        { tag: 'link', attrs: { rel: 'manifest', href: '/go-deep-dive/manifest.webmanifest' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/go-deep-dive/apple-touch-icon.png' } },
+        { tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '192x192', href: '/go-deep-dive/icon-192.png' } },
+        { tag: 'meta', attrs: { name: 'theme-color', content: '#00ADD8' } },
+        { tag: 'meta', attrs: { name: 'mobile-web-app-capable', content: 'yes' } },
+        { tag: 'meta', attrs: { name: 'apple-mobile-web-app-capable', content: 'yes' } },
+        { tag: 'meta', attrs: { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' } },
+        { tag: 'meta', attrs: { name: 'apple-mobile-web-app-title', content: "Go Deep Dive" } },
+        { tag: 'script', content: "if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/go-deep-dive/sw.js',{scope:'/go-deep-dive/'}).catch(function(){})})}" },
       ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/avetavos/go-deep-dive' }],
       sidebar: [
