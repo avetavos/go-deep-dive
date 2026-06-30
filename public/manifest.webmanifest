@@ -1,28 +1,28 @@
 {
-  "id": "/go-deep-dive/",
+  "id": "/",
   "name": "Go Deep Dive",
   "short_name": "Go Deep Dive",
-  "start_url": "/go-deep-dive/en/",
-  "scope": "/go-deep-dive/",
+  "start_url": "/en/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#0d1117",
   "theme_color": "#00ADD8",
   "icons": [
     {
-      "src": "/go-deep-dive/icon-192.png",
+      "src": "/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/go-deep-dive/icon-512.png",
+      "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/go-deep-dive/icon-512.png",
+      "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
