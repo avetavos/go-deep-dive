@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -196,7 +196,7 @@ func main() {
 \tdeferDemo()
 }`;
 
-<Playground client:visible code={functionsCode} />
+<Playground code={functionsCode} />
 
 <Callout title="Deferred calls run LIFO at return">
 Multiple `defer` statements in the same function execute in **last-in, first-out** order when the function returns. This mirrors a stack: the last thing you deferred is the first thing that runs on the way out. Importantly, **arguments are evaluated at the defer site**, not when the deferred call actually executes — so `defer fmt.Println(x)` captures the current value of `x`, even if `x` changes before the function returns.

@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -122,7 +122,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={errorValuesCode} />
+<Playground code={errorValuesCode} />
 
 ## Trade-offs
 

@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -106,7 +106,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={typeAssertionsCode} />
+<Playground code={typeAssertionsCode} />
 
 <Callout title="A failed single-value assertion panics">
 `x.(T)` without the comma-ok idiom panics immediately if the dynamic type is not `T`. This is a runtime error, not a compile-time error — the compiler cannot know the dynamic type. Always use the comma-ok form `v, ok := x.(T)` when there is any chance the assertion could fail. Reserve the single-value form for code paths where the type is logically guaranteed — and add a comment explaining why.

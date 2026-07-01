@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -109,7 +109,7 @@ func main() {
 \tfmt.Println("done")
 }`;
 
-<Playground client:visible code={selectCode} />
+<Playground code={selectCode} />
 
 <Callout title="Gotcha: empty select blocks forever">
 A `select` with no cases — `select {}` — blocks the current goroutine forever. This is occasionally used intentionally to keep `main` alive (a leaner alternative to `for {}`), but it is more commonly a mistake. Always ensure your select has at least one reachable case or a `default`. A `select` with only a `default` and no channel cases executes the `default` immediately every time — useful for a non-blocking poll, but an infinite loop if placed inside `for` without additional logic.

@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -125,7 +125,7 @@ func main() {
 \tfmt.Println("atomic count:", atomic.LoadInt64(&atomicCount)) // 50
 }`;
 
-<Playground client:visible code={syncCode} />
+<Playground code={syncCode} />
 
 <Callout title="Data races: find them with go run -race">
 A data race occurs when two goroutines access the same variable concurrently and at least one access is a write, with no synchronization between them. The result is undefined behaviour. Go ships a built-in race detector: run `go run -race main.go` or `go test -race ./...` to instrument your binary. The detector adds roughly 2–20x runtime overhead and is not suitable for production, but it is mandatory in CI. Mutexes, channels, and atomics all eliminate races.

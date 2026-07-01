@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -79,7 +79,7 @@ func main() {
 \tfmt.Println(score["Charlie"]) // missing key -> zero value (0)
 }`;
 
-<Playground client:visible code={indexCode} />
+<Playground code={indexCode} />
 
 <Callout title="Value types are copied; reference-like types share data">
 When you assign a struct to a new variable — `p2 := p1` — you get an independent copy. Modifying `p2` never affects `p1`. Slices and maps behave differently: assigning copies the header, so two variables can point at the same underlying data. This distinction drives most of the design decisions you will encounter throughout this module.

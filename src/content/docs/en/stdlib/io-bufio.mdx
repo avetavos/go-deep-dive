@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -124,7 +124,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={ioBufioCode} />
+<Playground code={ioBufioCode} />
 
 <Callout title="Program to io.Reader and io.Writer, not to concrete types">
 Write your functions to accept `io.Reader` or `io.Writer` rather than `*os.File` or `*http.Request`. This single habit makes your code universally testable — pass a `strings.NewReader` in tests, a real file in production, and an HTTP body in handlers, all without touching the function. It also means your function participates in the entire ecosystem of Go I/O composition: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader`, and so on.

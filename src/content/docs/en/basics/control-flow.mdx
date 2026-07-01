@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -168,7 +168,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={controlFlowCode} />
+<Playground code={controlFlowCode} />
 
 <Callout title="`for` is Go's only loop keyword">
 Go has no `while`, `do-while`, `until`, or `loop` keyword. Every iteration — whether bounded, conditional, or infinite — uses `for`. The three forms (C-style; condition-only; no-condition) cover every pattern. If you want a `while` loop, write `for condition` with the init and post omitted. This deliberate constraint keeps the language smaller and every loop form immediately recognisable.

@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -129,7 +129,7 @@ func main() {
 \tfmt.Println(ptr == nil) // true
 }`;
 
-<Playground client:visible code={pointersCode} />
+<Playground code={pointersCode} />
 
 <Callout title="Go has pointers but no pointer arithmetic">
 Go gives you full pointer capability — take addresses, dereference, pass pointers to functions — but deliberately removes pointer arithmetic. You cannot add an integer to a pointer to step through memory. This single design decision eliminates buffer overflows, off-by-one memory walks, and use-after-free bugs at the language level. If you need low-level memory operations, the `unsafe` package exists, but it should be reserved for FFI and runtime-level work.

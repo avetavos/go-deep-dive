@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -81,7 +81,7 @@ func main() {
 \tfmt.Println("10 % 3 =", a%b)
 }`;
 
-<Playground client:visible code={indexCode} />
+<Playground code={indexCode} />
 
 <Callout title="Explicit is better than implicit">
 Go never promotes or coerces types silently. Adding an `int` and a `float64` is a compile error until you write the conversion yourself — `float64(a) + b`. This feels strict at first but eliminates an entire class of precision bugs that are common in languages with implicit numeric widening.

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -120,7 +120,7 @@ func main() {
 \tfmt.Println(fresh[0], dst[0]) // 10 0 — independent after copy
 }`;
 
-<Playground client:visible code={slicesCode} />
+<Playground code={slicesCode} />
 
 <Callout title="append may or may not allocate; slices share backing arrays">
 Two important rules to internalize. First: `append` returns a new slice header — if growth caused a reallocation you now have a completely new backing array. Never ignore the return value. Second: `a[low:high]` does not copy data — both slices share the same backing array. A write through one is visible through the other. Use `copy` when you need a truly independent slice.

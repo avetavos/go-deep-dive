@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -79,7 +79,7 @@ func main() {
 \tfmt.Println(score["Charlie"]) // missing key -> zero value (0)
 }`;
 
-<Playground client:visible code={indexCode} />
+<Playground code={indexCode} />
 
 ## Trade-offs
 

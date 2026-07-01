@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -114,7 +114,7 @@ func main() {
 \tfmt.Println("requestID:", rid)
 }`;
 
-<Playground client:visible code={contextCode} />
+<Playground code={contextCode} />
 
 <Callout title="Always defer cancel() to avoid context leaks">
 Every call to `context.WithCancel`, `context.WithTimeout`, or `context.WithDeadline` must be paired with a call to the returned `cancel` function. If `cancel` is never called, the parent context holds an internal reference to the child context until the parent itself is cancelled. In a long-running server, this accumulates into a goroutine and memory leak. The idiomatic pattern is always: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`.

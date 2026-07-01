@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -125,7 +125,7 @@ func main() {
 \tprint(e)
 }`;
 
-<Playground client:visible code={embeddingCode} />
+<Playground code={embeddingCode} />
 
 ## Trade-offs
 

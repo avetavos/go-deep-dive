@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -137,7 +137,7 @@ func main() {
 \tfmt.Println(a1 == a2) // true
 }`;
 
-<Playground client:visible code={structsCode} />
+<Playground code={structsCode} />
 
 <Callout title="Structs are value types — assignment copies">
 Writing `p2 := p1` produces a completely independent copy of the struct. Every field is copied. Mutating `p2.Name` does not touch `p1`. This is different from slices and maps, where assignment copies only the header and the two variables share the same underlying data. If you need to share a struct across goroutines or avoid copying large structs, use a pointer (`*Person`).

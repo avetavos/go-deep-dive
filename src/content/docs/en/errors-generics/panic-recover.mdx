@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -124,7 +124,7 @@ func main() {
 \tfmt.Println(mustPositive(5))
 }`;
 
-<Playground client:visible code={panicRecoverCode} />
+<Playground code={panicRecoverCode} />
 
 <Callout title="Do not use panic for ordinary errors">
 Panic is for programmer errors and impossible states — things that should never happen in a correctly written program. For any error a caller might reasonably expect (missing record, bad input, network failure), return `(T, error)`. Library code should especially avoid panicking on bad user input; convert panics to errors at package boundaries when needed.

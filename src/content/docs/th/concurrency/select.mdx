@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -103,7 +103,7 @@ func main() {
 \tfmt.Println("done")
 }`;
 
-<Playground client:visible code={selectCode} />
+<Playground code={selectCode} />
 
 ## Trade-offs
 

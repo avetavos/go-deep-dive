@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -122,7 +122,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={errorValuesCode} />
+<Playground code={errorValuesCode} />
 
 <Callout title="Errors are ordinary values">
 In Go, an error is just a value like any other. There is no special syntax to throw or catch it. Returning `nil` means success; returning a non-nil error means failure. This makes error handling explicit, composable, and easy to reason about — every function call site is self-documenting about what can go wrong.

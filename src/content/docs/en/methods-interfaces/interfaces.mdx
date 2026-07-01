@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -115,7 +115,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={interfacesCode} />
+<Playground code={interfacesCode} />
 
 <Callout title="Interfaces are satisfied implicitly">
 Neither `Circle` nor `Rect` ever mentions `Shape`. They satisfy it because they have `Area()` and `Perimeter()` with the right signatures. This means you can define an interface *after* the types that satisfy it — the types do not need to change at all. Retroactive interface satisfaction is one of Go's most powerful refactoring tools.

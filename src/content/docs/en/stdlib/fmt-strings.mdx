@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -136,7 +136,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={fmtStringsCode} />
+<Playground code={fmtStringsCode} />
 
 <Callout title="%+v and %#v are your debugging friends">
 When you are unsure what is inside a struct, reach for `%+v` first — it prints field names alongside values so you can immediately see which field holds which data. Use `%#v` when you want a copy-pasteable Go literal (useful for writing test fixtures). For production logs, prefer structured logging (`log/slog`) over `fmt.Printf`, but in development and tests `%+v` saves a lot of time.

@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -137,7 +137,7 @@ func main() {
 	fmt.Println(long)
 }`;
 
-<Playground client:visible code={genericsCode} />
+<Playground code={genericsCode} />
 
 <Callout title="Generics add type safety without interface{} + assertions">
 Before generics, a generic container or algorithm required `interface{}` parameters and runtime type assertions — errors only surfaced at runtime. With type parameters, the compiler verifies type correctness at compile time. Use generics when you find yourself writing the same algorithm for two or more types, or when you need a container that preserves the element type.

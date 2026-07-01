@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -119,7 +119,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={mapsCode} />
+<Playground code={mapsCode} />
 
 <Callout title="Map iteration order is randomized — always sort for deterministic output">
 Go intentionally randomizes map iteration order on every program run. This prevents bugs that silently depend on hash ordering. If you need stable output — for tests, logs, or user-facing data — collect the keys into a `[]string`, call `sort.Strings`, then range over the sorted slice. Never rely on the order of `for k, v := range myMap`.

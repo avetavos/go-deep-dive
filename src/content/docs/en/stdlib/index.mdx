@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -67,7 +67,7 @@ func main() {
 \tfmt.Println(string(b))
 }`;
 
-<Playground client:visible code={stdlibIndexCode} />
+<Playground code={stdlibIndexCode} />
 
 <Callout title="Standard library documentation">
 Every package in the standard library is documented at **pkg.go.dev/std**. Each page shows the package synopsis, all exported identifiers, and runnable examples. Bookmark it — it is the fastest way to check a function signature or find the right constant.

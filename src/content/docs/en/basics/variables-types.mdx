@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -144,7 +144,7 @@ func main() {
 \tfmt.Println("byte value:", byte(ch))
 }`;
 
-<Playground client:visible code={variablesCode} />
+<Playground code={variablesCode} />
 
 <Callout title="No implicit numeric conversions">
 Go will not silently convert between numeric types. An expression like `int(3) + float64(1.5)` is a **compile error**. You must write `float64(3) + 1.5` or `3 + int(1.5)` depending on which precision you want. This is stricter than most languages, but it prevents entire classes of subtle precision and overflow bugs that occur when a language silently widens or narrows values for you.

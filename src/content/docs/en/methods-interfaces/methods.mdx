@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -98,7 +98,7 @@ func main() {
 \tfmt.Println(temp.String())
 }`;
 
-<Playground client:visible code={methodsCode} />
+<Playground code={methodsCode} />
 
 <Callout title="Use a pointer receiver when you need to mutate — and be consistent">
 A value receiver always operates on a copy, so mutations are silently discarded. Use a pointer receiver whenever a method must change the receiver's state. Once you choose pointer receivers for any method on a type, use them for all methods on that type to keep the method set coherent and avoid surprising interface-satisfaction gaps.

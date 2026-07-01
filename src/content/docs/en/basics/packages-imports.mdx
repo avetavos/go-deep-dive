@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -120,7 +120,7 @@ func main() {
 \tfmt.Println("Joined:", strings.Join(parts, "."))
 }`;
 
-<Playground client:visible code={packagesCode} />
+<Playground code={packagesCode} />
 
 <Callout title="Capitalization controls visibility">
 An identifier that starts with an **uppercase** letter (`Add`, `Client`, `MaxRetries`) is exported and accessible from other packages. A **lowercase** identifier (`add`, `client`, `maxRetries`) is package-private. The compiler enforces this — there is no `public` or `private` keyword. When you design a package, deliberately choose which identifiers to capitalize; unexported identifiers are free to change without breaking callers.

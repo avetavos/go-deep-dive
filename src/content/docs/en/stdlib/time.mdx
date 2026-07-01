@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -112,7 +112,7 @@ func main() {
 \tfmt.Println(t.Hour(), t.Minute(), t.Second())
 }`;
 
-<Playground client:visible code={timeCode} />
+<Playground code={timeCode} />
 
 <Callout title="Go's reference time — Mon Jan 2 15:04:05 MST 2006">
 The reference moment is not arbitrary. Each component is a distinct number: month=1, day=2, hour=15 (3 PM), minute=4, second=5, year=2006. In 12-hour clock order: 1/2/3:4:5 PM '06. This makes the layout self-documenting — you write what you want the output to look like using those exact digits. A common mistake is using `YYYY` or `DD` from other languages; those are just the letters Y, M, D to Go and will appear literally in the output.

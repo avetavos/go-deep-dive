@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -79,7 +79,7 @@ func main() {
 \tfmt.Println("all workers done")
 }`;
 
-<Playground client:visible code={goroutinesCode} />
+<Playground code={goroutinesCode} />
 
 <Callout title="Gotcha: goroutines started in main may not run if main returns">
 If `main` returns before a goroutine has a chance to execute, that goroutine is silently killed. The Go runtime exits as soon as the `main` goroutine returns — it does not wait for background goroutines. Always use `sync.WaitGroup`, a channel, or another synchronization mechanism to ensure `main` stays alive long enough for goroutines to finish.

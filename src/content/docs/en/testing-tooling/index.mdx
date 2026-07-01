@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -79,7 +79,7 @@ func main() {
 \t}
 }`;
 
-<Playground client:visible code={indexCode} />
+<Playground code={indexCode} />
 
 <Callout title="Why pure functions make the best first tests">
 A pure function — one that depends only on its arguments and always returns the same output for the same input — is the ideal starting point for testing. There is no database to mock, no HTTP server to spin up, and no shared state to reset between runs. `Fibonacci` and `IsPrime` both qualify: call them a thousand times with the same input and you get the same result. The next lesson shows how Go's `testing` package makes writing these tests nearly effortless.

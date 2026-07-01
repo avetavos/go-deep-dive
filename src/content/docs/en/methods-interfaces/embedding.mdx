@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -125,7 +125,7 @@ func main() {
 \tprint(e)
 }`;
 
-<Playground client:visible code={embeddingCode} />
+<Playground code={embeddingCode} />
 
 <Callout title="Embedding is composition, not inheritance">
 There is no virtual dispatch on the outer type. If `Employee` embeds `Named` and you call `e.Named.Describe()`, you always call `Named`'s `Describe` — the compiler does not look at `Employee` for an override. This is intentional: Go's embedding is a code-reuse mechanism, not a polymorphism mechanism. For polymorphism, define an interface and let both types satisfy it independently.

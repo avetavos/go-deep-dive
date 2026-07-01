@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -129,7 +129,7 @@ func main() {
 \tfmt.Println(m["lang"], m["version"], m["stable"])
 }`;
 
-<Playground client:visible code={encodingJsonCode} />
+<Playground code={encodingJsonCode} />
 
 <Callout title="Only exported fields are marshaled; tags control the JSON key names">
 Fields that start with a lowercase letter are unexported and are completely invisible to `encoding/json` — they will never appear in the output and will never be populated during unmarshaling, regardless of what tag you write on them. Always make fields you want to serialize start with an uppercase letter. The `json:"name"` tag then controls the key name in the JSON output independently of the Go field name, so you can follow Go naming conventions (`UserID`) while producing clean JSON (`"user_id"`).

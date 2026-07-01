@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -66,7 +66,7 @@ func main() {
 \tfmt.Println("main exits")
 }`;
 
-<Playground client:visible code={indexCode} />
+<Playground code={indexCode} />
 
 <Callout title="Key point: always pass i by value">
 The loop variable `i` changes on every iteration. Closing over it directly inside `go func() { ... }()` means every goroutine may see the same final value of `i`. Always pass loop variables as an explicit argument — `go func(id int) { ... }(i)` — so each goroutine gets its own snapshot. In Go 1.22+ the loop variable is re-bound per iteration, but passing explicitly is still the clearest pattern.

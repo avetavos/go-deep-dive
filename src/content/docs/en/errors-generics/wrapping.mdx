@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -161,7 +161,7 @@ func main() {
 \tfmt.Println("name:", name)
 }`;
 
-<Playground client:visible code={wrappingCode} />
+<Playground code={wrappingCode} />
 
 <Callout title="Wrap to add context; use errors.Is/As to inspect">
 Use `%w` (not `%v`) when you want callers to be able to introspect the error chain. `errors.Is` checks identity (sentinel errors). `errors.As` checks type (structured errors with fields). Use `%v` only when you are discarding the original error type on purpose.

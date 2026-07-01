@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -120,7 +120,7 @@ func main() {
 \tfmt.Println(fresh[0], dst[0]) // 10 0 — independent after copy
 }`;
 
-<Playground client:visible code={slicesCode} />
+<Playground code={slicesCode} />
 
 ## Mental Model
 

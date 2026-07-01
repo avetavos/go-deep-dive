@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -104,7 +104,7 @@ func main() {
 \tfmt.Println(v2, ok2)  // false false
 }`;
 
-<Playground client:visible code={channelsCode} />
+<Playground code={channelsCode} />
 
 <Callout title="Gotcha: send on a closed channel panics">
 Calling `close(ch)` and then sending to `ch` causes a runtime panic. Receiving from a closed channel never panics — it returns the zero value for the type, and the comma-ok second return value will be `false`. The rule of thumb: only the **sender** closes a channel, and only when it knows it will send nothing more. Never close a channel from the receiver side.

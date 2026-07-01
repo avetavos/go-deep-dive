@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-import Playground from '../../../../components/Playground.tsx';
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -112,7 +112,7 @@ func main() {
 \tfmt.Println(t.Hour(), t.Minute(), t.Second())
 }`;
 
-<Playground client:visible code={timeCode} />
+<Playground code={timeCode} />
 
 ## Trade-offs
 
