@@ -211,6 +211,27 @@ func main() {
 
 <Playground client:visible code={functionsCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| multiple return values | explicit error handling ไม่มี hidden exception | caller ต้องตรวจทุก error — verbose กว่า try/catch |
+| named return values | documentation ใน signature, bare return ได้ | bare return ใน function ยาวทำให้อ่านสับสน |
+| `defer` | cleanup code อยู่ใกล้กับ resource acquisition | arguments evaluate ทันที, LIFO order อาจ surprise |
+| closures | encapsulate state ได้กระชับ | captured variable มักถูก allocate บน heap (escape analysis) |
+
+## Common Misconceptions
+
+- **"multiple return values ทำให้ performance แย่ลง"** — Go return multiple values ผ่าน register หรือ stack โดยตรง ไม่มี heap allocation; แทบไม่มีผลต่อ performance
+- **"closure ทุกตัว escape ไปที่ heap"** — compiler ทำ Escape Analysis และอาจ allocate closure บน stack ถ้าไม่ออกนอก scope
+- **"function ใน Go ไม่ใช่ first-class"** — function ใน Go เป็น first-class value สามารถ assign, ส่งเป็น argument, หรือ return จาก function อื่นได้
+
+> 💡 Real World Example
+>
+> **Kubernetes** ใช้ pattern `(result, error)` ทุกที่ใน API server — caller บังคับตรวจ error ทำให้ระบบ resilient
+>
+> **etcd** ใช้ closure ใน Raft consensus implementation เพื่อ capture election state โดยไม่ต้องใช้ global variable
+
 <Callout title="Deferred calls ทำงานแบบ LIFO เมื่อ return">
 หลาย `defer` statement จะทำงานในลำดับ last-in first-out เมื่อ function ที่ครอบคลุมอยู่ return arguments จะถูก evaluate ทันที ณ จุดที่ `defer` ไม่ใช่ตอน call จริง จึงต้องระวังเมื่อ defer function ที่ใช้ตัวแปรที่อาจเปลี่ยนค่า
 </Callout>

@@ -163,6 +163,28 @@ func main() {
 
 <Playground client:visible code={wrappingCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| fmt.Errorf("%w", err) | wrap พร้อม context, errors.Is/As ทำงานได้ | verbose กว่า `return err` เฉยๆ |
+| errors.Is() ใน chain | ตรวจ sentinel ใน chain ลึกแค่ไหนก็ได้ | ช้ากว่า `==` comparison (traversal) |
+| custom error type | เก็บ structured context (field, code, status) | ต้อง maintain type, implement Error() |
+| %v vs %w ใน fmt.Errorf | %v แสดง message ใน string, %w preserve chain | สับสนง่ายระหว่างสอง verb |
+
+## Common Misconceptions
+
+- **wrap error ทุกชั้นยิ่งให้ context ยิ่งดี** — wrapping ลึกเกินไปทำ error message อ่านยาก ให้ wrap เฉพาะเมื่อ caller ต้องการ context นั้น
+- **errors.Unwrap() คืน nil เสมอถ้าไม่ได้ wrap** — errors.Unwrap() เรียกบน non-wrapped error คืน nil — ไม่ panic
+- **%w ใน fmt.Errorf รองรับ error เดียวเท่านั้น** — Go 1.20+ รองรับ `fmt.Errorf("msg: %w and %w", e1, e2)` เพื่อ wrap หลาย error
+- **errors.Is เปรียบเทียบ message string** — errors.Is ตรวจ identity (`==`) ไม่ใช่ message string — sentinel errors ต้องเป็น package-level var
+
+> 💡 Real World Example
+>
+> **Kubernetes** controller ทุก layer เพิ่ม context ด้วย wrapping — `fmt.Errorf("reconcile pod %s: %w", pod.Name, err)` — ทำให้ stack ของ log มีความหมาย
+>
+> **Go database drivers** wrap sql error เพิ่ม query, table, column context ให้ developer debug ได้ทันที
+
 <Callout title="Wrap เพื่อเพิ่ม context; ใช้ errors.Is/As เพื่อตรวจสอบ">
 ใช้ `%w` (ไม่ใช่ `%v`) เมื่อต้องการให้ caller ตรวจสอบ error chain ได้ `errors.Is` ตรวจสอบ identity (sentinel errors) `errors.As` ตรวจสอบ type (structured errors ที่มี field) ใช้ `%v` เฉพาะเมื่อตั้งใจจะทิ้ง error type เดิม
 </Callout>

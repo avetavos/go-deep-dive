@@ -114,6 +114,30 @@ func main() {
 
 <Playground client:visible code={timeCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| time.Time เป็น value type | immutable, safe to copy และ share | ต้องระวัง timezone ที่แต่ละ Time carry |
+| time.Duration (int64 nanoseconds) | arithmetic ชัดเจน — 5*time.Second | ต้อง multiply constant ชัดเจน ไม่ใช่แค่ "5" |
+| time.After / time.NewTimer | สร้าง timeout ง่าย | time.After leak goroutine ใน tight loop — ควรใช้ time.NewTimer |
+| reference layout ("2006-01-02") | อ่านเข้าใจได้โดยดู example | ต่างจาก YYYY/MM/DD ของภาษาอื่น — ต้องจำ magic numbers |
+
+## Common Misconceptions
+
+- **time.Now() return UTC เสมอ** — ขึ้นกับ local timezone ของเครื่อง — ควรใช้ time.Now().UTC() เมื่อต้องการ UTC ชัดเจน
+- **time.Sleep(1*time.Second) precise** — OS scheduler อาจ sleep นานกว่าที่กำหนด เช่น 1.05s — ไม่ใช่ hard real-time
+- **time.Equal เหมือน ==** — time.Equal เปรียบเทียบ instant ในเวลา (ignore timezone), == เปรียบเทียบ memory layout ทั้งหมดรวม timezone
+- **time.After ใน loop ไม่เป็นปัญหา** — time.After สร้าง channel และ goroutine ใหม่ทุกครั้ง — ใน hot loop ใช้ time.NewTimer + Reset() แทน
+
+> 💡 Real World Example
+>
+> **Kubernetes**: pod timeout, job deadline, lease expiry ล้วนใช้ time.Duration — เช่น `terminationGracePeriodSeconds` คือ `time.Duration`
+>
+> **Prometheus**: scrape interval และ timeout ใช้ time.Duration — alerting rule duration เช่น "5m" parse ด้วย time.ParseDuration
+>
+> **Go HTTP server**: http.TimeoutHandler ใช้ context + time.AfterFunc สำหรับ request timeout — ตัด connection เมื่อ handler ช้าเกินกำหนด
+
 <Callout title="Reference time ของ Go — Mon Jan 2 15:04:05 MST 2006">
 ช่วงเวลาอ้างอิงไม่ได้ถูกเลือกมาแบบสุ่ม แต่ละ component เป็นตัวเลขที่โดดเด่น: month=1, day=2, hour=15 (บ่าย 3), minute=4, second=5, year=2006 เรียงตามนาฬิกา 12 ชั่วโมง: 1/2/3:4:5 PM '06 ทำให้ layout อธิบายตัวเองได้ — เขียนสิ่งที่ต้องการให้ output เป็นโดยใช้ตัวเลขเหล่านั้นพอดี ข้อผิดพลาดที่พบบ่อยคือใช้ `YYYY` หรือ `DD` แบบภาษาอื่น ซึ่ง Go จะแปลเป็นตัวอักษร Y, M, D และจะปรากฏใน output ตามตัวอักษรนั้นๆ
 </Callout>

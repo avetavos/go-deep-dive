@@ -63,6 +63,27 @@ func main() {
 
 <Playground client:visible code={indexCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| implicit interface satisfaction | decoupled code, ไม่มี import dependency บน interface | ยากต่อการ discover ว่า type ใด implement interface ใด |
+| value receiver | immutable, เรียกได้บน non-addressable values | copy struct ทุกครั้ง |
+| pointer receiver | mutate ได้, ไม่ copy | ต้อง nil-check, ต้องการ addressable value |
+| embedding (composition) | reuse methods/fields โดยไม่ inherit | ไม่มี virtual dispatch — ต้องใช้ interface สำหรับ polymorphism |
+
+## Common Misconceptions
+
+- **interface คือ abstract class** — ใน Go interface มีแค่ method signatures ไม่มี implementation, ไม่มี state
+- **embedding = inheritance** — embedded type ไม่รู้จัก outer type ไม่มี override หรือ virtual dispatch
+- **nil interface เสมอ == nil** — interface ที่เก็บ nil pointer ไม่ใช่ nil interface; (nil, nil) != (*T, nil)
+
+> 💡 Real World Example
+>
+> **Go standard library** ใช้ io.Reader และ io.Writer เป็น interface หลัก — os.File, bytes.Buffer, net.Conn, http.Body ล้วน implement สิ่งเดียวกัน ทำให้ compose ได้ทั่ว ecosystem
+>
+> **Kubernetes** ใช้ runtime.Object interface กับทุก Kubernetes resource — controller เขียนครั้งเดียวทำงานกับ Pod, Deployment, Service ได้ทุก type
+
 <Callout title="ข้อคิดสำคัญ">
 `Rectangle` ไม่เคยพูดว่า `implements Sizer` — มันแค่มี method ที่ชื่อและ signature ถูกต้อง นั่นคือทั้งหมดที่ Go ต้องการ ถ้า method set ตรงกัน interface ก็ถูกตอบสนองโดยอัตโนมัติ ณ compile time
 </Callout>

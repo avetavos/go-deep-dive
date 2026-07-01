@@ -115,6 +115,31 @@ func main() {
 
 <Playground client:visible code={syncCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| sync.Mutex | ง่าย, เร็วสำหรับ simple shared state | goroutine ที่ lock ต้อง unlock เสมอ |
+| sync.RWMutex | read parallel ได้ | RLock overhead > Mutex lock เมื่อ write บ่อย |
+| sync.Once | init once thread-safe | ไม่สามารถ reset ได้ |
+| sync/atomic | เร็วที่สุดสำหรับ simple counter | จำกัดแค่ primitive types |
+| channel | composable, safer | overhead มากกว่า mutex |
+
+## Common Misconceptions
+
+- **mutex ช้ากว่า channel เสมอ** — mutex เร็วกว่า channel สำหรับ protect simple counter
+- **sync.Map แทน map+mutex ได้เสมอ** — sync.Map เหมาะกับ read-heavy, append-only ไม่ใช่ general map
+- **atomic.AddInt64 ใช้งานได้โดยไม่มีข้อกังวล** — ต้องระวัง 64-bit alignment บน 32-bit platform
+- **defer mu.Unlock() ช้ากว่า explicit unlock** — defer มี overhead น้อยมาก ใช้เพื่อ safety เสมอ
+
+> 💡 Real World Example
+>
+> **Kubernetes** ใช้ sync.RWMutex protect in-memory object cache — หลาย reader, writer น้อย เหมาะกับ RWMutex
+>
+> **Prometheus** ใช้ atomic counter สำหรับ metric increment — lock-free, ไม่เสีย throughput
+>
+> **etcd** ใช้ sync.Once สำหรับ singleton initialization ของ raft state machine
+
 <Callout title="Data races: ตรวจหาด้วย go run -race">
 Data race เกิดขึ้นเมื่อ goroutines สองตัวเข้าถึง variable เดียวกันพร้อมกันและอย่างน้อยหนึ่งเป็นการเขียน โดยไม่มี synchronization ผลลัพธ์คือ undefined behaviour Go มี race detector ในตัว: รัน `go run -race main.go` หรือ `go test -race ./...` เพื่อ instrument binary ของคุณ Detector เพิ่ม overhead ประมาณ 2–20x และไม่เหมาะสำหรับ production แต่ต้องใช้ใน CI
 </Callout>

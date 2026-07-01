@@ -131,6 +131,44 @@ func main() {
 
 <Playground client:visible code={pointersCode} />
 
+## Mental Model
+
+```text
+Stack                        Heap (GC-managed)
+─────────────────────        ────────────────────────
+x    [   42   ]  ←──┐
+p    [ 0xC001 ]─────┘
+                             ┌──────────────────────┐
+cfg  [ 0xC002 ]──────────────→  Config{Workers: 4}  │
+─────────────────────        └──────────────────────┘
+
+stack allocation: เร็ว, GC ไม่ต้องแตะ
+heap allocation:  GC ต้องจัดการ, เพิ่ม latency เล็กน้อย
+Escape Analysis ตัดสินใจว่า variable ควรอยู่บน stack หรือ heap
+```
+
+## Trade-offs
+
+| Usage | Benefit | Cost |
+|-------|---------|------|
+| pointer to large struct | หลีกเลี่ยง copy — ส่งแค่ 8 bytes (pointer size) | อาจ escape to heap → GC pressure เพิ่ม |
+| value receiver | ชัดเจนว่าไม่ mutate, cache-friendly | copy struct ทุกครั้งที่เรียก method |
+| pointer receiver | mutate ได้, ไม่ต้อง copy | ต้อง nil-check, อาจเกิด aliasing bug |
+| `*T = nil` เป็น optional | แทน "ไม่มีค่า" ได้โดยไม่ต้องใช้ sentinel | ต้อง nil-check ก่อน dereference ทุกครั้ง |
+
+## Common Misconceptions
+
+- **pointer ใน Go อันตรายเหมือน C** — Go ไม่มี pointer arithmetic; GC จัดการ lifetime ให้; dangling pointer เป็นไปไม่ได้
+- **pointer เสมอเร็วกว่า value** — pointer อาจทำให้ variable escape to heap → GC ต้องทำงานเพิ่ม → latency สูงขึ้น
+- **interface value เก็บ value โดยตรง** — interface value เก็บ (type metadata, data pointer) pair — เสมอมี indirection อย่างน้อยหนึ่งชั้น
+- **nil pointer = ปัญหาเหมือน NullPointerException ใน Java** — Go panic มี stack trace ชัดเจน และตรวจสอบ nil ได้ง่ายด้วย `if p == nil`
+
+> 💡 Real World Example
+>
+> **Kubernetes** ใช้ pointer to struct สำหรับ object ที่แชร์ระหว่าง goroutine เช่น `*corev1.Pod` — ลด copy overhead ใน reconciliation loop
+>
+> **Go standard library** ใช้ pointer receiver สำหรับ stateful type เช่น `(*bytes.Buffer).Write()` — เพื่อ maintain internal state ระหว่าง call
+
 <Callout title="Go มี pointer แต่ไม่มี pointer arithmetic">
 Go มีความสามารถด้าน pointer อย่างเต็มที่ — นำ address, dereference, ส่ง pointer ไปยัง function — แต่ตั้งใจไม่รวม pointer arithmetic คุณไม่สามารถบวก integer เข้ากับ pointer เพื่อเดินผ่าน memory ได้ การตัดสินใจออกแบบเพียงข้อเดียวนี้ขจัด buffer overflow, การเดิน memory แบบ off-by-one, และบั๊ก use-after-free ในระดับภาษา หากต้องการ memory operation ระดับต่ำ package `unsafe` มีให้ใช้ แต่ควรสงวนไว้สำหรับงาน FFI และ runtime เท่านั้น
 </Callout>

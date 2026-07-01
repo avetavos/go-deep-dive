@@ -81,6 +81,51 @@ func main() {
 
 <Playground client:visible code={goroutinesCode} />
 
+## Runtime Behavior
+
+```text
+GMP Model:
+
+G  G  G  G  G  G  G  G    ← goroutines (อาจมีหลักแสน)
+ ╲ │ ╱    ╲ │ ╱
+  [P1]      [P2]           ← P (= GOMAXPROCS, default = #CPU)
+   │          │
+  [M1]       [M2]          ← M (OS thread)
+   │          │
+ CPU0        CPU1
+
+เมื่อ G block บน I/O:
+  G ──block──→ waiting queue
+  M release P → P ถูก M อื่นรับ → G อื่นรัน
+
+Work stealing:
+  P1 run queue ว่าง → steal G จาก P2 run queue
+```
+
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| goroutine (2-8 KB stack) | สร้างได้หลักแสนตัว | scheduler overhead ต่อ goroutine |
+| dynamic stack growth | ไม่เสีย memory ล่วงหน้า | stack copy cost เมื่อขยาย |
+| M:N scheduler | ไม่ block OS thread บน I/O | scheduler complexity, preemption cost |
+| work stealing | CPU utilization สูง | cache miss เมื่อ goroutine ย้าย P |
+
+## Common Misconceptions
+
+- **goroutine = OS thread** — goroutine stack เริ่มต้น 2-8 KB, OS thread 1-8 MB
+- **สร้าง goroutine ฟรีทั้งหมด** — มี ~4 KB allocation + scheduler bookkeeping ต่อ goroutine
+- **GOMAXPROCS มากขึ้น = เร็วขึ้นเสมอ** — I/O-bound workload ได้ประโยชน์น้อยกว่า CPU-bound
+- **goroutine leak ไม่เป็นปัญหา** — goroutine ที่ไม่มีทางออกคือ memory leak
+
+> 💡 Real World Example
+>
+> **Kubernetes** controller manager มี goroutine ต่อ resource type (Pod, Service, Deployment ฯลฯ)
+>
+> **etcd** ใช้ goroutine ต่อ peer connection สำหรับ raft consensus algorithm
+>
+> **Prometheus** เปิด goroutine ต่อ scrape job — scrape หลักพัน target พร้อมกัน
+
 <Callout title="ข้อควรระวัง: goroutines ที่เริ่มใน main อาจไม่รันถ้า main return ก่อน">
 ถ้า `main` return ก่อนที่ goroutine จะมีโอกาสรัน goroutine นั้นจะถูกยกเลิกอย่างเงียบ ๆ Go runtime exit ทันทีที่ `main` goroutine return — มันไม่รอ background goroutines ใช้ `sync.WaitGroup`, channel, หรือ synchronization mechanism อื่น ๆ เพื่อให้ `main` มีชีวิตนานพอให้ goroutines เสร็จสิ้น
 </Callout>

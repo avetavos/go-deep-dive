@@ -94,6 +94,30 @@ go build ./...
 
 pipeline สี่คำสั่งนี้ตรวจจับ formatting drift, static bugs, data races, และ compilation errors ก่อนที่ code จะถูก merge
 
+## Trade-offs
+
+| Tool | Benefit | Cost |
+|------|---------|------|
+| `go vet` | ตรวจหา common mistakes ก่อน runtime | ไม่ครอบคลุม semantic bug ทั้งหมด — ต้องใช้ staticcheck เพิ่ม |
+| `go build -race` | ตรวจหา race condition ใน binary | binary ช้าลง 2-10x — ไม่เหมาะ production build |
+| `gofmt` (ผ่าน `go fmt`) | ไม่มีถกเถียงเรื่อง formatting, consistent ทั้ง ecosystem | ไม่มี config — ต้องยอมรับ canonical style |
+| `go doc` | documentation ใน terminal ไม่ต้องออก browser | ไม่มี search full-text — ต้องรู้ชื่อ package/function แล้ว |
+
+## Common Misconceptions
+
+- **`go fmt` เป็นแค่ style เท่านั้น** — gofmt เป็น de facto standard — PR ที่ไม่ผ่าน gofmt ถูก reject ใน project หลักทุกที่
+- **`go vet` ตรวจสอบครบทุก bug** — `go vet` ตรวจ subset ของ common mistakes — ใช้ staticcheck เพิ่มสำหรับ production codebase
+- **`go generate` ทำงานอัตโนมัติตอน build** — `go generate` ต้องรันเอง ไม่ได้รันตอน `go build` — ต้อง explicit ใน Makefile หรือ CI
+- **GOPATH ยังจำเป็น** — Go modules (`go.mod`) แทน GOPATH อย่างสมบูรณ์ตั้งแต่ Go 1.16
+
+> 💡 Real World Example
+>
+> **Kubernetes** CI pipeline รัน `go vet` + staticcheck + race detector ทุก PR — ตรวจจับ bug ก่อน merge เป็น standard
+>
+> **Go standard library** enforce gofmt ใน code review — ไม่มีข้อยกเว้น
+>
+> **Docker** ใช้ `go tool pprof` เพื่อ profile container daemon memory usage และ optimize hot path
+
 <Callout title="gofmt จบการถกเถียงเรื่อง formatting — มี canonical style เพียงแบบเดียว">
 ต่างจากภาษาส่วนใหญ่ Go มาพร้อม formatter canonical เพียงตัวเดียวและ editor หลักทุกตัวเชื่อมต่อกับมันโดยค่าเริ่มต้น ไม่มีการโต้เถียงเรื่อง tabs กับ spaces ไม่มีการถกเถียงเรื่องความยาวบรรทัด ไม่มี style guide ที่ต้องดูแล เมื่อ gofmt บอกว่า code ควรมีลักษณะแบบใด นั่นคือจุดสิ้นสุดของการสนทนา นี่ไม่ใช่ข้อจำกัด — มันคือของขวัญ: code review มุ่งเน้นที่ logic ไม่ใช่ aesthetics
 </Callout>

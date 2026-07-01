@@ -126,6 +126,28 @@ func main() {
 
 <Playground client:visible code={panicRecoverCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| panic | abort ทันทีเมื่อ invariant ถูกละเมิด | ถ้าไม่ recover — crash program ทั้งหมด |
+| recover ใน defer | หยุด panic propagation, convert เป็น error | ต้องอยู่ใน deferred function โดยตรง |
+| panic สำหรับ programming error | ชัดเจนว่า bug ไม่ใช่ expected error | ยาก test, ยาก trace ใน goroutine อื่น |
+| recover ใน server handler | ป้องกัน 1 request crash ทั้ง server | อาจ hide bugs ที่ควร fix ถ้าใช้บ่อยเกินไป |
+
+## Common Misconceptions
+
+- **panic = exception ที่ควรใช้สำหรับ error handling** — panic ใช้สำหรับ programming error เท่านั้น (nil pointer, out of bounds, invariant violation)
+- **recover ช่วยดัก panic ได้ทุกที่** — recover ทำงานเฉพาะใน deferred function ที่เรียกโดยตรงจาก panicking goroutine เท่านั้น
+- **panic propagate ข้าม goroutine** — panic ไม่ข้าม goroutine boundary — unrecovered panic ใน goroutine crash program ทั้งหมด
+- **defer ไม่รันระหว่าง panic** — defer รันเสมอรวมถึงระหว่าง panic stack unwinding — นี่คือเหตุผลที่ recover ต้องอยู่ใน defer
+
+> 💡 Real World Example
+>
+> **net/http** server ใช้ recover ใน handler goroutine เพื่อป้องกัน 1 request panic crash ทั้ง server — panic ถูก log และ return 500 แทน
+>
+> **encoding/json** internal panic ถูก recover และ convert เป็น error return ก่อน expose ออก public API
+
 <Callout title="อย่าใช้ panic สำหรับ error ทั่วไป">
 panic ไว้สำหรับ programmer errors และสถานะที่เป็นไปไม่ได้ — สิ่งที่ไม่ควรเกิดขึ้นในโปรแกรมที่เขียนถูกต้อง สำหรับ error ที่ caller อาจคาดเดาได้ (ไม่พบ record, input ไม่ถูกต้อง, network failure) ให้คืน `(T, error)` library code โดยเฉพาะควรหลีกเลี่ยงการ panic กับ input ผู้ใช้ที่ไม่ดี และควรแปลง panic เป็น error ที่ package boundary เมื่อจำเป็น
 </Callout>

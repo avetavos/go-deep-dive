@@ -122,6 +122,44 @@ func main() {
 
 <Playground client:visible code={slicesCode} />
 
+## Mental Model
+
+```text
+slice header (3 words, 24 bytes on 64-bit)
+ ├─ pointer ──────────────→ [0][1][2][3][4]  ← backing array (cap=5)
+ ├─ len: 3                    ↑
+ └─ cap: 5                 visible range (len=3)
+
+append ภายใน cap:
+ s = append(s, 4)    →  len: 4, cap: 5  (ไม่มี allocation ใหม่)
+
+append เกิน cap:
+ s = append(s, 5, 6) →  Go allocates new backing array (~2x cap)
+                         backing array เดิมยัง live ถ้ามี slice อื่นชี้อยู่
+```
+
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| slice header เป็น value (24 bytes) | pass to function ถูก | mutation ผ่าน slice copy กระทบ backing array เดิม |
+| dynamic append | ขยายได้อัตโนมัติ | reallocation เมื่อเกิน cap — O(n) copy |
+| slicing `[a:b]` | zero-copy subview | backing array ที่แชร์ — อาจ prevent GC ของ array ใหญ่ |
+| `make([]T, len, cap)` | pre-allocate หลีกเลี่ยง realloc | ต้องประมาณ cap ล่วงหน้า |
+
+## Common Misconceptions
+
+- **slice และ array คือสิ่งเดียวกัน** — slice คือ (pointer, len, cap) header ที่ชี้ไปยัง array; array คือ fixed-size value type
+- **`append` ปลอดภัยเสมอและ mutate in-place** — append อาจ return slice ที่ชี้ backing array ใหม่ทั้งหมด — ต้อง assign ผลลัพธ์กลับเสมอ
+- **`len` และ `cap` เหมือนกัน** — len คือจำนวน element ที่เข้าถึงได้ตอนนี้, cap คือขนาดสูงสุดก่อน reallocation
+- **`copy(dst, src)` ทำ deep copy** — copy ถ่ายโอน values แต่ถ้า element เป็น pointer หรือ interface ยัง share underlying data เดิม
+
+> 💡 Real World Example
+>
+> **Kubernetes** ใช้ `make([]Pod, 0, capacity)` เพื่อ pre-allocate pod list และลด GC pressure ใน reconcile loop
+>
+> **Prometheus** เก็บ metric sample ใน slice พร้อม pre-allocated capacity — ช่วยลด reallocation ในระหว่าง high-frequency scrape
+
 <Callout title="append อาจ allocate หรือไม่ก็ได้; slice แชร์ backing array">
 มีกฎสำคัญสองข้อที่ต้องจำ ข้อแรก: `append` คืน slice header ใหม่เสมอ — ถ้าเกิดการ reallocation คุณจะได้ backing array ใหม่ทั้งหมด อย่าเพิกเฉยต่อค่าที่คืนมา ข้อสอง: `a[low:high]` ไม่ได้ copy ข้อมูล ทั้งสอง slice แชร์ backing array เดียวกัน การเขียนผ่านตัวหนึ่งจะมองเห็นได้จากอีกตัวด้วย ใช้ `copy` เมื่อต้องการ slice ที่เป็นอิสระจริงๆ
 </Callout>

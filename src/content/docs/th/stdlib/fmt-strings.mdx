@@ -138,6 +138,30 @@ func main() {
 
 <Playground client:visible code={fmtStringsCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| fmt.Sprintf | flexible string formatting | allocate string ใหม่ทุกครั้ง |
+| fmt.Fprintf(w, ...) | write to any io.Writer | ต้องระวัง error return |
+| strings.Builder | efficient string concatenation | ต้อง Reset() ถ้า reuse |
+| %v / %+v / %#v | inspect any value | reflect-based — ช้ากว่า explicit conversion |
+
+## Common Misconceptions
+
+- **fmt.Println เหมาะสำหรับ production logging** — ใช้ structured logger (log/slog, zap) แทนใน production — fmt ไม่รองรับ log level, structured fields, หรือ JSON output
+- **string concatenation ด้วย + เร็วกว่า fmt.Sprintf** — ขึ้นกับจำนวน concatenation — strings.Builder เร็วที่สุดสำหรับหลาย pieces ใน loop
+- **%d กับ %v ต่างกันมาก** — %d explicit สำหรับ integer, %v generic แต่ผลลัพธ์เหมือนกันสำหรับ int; ต่างกันสำหรับ struct
+- **rune กับ byte เหมือนกัน** — byte คือ uint8 (1 byte), rune คือ int32 (1-4 bytes สำหรับ Unicode codepoint)
+
+> 💡 Real World Example
+>
+> **Kubernetes**: kubectl output ใช้ fmt.Fprintf + tabwriter สำหรับ table formatting ที่ align column อัตโนมัติ
+>
+> **Prometheus**: metric label string construction ใช้ fmt.Sprintf — เช่น `http_requests_total{method="GET",path="/api"}`
+>
+> **Go HTTP server**: error response ใช้ fmt.Sprintf สร้าง message แล้วส่งผ่าน http.Error() ซึ่งรับ string
+
 <Callout title="%+v และ %#v คือเพื่อนที่ดีในการ debug">
 เมื่อไม่แน่ใจว่ามีอะไรอยู่ใน struct ให้ใช้ `%+v` ก่อน — มันพิมพ์ชื่อ field พร้อมค่าเพื่อให้เห็นทันทีว่า field ไหนเก็บข้อมูลอะไร ใช้ `%#v` เมื่อต้องการ Go literal ที่ copy-paste ได้ (มีประโยชน์สำหรับเขียน test fixture) สำหรับ production logs ควรใช้ structured logging เช่น `log/slog` แทน `fmt.Printf` แต่ในการพัฒนาและทดสอบ `%+v` ช่วยประหยัดเวลาได้มาก
 </Callout>

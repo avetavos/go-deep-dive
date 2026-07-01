@@ -108,6 +108,27 @@ func main() {
 
 <Playground client:visible code={typeAssertionsCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| type assertion v, ok := i.(T) | ปลอดภัย ไม่ panic | ต้องตรวจสอบ ok ทุกครั้ง |
+| type assertion v := i.(T) | กระชับ | panic ถ้า dynamic type ไม่ตรง |
+| type switch | handle หลาย type ได้ชัดเจน | verbose กว่า single assertion |
+| reflect.TypeOf | introspect type ณ runtime | overhead สูง, ใช้เฉพาะจำเป็น |
+
+## Common Misconceptions
+
+- **type assertion เสมอปลอดภัย** — ไม่ใช้ comma-ok form จะ panic ทันทีถ้า type ไม่ตรง
+- **type switch เหมือน switch ทั่วไป** — type switch ตรวจ dynamic type ของ interface ไม่ใช่ value
+- **type assertion = type conversion** — conversion เปลี่ยน type representation, assertion ตรวจว่า interface เก็บ concrete type นั้นจริงหรือไม่
+
+> 💡 Real World Example
+>
+> **encoding/json**: Unmarshal ใช้ type assertion เพื่อ handle `[]interface\{\}` และ `map[string]interface\{\}` เมื่อ JSON structure ไม่รู้ล่วงหน้า
+>
+> **net/http**: middleware ตรวจว่า ResponseWriter implement http.Flusher หรือ http.Hijacker ด้วย type assertion เพื่อ enable streaming หรือ WebSocket upgrade
+
 <Callout title="Single-value assertion ที่ล้มเหลวจะ panic">
 `x.(T)` โดยไม่มี comma-ok idiom จะ panic ทันทีถ้า dynamic type ไม่ใช่ `T` นี่คือ runtime error ไม่ใช่ compile-time error — compiler ไม่สามารถรู้ dynamic type ได้ ใช้ comma-ok form `v, ok := x.(T)` เสมอเมื่อมีโอกาสที่ assertion อาจล้มเหลว สงวน single-value form ไว้สำหรับ code paths ที่รับประกัน type ทางตรรกะ — และเพิ่ม comment อธิบายเหตุผล
 </Callout>

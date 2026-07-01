@@ -126,6 +126,46 @@ func main() {
 
 <Playground client:visible code={ioBufioCode} />
 
+## Mental Model
+
+```text
+io.Reader interface:
+  Source → [Read(p []byte)] → buffer p → consumer
+
+Chaining readers:
+  os.File → bufio.NewReader → gzip.NewReader → json.NewDecoder
+  ↓          ↓                ↓                ↓
+  raw        buffered         decompressed     decoded
+
+bufio.Writer batching:
+  small writes → [buffer 4 KB] → one flush → os.File
+  many syscalls                  one syscall
+```
+
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| bufio.Reader | ลด syscall (batching reads) | เพิ่ม memory สำหรับ buffer |
+| bufio.Writer | ลด syscall (batching writes) | ต้อง Flush() ก่อน close |
+| io.Reader chain | composable, zero-copy pipeline | error handling ซับซ้อนเมื่อ chain ยาว |
+| io.Copy | efficient transfer ระหว่าง Reader→Writer | ไม่ inspect data ระหว่างทาง |
+
+## Common Misconceptions
+
+- **unbuffered read เร็วพอ** — ทุก Read() call โดยไม่มี buffer = 1 syscall — ช้ามากสำหรับ small reads จำนวนมาก
+- **bufio.Writer flush อัตโนมัติ** — ไม่ — ต้อง Flush() เองก่อน close หรือส่ง response ไม่งั้น data อาจหาย
+- **io.Reader อ่าน exact n bytes เสมอ** — Read() อาจ return น้อยกว่า n bytes — ต้องวน loop ถ้าต้องการ exact read
+- **strings.NewReader กับ bytes.NewReader เหมือนกัน** — strings.NewReader สำหรับ string literal, bytes.NewReader สำหรับ []byte ที่มีอยู่แล้ว
+
+> 💡 Real World Example
+>
+> **Kubernetes**: etcd client ใช้ bufio สำหรับ gRPC message buffering — ลด syscall overhead เมื่อรับ stream ของ events
+>
+> **Docker**: container image layer copying ใช้ io.Copy เพื่อ transfer data จาก registry ไปยัง local storage อย่าง efficient
+>
+> **Go HTTP server**: net/http ห่อ TCP connection ด้วย bufio.Reader โดยอัตโนมัติ — request parsing ไม่ต้อง syscall ทุก byte
+
 <Callout title="เขียนโค้ดให้รับ io.Reader และ io.Writer ไม่ใช่ concrete type">
 เขียนฟังก์ชันให้รับ `io.Reader` หรือ `io.Writer` แทนที่จะรับ `*os.File` หรือ `*http.Request` นิสัยเดียวนี้ทำให้โค้ด test ได้ทุกที่ — ส่ง `strings.NewReader` ใน test, ไฟล์จริงใน production และ HTTP body ใน handler โดยไม่ต้องแก้ไขฟังก์ชัน นอกจากนี้ยังหมายความว่าฟังก์ชันจะทำงานร่วมกับ ecosystem I/O composition ทั้งหมดของ Go: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader` และอื่นๆ
 </Callout>

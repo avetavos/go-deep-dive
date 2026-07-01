@@ -1,0 +1,82 @@
+---
+title: Glossary
+description: คำศัพท์ Go ที่ใช้ตลอด course นี้ — รักษา terminology ภาษาอังกฤษตามที่ developer ใช้จริง
+sidebar:
+  order: 99
+---
+
+import Callout from '../../../components/Callout.astro';
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+## Core Runtime Terms
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Goroutine | goroutine | unit of concurrent work ใน Go |
+| Scheduler | scheduler | จัดสรร goroutine ลง OS thread |
+| Runtime | runtime | ระบบ runtime ของ Go |
+| Stack | stack | memory สำหรับ local variable และ function call |
+| Heap | heap | memory สำหรับ object ที่อายุยาว |
+| Garbage Collector | Garbage Collector / GC | ทำความสะอาด heap อัตโนมัติ |
+| Escape Analysis | Escape Analysis | ตัดสินใจว่า object อยู่ stack หรือ heap |
+| Context Switch | context switch | สลับระหว่าง goroutine |
+| Preemption | preemption | บังคับหยุด goroutine เพื่อให้ตัวอื่นทำงาน |
+
+## Memory & Allocation
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Memory Allocation | memory allocation | จองหน่วยความจำ |
+| Memory Layout | memory layout | รูปแบบการวางข้อมูลใน memory |
+| Heap Allocation | heap allocation | จอง memory บน heap |
+| Stack Allocation | stack allocation | จอง memory บน stack |
+| Stack Growth | stack growth | stack ขยายขนาดแบบ dynamic |
+| Pointer | pointer | ตัวแปรที่เก็บ memory address |
+| Work Stealing | work stealing | scheduler ขโมยงานจาก P ตัวอื่น |
+
+## Concurrency Primitives
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Channel | channel | ท่อสื่อสารระหว่าง goroutine |
+| Mutex | mutex | lock สำหรับ mutual exclusion |
+| RWMutex | RWMutex | read/write mutex |
+| Atomic | atomic | operation ที่ไม่สามารถถูก interrupt ได้ |
+| WaitGroup | WaitGroup | รอ goroutine หลายตัวให้เสร็จ |
+| Select | select | รับจาก channel หลายตัวพร้อมกัน |
+| Deadlock | deadlock | goroutine รอกันเองไม่มีที่สิ้นสุด |
+| Race Condition | race condition | goroutine หลายตัวเข้าถึง shared state พร้อมกัน |
+
+## GMP Model
+
+| Symbol | ความหมาย |
+|--------|---------|
+| G | Goroutine — unit of work |
+| M | Machine — OS thread |
+| P | Processor — scheduling context |
+
+## Type System
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Interface | interface | ชุด method signatures |
+| Type Assertion | type assertion | แปลง interface เป็น concrete type |
+| Reflection | reflection | ตรวจสอบ type ณ runtime |
+| Assembly | assembly | ภาษา assembly ที่ Go compiler ผลิต |
+| Compiler | compiler | แปลง Go source เป็น binary |
+| Linker | linker | รวม object files เข้าด้วยกัน |
+
+## เมื่อ **ไม่** ควรใช้ literal Thai translation
+
+| หลีกเลี่ยง | ใช้แทน |
+|------------|--------|
+| ดำเนินการจัดสรรหน่วยความจำ | allocate memory |
+| กระบวนการเก็บกวาดหน่วยความจำ | GC |
+| หน่วยประมวลผลแบบเบา | goroutine |
+| กระบวนการเรียกใช้ | execute |
+| ตัวชี้ | pointer |
+| หน่วยความจำแบบกองซ้อน | stack |
+| หน่วยความจำแบบฮีป | heap |
+| ตัวจัดกำหนดการ | scheduler |
+
+<ProgressTracker client:visible id="th/glossary" />

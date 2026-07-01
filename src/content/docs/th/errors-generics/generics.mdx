@@ -139,6 +139,30 @@ func main() {
 
 <Playground client:visible code={genericsCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| type parameters | code reuse โดยไม่ต้องใช้ `interface{}` | compile time เพิ่มขึ้น, syntax ซับซ้อน |
+| type constraints | compile-time type safety | ต้อง define constraint interface ก่อนใช้ |
+| comparable constraint | ใช้ `==` กับ generic type ได้ | ไม่รองรับ deep equality (slice, map) |
+| ~T (tilde/approximation) | constraint ครอบคลุม named types เช่น `type MyID int` | เข้าใจยากสำหรับผู้เริ่มต้น |
+
+## Common Misconceptions
+
+- **generics ทำให้ binary ใหญ่ขึ้นมาก** — Go ใช้ GC-shape stenciling — code ที่มี pointer shape ใช้ instance เดียวกัน ไม่ขยายแบบ C++ templates
+- **generic function เร็วกว่า interface เสมอ** — generics avoid boxing แต่ overhead ของ instantiation per type อาจมีผลในบางกรณี
+- **generics เหมือน C++ templates** — Go generics ตรวจสอบ constraint ตอน definition ไม่ใช่ instantiation — error messages ดีกว่ามาก
+- **ควรใช้ generics แทน interface เสมอ** — interface เหมาะกว่าสำหรับ runtime polymorphism, generics เหมาะกว่าสำหรับ compile-time type-safe algorithms
+
+> 💡 Real World Example
+>
+> **golang.org/x/exp/slices**: generic `slices.Sort[S ~[]E, E cmp.Ordered](s S)` — type-safe sort ที่ทำงานกับทุก ordered type โดยไม่ต้อง cast
+>
+> **Kubernetes**: generic controller framework ใน Kubernetes 1.26+ ใช้ generics เพื่อลด code duplication ระหว่าง controller type ต่างๆ
+>
+> **database/sql**: library wrapper หลายตัว (เช่น `sqlc`) ใช้ generics สำหรับ type-safe query result scanning
+
 <Callout title="Generics เพิ่ม type safety โดยไม่ต้องใช้ interface{} + assertions">
 ก่อน generics container หรือ algorithm แบบ generic ต้องใช้ `interface{}` parameter และ runtime type assertion — error แสดงเฉพาะที่ runtime เท่านั้น ด้วย type parameters compiler ตรวจสอบความถูกต้องของ type ที่ compile time ใช้ generics เมื่อพบว่าตัวเองเขียน algorithm เดิมสำหรับหลาย type หรือเมื่อต้องการ container ที่รักษา element type ไว้
 </Callout>

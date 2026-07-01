@@ -100,6 +100,29 @@ func main() {
 
 <Playground client:visible code={contextCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| context.WithCancel | propagate cancellation tree | ต้อง call cancel() เสมอ ไม่งั้น goroutine leak |
+| context.WithTimeout | deadline อัตโนมัติ | ต้อง handle context.DeadlineExceeded |
+| context.WithValue | pass value ผ่าน call stack | type unsafe, ใช้ unexported key เพื่อหลีกเลี่ยง collision |
+| ctx.Done() channel | non-blocking check via select | ต้อง check ในทุก loop iteration ที่อาจรันนาน |
+
+## Common Misconceptions
+
+- **context.WithValue เหมาะสำหรับ pass business data** — ใช้สำหรับ request-scoped metadata เท่านั้น (trace ID, auth token)
+- **cancel() ทำให้ goroutine หยุดทันที** — cancel() ส่ง signal ผ่าน channel — goroutine ต้องตรวจสอบ ctx.Done() เอง
+- **context ส่ง value ได้ทุก type** — context.Value() คืน any ต้องใช้ type assertion และอาจ nil
+
+> 💡 Real World Example
+>
+> **Kubernetes** ส่ง context จาก API server → controller → goroutine ทุกตัว เพื่อ graceful shutdown
+>
+> **net/http** ทุก HTTP request มี context — client disconnect ยกเลิก context ทำให้ handler cleanup ได้
+>
+> **gRPC** propagate deadline ผ่าน context ข้าม service boundary อัตโนมัติ
+
 <Callout title="defer cancel() เสมอเพื่อหลีกเลี่ยง context leak">
 ทุกการเรียก `context.WithCancel`, `context.WithTimeout`, หรือ `context.WithDeadline` ต้องมีการเรียก `cancel` function คู่กัน ถ้าไม่เรียก `cancel` parent context จะถือ internal reference ถึง child context จนกว่า parent จะถูก cancel เองใน server ที่รันนาน ๆ สิ่งนี้สะสมเป็น goroutine และ memory leak Pattern idiomatic เสมอ: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`
 </Callout>

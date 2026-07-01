@@ -117,6 +117,49 @@ func main() {
 
 <Playground client:visible code={interfacesCode} />
 
+## Runtime Behavior
+
+```text
+interface value คือ 2 words:
+
+iface
+ ├─ *itab  →  ┌──────────────────────┐
+ │            │ type: *Circle        │
+ │            │ methods: [Area,      │
+ │            │          Perimeter]  │
+ │            └──────────────────────┘
+ └─ data   →  Circle{Radius: 5}
+
+dynamic dispatch:
+  shape.Area()
+    ↓
+  itab.methods[0](*data)  ← indirect call
+    ↓
+  Circle.Area(data)
+```
+
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| implicit satisfaction | decoupled, no import dependency | ยากต่อการ discover ว่า type ใด implement interface ใด |
+| small interface (1-2 methods) | composable, implement ง่าย | อาจต้องใช้หลาย interface ร่วมกัน |
+| any / empty interface | รับ type ใดก็ได้ | สูญเสีย type safety ทั้งหมด |
+| dynamic dispatch | flexibility | ~5-10ns overhead ต่อ call vs direct call |
+
+## Common Misconceptions
+
+- **interface ฟรี** — interface เพิ่ม indirection 1 ชั้นและ dynamic dispatch overhead
+- **nil interface และ interface ที่เก็บ nil pointer เป็นเหมือนกัน** — nil interface คือ (nil, nil), interface ที่เก็บ nil pointer คือ (*T, nil) ซึ่งไม่เท่ากัน
+- **ยิ่ง interface มี method มาก ยิ่งดี** — Go idiom: "the bigger the interface, the weaker the abstraction"
+- **implicit satisfaction แปลว่า duck typing** — Go ตรวจสอบ interface ตอน compile ไม่ใช่ runtime
+
+> 💡 Real World Example
+>
+> **io.Reader** (1 method): http.Body, os.File, bytes.Buffer, strings.Reader ล้วน implement — composable ทั่ว ecosystem โดยไม่มี import dependency
+>
+> **Kubernetes** ใช้ runtime.Object interface ให้ทุก Kubernetes resource ทำงานกับ generic controller ได้ — decoupling ผ่าน small interface
+
 <Callout title="Interfaces ตอบสนองโดยนัย">
 ทั้ง `Circle` และ `Rect` ไม่เคยกล่าวถึง `Shape` พวกมันตอบสนองเพราะมี `Area()` และ `Perimeter()` ที่มี signatures ถูกต้อง นั่นหมายความว่าคุณสามารถนิยาม interface *หลัง* types ที่ตอบสนองมัน — types เหล่านั้นไม่ต้องเปลี่ยนเลย การตอบสนอง interface แบบย้อนหลังเป็นหนึ่งในเครื่องมือ refactoring ที่ทรงพลังที่สุดของ Go
 </Callout>

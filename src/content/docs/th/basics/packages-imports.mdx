@@ -118,6 +118,27 @@ func main() {
 
 <Playground client:visible code={packagesCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| uppercase = exported | visibility rule เรียบง่าย ไม่ต้องใช้ keyword `public`/`private` | ต้อง rename identifier ถ้าต้องการเปลี่ยน visibility |
+| unused import = compile error | ไม่มี dead import ใน codebase | ต้องลบ import ที่ไม่ใช้ทุกครั้ง (goimports ช่วยได้) |
+| `init()` function | setup เกิดขึ้นอัตโนมัติ | hidden side effects ยากต่อการ debug และ test |
+| module system (go.mod) | reproducible build, explicit dependency | learning curve สูงกว่า GOPATH เดิม |
+
+## Common Misconceptions
+
+- **"circular import ใช้ได้ใน test files"** — Go ไม่อนุญาต circular import ไม่ว่าจะเป็น production code หรือ test files
+- **"`import _` ใช้ได้แค่กับ database driver"** — ใช้ได้กับทุก package ที่ต้องการให้ `init()` ทำงาน เช่น register codec, plugin, หรือ HTTP handler
+- **"Go module คือแค่ package manager เหมือน npm"** — Go module จัดการ versioning และ reproducible build ที่ระดับ module ทั้งหมด ไม่ใช่แค่ package เดี่ยว
+
+> 💡 Real World Example
+>
+> **Kubernetes** จัดระเบียบ codebase หลายล้านบรรทัดด้วย package structure ที่ชัดเจน — แต่ละ package มีความรับผิดชอบเดียว ทำให้ team ขนาดใหญ่ทำงานร่วมกันได้
+>
+> **Go standard library** เช่น `net/http` ใช้ blank import ให้ `database/sql` driver register ตัวเองผ่าน `init()` — ทำให้ code ของ user สะอาดและไม่ต้อง explicit register
+
 <Callout title="ตัวพิมพ์ใหญ่ควบคุม Visibility">
 identifier ที่ขึ้นต้นด้วยตัวพิมพ์ใหญ่ (เช่น `fmt.Println`, `strings.ToUpper`) สามารถใช้จาก package อื่นได้ ส่วนที่ขึ้นต้นด้วยตัวพิมพ์เล็กจะเป็น private ภายใน package นั้น compiler จะ enforce กฎนี้ทันที — ไม่ใช่แค่ convention
 </Callout>

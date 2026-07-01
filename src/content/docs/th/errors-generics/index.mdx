@@ -85,6 +85,27 @@ func main() {
 
 `errors.New` สร้าง error value ธรรมดาจาก string คงที่ ฟังก์ชันคืนค่า `nil` เป็น error ในเส้นทางปกติ และคืนค่า error ที่ไม่ใช่ nil ในเส้นทางที่ล้มเหลว caller ตรวจสอบ `if err != nil` ทันทีหลังการเรียก — นี่คือ idiom ที่คุณจะเขียนนับร้อยครั้งใน Go
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| explicit error handling | ทุก failure point มองเห็นได้ชัดเจนใน code | verbose กว่า try/catch |
+| error as value (not exception) | composable, predictable control flow | caller ต้องตรวจ error ทุกครั้ง |
+| generics (Go 1.18+) | type-safe reuse, ไม่ต้อง `interface{}` | compile time เพิ่ม, syntax ซับซ้อนกว่า |
+| panic/recover | abort ทันทีเมื่อ invariant ถูกละเมิด | ไม่ใช่ error handling ทั่วไป |
+
+## Common Misconceptions
+
+- **error handling ใน Go verbose เกินไป** — verbosity นี้ตั้งใจ: ทุก failure path มองเห็นได้ในโค้ด ไม่มี hidden exception
+- **panic = exception ที่ควรใช้แทน return error** — panic ใช้สำหรับ programmer error เท่านั้น ไม่ใช่ expected failure
+- **generics ทำ code ช้าลง** — Go generics ใช้ GC-shape stenciling — overhead น้อยมากสำหรับ pointer types
+
+> 💡 Real World Example
+>
+> **Kubernetes** ใช้ Go's error model ทั่วทั้ง codebase — ทุก function ที่อาจล้มเหลวคืน `(T, error)` อย่างชัดเจน
+>
+> **Docker** และ **etcd** ใช้ error wrapping เพื่อให้ log มี context ครบทุก layer ของ call stack
+
 export const quizErrorsGenericsOverview = [
   {
     q: "ใน Go เมื่อฟังก์ชันคืนค่า error ที่ไม่ใช่ nil หมายความว่าอะไร?",

@@ -124,6 +124,30 @@ func main() {
 
 <Playground client:visible code={errorValuesCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| error interface (1 method) | implement ง่าย, compose ได้ | ไม่มี stack trace โดยตรง |
+| errors.Is() | match sentinel ใน chain ลึกแค่ไหนก็ได้ | ต้อง wrap error ด้วย %w ให้ถูกต้องก่อน |
+| errors.As() | extract concrete error type พร้อม field | ต้อง type assertion ใน chain |
+| sentinel errors | เปรียบเทียบง่าย, self-documenting | เป็น public API — refactor ยากถ้า name ต้องเปลี่ยน |
+
+## Common Misconceptions
+
+- **return nil error หมายถึง function สำเร็จเสมอ** — ถ้า caller ละเว้น error ด้วย `_` โดยไม่ตั้งใจ error ถูก ignore โดยสมบูรณ์
+- **errors.New() และ fmt.Errorf() เหมือนกัน** — fmt.Errorf กับ `%w` สามารถ wrap error chain ได้, errors.New ไม่สามารถ
+- **error message ควร capitalize** — Go convention: error message ไม่ capitalize และไม่มี punctuation ท้าย เช่น `"not found"` ไม่ใช่ `"Not found."`
+- **panic ดีกว่า return error สำหรับ critical error** — ใช้ panic เฉพาะสำหรับ programming error ที่ should not happen, ไม่ใช่ expected failure
+
+> 💡 Real World Example
+>
+> **Kubernetes** คืน error chain ที่ wrap context ของทุก layer — apiserver error → controller error → client error — ทำให้ log มี context ครบ
+>
+> **net/http**: `http.ErrServerClosed` เป็น sentinel error สำหรับ graceful shutdown — caller ตรวจด้วย `errors.Is(err, http.ErrServerClosed)`
+>
+> **database/sql**: `sql.ErrNoRows` เป็น sentinel ที่ทุก Go database driver ใช้ร่วมกัน
+
 <Callout title="Error คือค่าธรรมดา">
 ใน Go error เป็นเพียงค่าเหมือนค่าอื่น ๆ ไม่มี syntax พิเศษในการโยนหรือจับ error การคืนค่า `nil` หมายถึงสำเร็จ การคืนค่า error ที่ไม่ใช่ nil หมายถึงล้มเหลว การจัดการ error แบบนี้ทำให้ชัดเจน ประกอบได้ง่าย และเข้าใจได้ทันที ทุก call site บอกอย่างชัดเจนว่าอะไรอาจผิดพลาดได้
 </Callout>

@@ -81,6 +81,29 @@ func main() {
 
 <Playground client:visible code={indexCode} />
 
+## Trade-offs
+
+| Type | Benefit | Cost |
+|------|---------|------|
+| value type (struct, array) | predictable behavior, ไม่มี aliasing | copy cost สำหรับ type ขนาดใหญ่ |
+| reference-like type (slice, map) | แชร์ data โดยไม่ต้อง copy | shared mutation — goroutine หนึ่งแก้ไขอาจกระทบอีกตัว |
+| static typing | compiler catch errors เร็ว | verbose type declarations |
+| composite literals | readable initialization | syntax แตกต่างกันตาม type |
+
+## Common Misconceptions
+
+- **array และ slice คือสิ่งเดียวกัน** — array มีขนาดคงที่เป็นส่วนของ type เช่น `[3]int` ≠ `[4]int`; slice เป็น dynamic view ของ array
+- **map safe สำหรับ concurrent access** — Go map ไม่ใช่ — ต้องใช้ `sync.Mutex` หรือ `sync.RWMutex` ถ้า goroutine หลายตัวอ่าน/เขียนพร้อมกัน
+- **struct copy เสมอแพง** — struct เล็ก (2-4 fields) copy เร็วมาก บางครั้งเร็วกว่าการใช้ pointer ที่ต้อง dereference และอาจ escape to heap
+
+> 💡 Real World Example
+>
+> **Kubernetes** ใช้ slice สำหรับ pod list และ container list — แต่ละ reconcile loop สร้าง slice ใหม่ผ่าน append
+>
+> **Prometheus** ใช้ map สำหรับ metric label — `map[string]string` เป็น label set หลัก
+>
+> **Docker** ใช้ struct + pointer receiver สำหรับ container state management
+
 <Callout title="Value types ถูก copy; reference-like types แชร์ข้อมูล">
 เมื่อคุณ assign struct ไปยังตัวแปรใหม่ — `p2 := p1` — คุณจะได้ copy ที่เป็นอิสระ การแก้ไข `p2` ไม่ส่งผลต่อ `p1` แต่ slice และ map ทำงานต่างออกไป: การ assign จะ copy แค่ header ทำให้ตัวแปรสองตัวชี้ไปข้อมูลชุดเดียวกัน ความแตกต่างนี้คือหัวใจของการตัดสินใจออกแบบส่วนใหญ่ที่คุณจะพบในโมดูลนี้
 </Callout>

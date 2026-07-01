@@ -105,6 +105,27 @@ func main() {
 
 <Playground client:visible code={selectCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| select over multiple channels | handle หลาย event source พร้อมกัน | random selection เมื่อหลาย case ready |
+| default case | non-blocking check | loop tight ทำให้ CPU spin |
+| timeout with time.After | กำหนด deadline ง่าย | leak timer goroutine ถ้าไม่ drain channel |
+| select กับ context.Done() | cancellation ง่าย | ต้องใส่ทุก select ที่อาจรันนาน |
+
+## Common Misconceptions
+
+- **select เหมือน switch** — select เลือกแบบ random ถ้าหลาย case ready — ไม่ใช่ first-match
+- **default ใน select ทำให้เร็วขึ้น** — default loop แบบ tight = CPU spinning = ใช้ CPU สูง
+- **time.After ไม่ leak** — time.After สร้าง timer goroutine ใหม่ทุกครั้ง — ใน tight loop ควรใช้ time.NewTimer แทน
+
+> 💡 Real World Example
+>
+> **Kubernetes** controller loop ใช้ select รอ channel หลายตัว: workqueue, stopCh, ticker สำหรับ reconciliation
+>
+> **Go HTTP server** ใช้ `select { case <-ctx.Done(): }` ใน handler เพื่อ cancel งานเมื่อ client disconnect
+
 <Callout title="ข้อควรระวัง: select ว่างบล็อกตลอดไป">
 `select` ที่ไม่มี case — `select {}` — บล็อก goroutine ปัจจุบันตลอดไป บางครั้งใช้โดยตั้งใจเพื่อให้ `main` มีชีวิตอยู่ แต่มักเป็นความผิดพลาด ตรวจสอบให้แน่ใจว่า select ของคุณมี case ที่เข้าถึงได้หรือ `default` เสมอ `select` ที่มีเฉพาะ `default` โดยไม่มี channel case จะรัน `default` ทุกครั้ง — มีประโยชน์สำหรับการ poll แบบ non-blocking แต่จะเป็น infinite loop ถ้าอยู่ใน `for` โดยไม่มี logic เพิ่ม
 </Callout>

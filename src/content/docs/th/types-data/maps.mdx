@@ -121,6 +121,28 @@ func main() {
 
 <Playground client:visible code={mapsCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| built-in hash map | O(1) average lookup, ใช้งานง่าย | ไม่ thread-safe — ต้องใช้ mutex หรือ sync.Map |
+| zero value for missing key | ไม่ panic เมื่ออ่าน key ที่ไม่มี | ซ่อน bug ถ้าลืมใช้ comma-ok idiom |
+| dynamic sizing | map ขยายอัตโนมัติ | map ไม่คืน memory หลัง delete — ต้องสร้างใหม่ถ้าต้องการ shrink |
+| randomized iteration | ป้องกัน code ที่พึ่งพา order โดยไม่ตั้งใจ | ต้อง sort key ถ้าต้องการ deterministic output |
+
+## Common Misconceptions
+
+- **map safe สำหรับ concurrent access** — map ไม่ใช่ — goroutine หลายตัวอ่าน/เขียนพร้อมกันทำให้เกิด race condition และ crash
+- **iteration order ของ map เป็น insertion order** — Go map iterate แบบ random order โดยเจตนา ทุก run อาจต่างกัน
+- **`delete()` ลด memory ทันที** — Go map ไม่คืน memory ที่ใช้กับ bucket หลัง delete — สร้าง map ใหม่ถ้าต้องการ shrink
+- **`len(m)` slow เหมือน iterate** — `len(map)` เป็น O(1) Go track count ไว้ใน map header
+
+> 💡 Real World Example
+>
+> **Kubernetes** ใช้ `map[string]string` สำหรับ pod label, annotation, และ config — label selector ก็เป็น map เช่นกัน
+>
+> **HTTP servers** ใช้ `map[string][]string` สำหรับ HTTP headers (`http.Header`) — protect ด้วย mutex ใน concurrent handler
+
 <Callout title="ลำดับ map iteration แบบสุ่ม — ควร sort เสมอสำหรับ output ที่ deterministic">
 Go จงใจสุ่มลำดับ map iteration ทุกครั้งที่รันโปรแกรม เพื่อป้องกันบั๊กที่พึ่งพา hash ordering แบบเงียบๆ ถ้าต้องการ output ที่คงที่ — สำหรับ test, log, หรือ user-facing data — ให้รวบรวม key ลงใน `[]string` แล้วเรียก `sort.Strings` แล้วค่อย range ผ่าน slice ที่เรียงแล้ว อย่าพึ่งพาลำดับของ `for k, v := range myMap`
 </Callout>

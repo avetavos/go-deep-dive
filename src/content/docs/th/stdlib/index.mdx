@@ -69,6 +69,29 @@ func main() {
 
 <Playground client:visible code={stdlibIndexCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| batteries-included standard library | ไม่ต้อง install external package สำหรับงานพื้นฐาน | opinionated API — ยืดหยุ่นน้อยกว่า third-party |
+| encoding/json (reflect-based) | ไม่ต้อง code generation | ช้ากว่า code-gen approach เช่น easyjson |
+| fmt ใช้ reflection | print ค่าใดก็ได้ | ช้ากว่า structured logger ใน production |
+| net/http built-in | deploy HTTP server ได้ทันที | ไม่มี routing ขั้นสูง — ต้องใช้ third-party router |
+
+## Common Misconceptions
+
+- **standard library เหมาะสำหรับทุก use case** — บางงานต้องการ third-party: structured logging (zap/slog), advanced routing (chi/gin), ORM (gorm)
+- **fmt.Println ช้าเกินไปสำหรับ production** — fmt เป็นปัญหาเฉพาะเมื่อ log ใน hot path — ควร benchmark ก่อน optimize
+- **encoding/json คือทางเลือกเดียวสำหรับ Go JSON** — มี jsoniter, easyjson, sonic ที่เร็วกว่า 2-5x สำหรับ high-throughput use case
+
+> 💡 Real World Example
+>
+> **Kubernetes** ใช้ standard library เป็นหลัก — net/http สำหรับ API server, encoding/json สำหรับ resource serialization, time สำหรับ lease/timeout
+>
+> **Docker** deploy เป็น single binary โดยไม่ต้อง install runtime — เป็นไปได้เพราะ Go compile static binary พร้อม standard library
+>
+> **Prometheus** ใช้ net/http สำหรับ /metrics endpoint และ time สำหรับ scrape interval — ไม่ต้องใช้ external HTTP framework
+
 <Callout title="เอกสาร standard library">
 ทุก package ใน standard library มีเอกสารที่ **pkg.go.dev/std** แต่ละหน้าแสดง synopsis ของ package, identifier ที่ export ทั้งหมด และตัวอย่างที่รันได้ บุ๊กมาร์กไว้เลย — เป็นวิธีที่เร็วที่สุดในการตรวจสอบ signature ของฟังก์ชันหรือค้นหา constant ที่ต้องการ
 </Callout>

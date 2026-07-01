@@ -131,6 +131,30 @@ func main() {
 
 <Playground client:visible code={encodingJsonCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| json.Marshal/Unmarshal | ง่าย, ไม่ต้อง schema | reflect-based — ช้ากว่า code-gen 2-5x |
+| struct tags (json:"name") | control field names, omitempty | runtime-only — ไม่มี compile-time check ว่า tag ถูกต้อง |
+| json.Decoder (streaming) | decode large/stream JSON โดยไม่ load ทั้งหมดใน memory | API ซับซ้อนกว่า Unmarshal |
+| omitempty | ไม่ส่ง zero value ใน JSON | 0, false, "" ถือเป็น empty — อาจ surprise |
+
+## Common Misconceptions
+
+- **json.Marshal/Unmarshal thread-safe** — ใช่ — แต่ json.Decoder/Encoder แต่ละ instance ไม่ thread-safe อย่าแชร์ข้าม goroutine
+- **unexported field ถูก marshal** — ไม่ — unexported field ถูก ignore โดย encoding/json ไม่ว่าจะมี tag หรือไม่
+- **omitempty ทำงานกับ pointer เหมือน value** — omitempty บน *T: nil → omit, non-nil → include แม้ว่า value ข้างใน pointer เป็น zero
+- **interface\{\} field ใน struct marshal เป็น null เสมอ** — marshal ตาม concrete type ที่ store อยู่ใน interface ตอน runtime
+
+> 💡 Real World Example
+>
+> **Kubernetes API**: ทุก Kubernetes resource (Pod, Deployment, Service) marshal/unmarshal ผ่าน encoding/json — struct tags ควบคุม JSON key ทั้งหมด
+>
+> **Go REST API**: json.NewDecoder(r.Body).Decode(&req) คือ pattern มาตรฐานที่ทุก Go API server ใช้สำหรับ parse request body
+>
+> **Prometheus**: /metrics endpoint ใช้ custom text format แต่ HTTP config และ rule file ใช้ json.Unmarshal สำหรับ admin API
+
 <Callout title="เฉพาะ exported field เท่านั้นที่ถูก marshal; tag ควบคุมชื่อ JSON key">
 Field ที่ขึ้นต้นด้วยตัวอักษรพิมพ์เล็กเป็น unexported และ `encoding/json` จะมองไม่เห็นเลย — จะไม่ปรากฏใน output และจะไม่ถูก populate ระหว่าง unmarshal ไม่ว่าจะเขียน tag อะไรก็ตาม ควรทำให้ field ที่ต้องการ serialize ขึ้นต้นด้วยตัวพิมพ์ใหญ่เสมอ จากนั้น tag `json:"name"` จะควบคุมชื่อ key ใน JSON output โดยอิสระจากชื่อ field ใน Go ทำให้สามารถใช้ naming convention ของ Go (`UserID`) และได้ JSON ที่สะอาด (`"user_id"`) ในเวลาเดียวกัน
 </Callout>

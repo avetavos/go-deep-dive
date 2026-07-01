@@ -73,6 +73,29 @@ func main() {
 
 <Playground client:visible code={indexCode} />
 
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---------|---------|------|
+| static typing | compiler จับ bug ก่อน runtime | เขียน code มากกว่า dynamic language เล็กน้อย |
+| keyword เพียง 25 คำ | เรียนรู้เร็ว, อ่าน code คนอื่นได้ง่าย | feature บางอย่าง (เช่น generics ยุคแรก) ต้องใช้ workaround |
+| fast compile | feedback loop สั้น, iteration เร็ว | ไม่มี REPL ที่สมบูรณ์แบบ |
+| garbage collection | ไม่ต้องจัดการ memory เอง | GC pause ที่ unpredictable ใน latency-critical system |
+
+## Common Misconceptions
+
+- **"Go คือ C เวอร์ชันใหม่"** — Go มี GC, goroutine, interface, และ module system ที่แตกต่างจาก C โดยสิ้นเชิง
+- **"Go ไม่มี OOP"** — Go มี struct, method, และ interface ที่ทำ composition ได้ แต่ไม่มี class hierarchy แบบ Java
+- **"Go ใช้ได้แค่ backend server"** — Go ใช้งานได้กับ CLI tools, DevOps tooling, WebAssembly, embedded systems, และ data pipelines
+
+> 💡 Real World Example
+>
+> **Kubernetes** — เขียนด้วย Go ทั้งหมด จัดการ container หลายล้าน pod บน cloud ทั่วโลก
+>
+> **Docker** — runtime และ CLI เขียนด้วย Go ใช้ goroutine ในการจัดการ container lifecycle
+>
+> **Cloudflare** — ใช้ Go ใน edge infrastructure เพื่อ handle request หลายสิบล้านครั้งต่อวินาที
+
 <Callout title="Explicit มากกว่า Implicit">
 Go บังคับให้คุณระบุประเภทและการแปลงอย่างชัดเจน ไม่มี coercion แบบ implicit เช่น คุณไม่สามารถบวก `int` กับ `float64` ได้โดยตรง ต้องแปลงก่อนเสมอ สิ่งนี้ทำให้ code อ่านง่ายขึ้นและลด bug ที่เกิดจาก type mismatch ได้อย่างมาก
 </Callout>
