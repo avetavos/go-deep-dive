@@ -27,7 +27,7 @@ func add(x, y int) int {
 
 ## Multiple Return Values
 
-Go functions สามารถ return หลายค่าได้ ซึ่งเป็น pattern มาตรฐานสำหรับ error handling:
+Go functions สามารถ return หลายค่าได้ ที่เป็น pattern มาตรฐานสำหรับ error handling:
 
 ```go
 func divide(a, b float64) (float64, error) {
@@ -211,22 +211,22 @@ func main() {
 
 <Playground code={functionsCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | multiple return values | explicit error handling ไม่มี hidden exception | caller ต้องตรวจทุก error — verbose กว่า try/catch |
 | named return values | documentation ใน signature, bare return ได้ | bare return ใน function ยาวทำให้อ่านสับสน |
 | `defer` | cleanup code อยู่ใกล้กับ resource acquisition | arguments evaluate ทันที, LIFO order อาจ surprise |
 | closures | encapsulate state ได้กระชับ | captured variable มักถูก allocate บน heap (escape analysis) |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **"multiple return values ทำให้ performance แย่ลง"** — Go return multiple values ผ่าน register หรือ stack โดยตรง ไม่มี heap allocation; แทบไม่มีผลต่อ performance
 - **"closure ทุกตัว escape ไปที่ heap"** — compiler ทำ Escape Analysis และอาจ allocate closure บน stack ถ้าไม่ออกนอก scope
 - **"function ใน Go ไม่ใช่ first-class"** — function ใน Go เป็น first-class value สามารถ assign, ส่งเป็น argument, หรือ return จาก function อื่นได้
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ pattern `(result, error)` ทุกที่ใน API server — caller บังคับตรวจ error ทำให้ระบบ resilient
 >

@@ -114,23 +114,23 @@ func main() {
 
 <Playground code={timeCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | time.Time เป็น value type | immutable, safe to copy และ share | ต้องระวัง timezone ที่แต่ละ Time carry |
 | time.Duration (int64 nanoseconds) | arithmetic ชัดเจน — 5*time.Second | ต้อง multiply constant ชัดเจน ไม่ใช่แค่ "5" |
 | time.After / time.NewTimer | สร้าง timeout ง่าย | time.After leak goroutine ใน tight loop — ควรใช้ time.NewTimer |
 | reference layout ("2006-01-02") | อ่านเข้าใจได้โดยดู example | ต่างจาก YYYY/MM/DD ของภาษาอื่น — ต้องจำ magic numbers |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **time.Now() return UTC เสมอ** — ขึ้นกับ local timezone ของเครื่อง — ควรใช้ time.Now().UTC() เมื่อต้องการ UTC ชัดเจน
 - **time.Sleep(1*time.Second) precise** — OS scheduler อาจ sleep นานกว่าที่กำหนด เช่น 1.05s — ไม่ใช่ hard real-time
 - **time.Equal เหมือน ==** — time.Equal เปรียบเทียบ instant ในเวลา (ignore timezone), == เปรียบเทียบ memory layout ทั้งหมดรวม timezone
 - **time.After ใน loop ไม่เป็นปัญหา** — time.After สร้าง channel และ goroutine ใหม่ทุกครั้ง — ใน hot loop ใช้ time.NewTimer + Reset() แทน
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes**: pod timeout, job deadline, lease expiry ล้วนใช้ time.Duration — เช่น `terminationGracePeriodSeconds` คือ `time.Duration`
 >
@@ -178,8 +178,8 @@ export const quizTime = [
     options: [
       "time.Now() ไม่มีใน Go 1.22+",
       "time.Now() จะ panic ใน WASM runtime",
-      "มันให้ output ที่ไม่แน่นอนซึ่งเปลี่ยนแปลงทุกครั้งที่รัน",
-      "มันคืนค่าเที่ยงคืน UTC เสมอ"
+      "ให้ output ที่ไม่แน่นอนซึ่งเปลี่ยนแปลงทุกครั้งที่รัน",
+      "คืนค่าเที่ยงคืน UTC เสมอ"
     ],
     answer: 2
   }

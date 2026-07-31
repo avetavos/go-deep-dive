@@ -66,28 +66,28 @@ func main() {
 
 <Playground code={indexCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | goroutine vs OS thread | 2-8 KB stack vs 1-8 MB | scheduler overhead |
 | CSP (channel) vs shared memory | ชัดเจนว่า data flow ไปไหน | channel overhead สูงกว่า mutex |
 | M:N scheduling | ใช้ OS thread น้อย | scheduler complexity |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **goroutine = OS thread** — goroutine เบากว่า thread มาก สร้างได้หลักแสนตัว
 - **concurrent = parallel** — concurrent คือจัดการหลาย task พร้อมกัน, parallel คือรันพร้อมกันจริงบน multi-core
 - **channel เสมอดีกว่า mutex** — mutex เหมาะกับ simple shared state, channel เหมาะกับ data flow
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ goroutine pool จัดการ controller loop ของทุก resource type พร้อมกัน
 >
 > **Prometheus** เปิด goroutine ต่อ scrape target ทำให้ collect metrics แบบ parallel
 
 <Callout title="ข้อควรระวัง: ส่ง i เป็น value เสมอ">
-ตัวแปร loop `i` เปลี่ยนค่าในทุก iteration การ close over มันโดยตรงใน `go func() { ... }()` หมายความว่า goroutine ทุกตัวอาจเห็นค่าสุดท้ายของ `i` ค่าเดียวกัน ให้ส่ง loop variable เป็น argument ชัดเจน — `go func(id int) { ... }(i)` — เพื่อให้แต่ละ goroutine มี snapshot ของตัวเอง ใน Go 1.22+ ตัวแปร loop จะถูก bind ใหม่ทุก iteration แต่การส่งชัดเจนยังคงเป็นแบบแผนที่ชัดเจนที่สุด
+ตัวแปร loop `i` เปลี่ยนค่าในทุก iteration การ close over ตัวแปรนั้นโดยตรงใน `go func() { ... }()` หมายความว่า goroutine ทุกตัวอาจเห็นค่าสุดท้ายของ `i` ค่าเดียวกัน ให้ส่ง loop variable เป็น argument ชัดเจน — `go func(id int) { ... }(i)` — เพื่อให้แต่ละ goroutine มี snapshot ของตัวเอง ใน Go 1.22+ ตัวแปร loop จะถูก bind ใหม่ทุก iteration แต่การส่งชัดเจนยังคงเป็นแบบแผนที่ชัดเจนที่สุด
 </Callout>
 
 export const quizIndex = [

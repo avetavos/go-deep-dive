@@ -14,7 +14,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ภาษาเชิงวัตถุส่วนใหญ่ผูก polymorphism ไว้กับลำดับชั้นของ class: คุณต้องประกาศว่า type หนึ่ง *implements* interface ใด, ต้อง *extends* base class, และ compiler จะบังคับโครงสร้างสายเลือดนั้น Go ตัดทิ้งลำดับชั้นทั้งหมด
 
-ใน Go **named type ใดก็ตามสามารถมี method ได้** และ **type ใดที่มี method ถูกต้องก็ตอบสนอง interface โดยอัตโนมัติ** — ไม่ต้องประกาศ นี่คือ *implicit interface satisfaction* ซึ่งเป็นการตัดสินใจออกแบบที่สำคัญที่สุดของภาษา
+ใน Go **named type ใดก็ตามสามารถมี method ได้** และ **type ใดที่มี method ถูกต้องก็ตอบสนอง interface โดยอัตโนมัติ** — ไม่ต้องประกาศ นี่คือ *implicit interface satisfaction* และเป็นการตัดสินใจออกแบบที่สำคัญที่สุดของภาษา
 
 การผสม methods และ interfaces ให้คุณได้:
 
@@ -63,29 +63,29 @@ func main() {
 
 <Playground code={indexCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | implicit interface satisfaction | decoupled code, ไม่มี import dependency บน interface | ยากต่อการ discover ว่า type ใด implement interface ใด |
 | value receiver | immutable, เรียกได้บน non-addressable values | copy struct ทุกครั้ง |
 | pointer receiver | mutate ได้, ไม่ copy | ต้อง nil-check, ต้องการ addressable value |
 | embedding (composition) | reuse methods/fields โดยไม่ inherit | ไม่มี virtual dispatch — ต้องใช้ interface สำหรับ polymorphism |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **interface คือ abstract class** — ใน Go interface มีแค่ method signatures ไม่มี implementation, ไม่มี state
 - **embedding = inheritance** — embedded type ไม่รู้จัก outer type ไม่มี override หรือ virtual dispatch
 - **nil interface เสมอ == nil** — interface ที่เก็บ nil pointer ไม่ใช่ nil interface; (nil, nil) != (*T, nil)
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Go standard library** ใช้ io.Reader และ io.Writer เป็น interface หลัก — os.File, bytes.Buffer, net.Conn, http.Body ล้วน implement สิ่งเดียวกัน ทำให้ compose ได้ทั่ว ecosystem
 >
 > **Kubernetes** ใช้ runtime.Object interface กับทุก Kubernetes resource — controller เขียนครั้งเดียวทำงานกับ Pod, Deployment, Service ได้ทุก type
 
 <Callout title="ข้อคิดสำคัญ">
-`Rectangle` ไม่เคยพูดว่า `implements Sizer` — มันแค่มี method ที่ชื่อและ signature ถูกต้อง นั่นคือทั้งหมดที่ Go ต้องการ ถ้า method set ตรงกัน interface ก็ถูกตอบสนองโดยอัตโนมัติ ณ compile time
+`Rectangle` ไม่เคยพูดว่า `implements Sizer` — แค่มี method ที่ชื่อและ signature ถูกต้อง นั่นคือทั้งหมดที่ Go ต้องการ ถ้า method set ตรงกัน interface ก็ถูกตอบสนองโดยอัตโนมัติ ณ compile time
 </Callout>
 
 export const quizMethodsInterfaces = [

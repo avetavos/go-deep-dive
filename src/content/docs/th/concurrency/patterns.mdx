@@ -16,7 +16,7 @@ Goroutines และ channels ของ Go ประกอบกันตาม 
 
 ## Pipeline
 
-**Pipeline** คือชุด stages ที่เชื่อมต่อด้วย channels แต่ละ stage รับค่าจาก upstream channel แปลงมัน แล้วส่ง result ลง downstream channel Stages รัน concurrent — ขณะที่ stage 2 กำลัง process item N, stage 1 กำลังทำงานกับ item N+1 แล้ว
+**Pipeline** คือชุด stages ที่เชื่อมต่อด้วย channels แต่ละ stage รับค่าจาก upstream channel แปลงค่า แล้วส่ง result ลง downstream channel Stages รัน concurrent — ขณะที่ stage 2 กำลัง process item N, stage 1 กำลังทำงานกับ item N+1 แล้ว
 
 ```
 generate → square → print
@@ -107,22 +107,22 @@ func main() {
 
 <Playground code={patternsCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Pattern | Benefit | Cost |
+| Pattern | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | worker pool | จำกัดจำนวน goroutine, reuse workers | ต้อง tune pool size, ซับซ้อนกว่า goroutine ต่อ task |
 | fan-out / fan-in | parallel processing, aggregate results | ต้องจัดการ error collection และ cancellation |
 | pipeline | modular stages, backpressure ง่าย | เพิ่ม latency ต่อ item (buffering overhead) |
 | semaphore (buffered channel) | rate limit ง่าย | ต้อง drain channel เมื่อ cancel |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **worker pool เสมอเร็วกว่า goroutine-per-request** — ขึ้นกับ workload — I/O-bound อาจเร็วกว่าด้วย goroutine-per-request
 - **pipeline ต้องมี fixed จำนวน stage** — pipeline ใน Go flexible — stage เพิ่มลดได้แบบ dynamic
 - **fan-out โดยไม่ limit = ดีที่สุด** — ไม่มี limit ทำให้ resource exhaustion เมื่อ load สูง
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ work queue + worker pool เป็น core ของ controller framework — จำกัด concurrent reconciliation
 >
@@ -131,7 +131,7 @@ func main() {
 > **Docker build** ใช้ pipeline pattern สำหรับ layer building — แต่ละ stage เป็น goroutine แยกกัน
 
 <Callout title="ข้อควรระวัง: goroutine leak เมื่อไม่มีใด drain channel">
-ถ้า goroutine บล็อกอยู่บน `out <- result` และ receiver ออกไปโดยไม่ drain มัน goroutine นั้นจะถูก **leaked** — มันอยู่ใน runtime ตลอดไป เปลืองหน่วยความจำและ goroutine slot วิธีแก้คือตรวจสอบให้แน่ใจว่า: (a) channel มี buffer พอสำหรับ sends ทั้งหมด, (b) receiver drain channel จนกว่า `close`, หรือ (c) sender ก็ select บน `ctx.Done()` ด้วย ใน production รัน `go tool pprof` บน goroutine profile เพื่อตรวจจับ leak
+ถ้า goroutine บล็อกอยู่บน `out <- result` และ receiver ออกไปโดยไม่ drain channel goroutine นั้นจะ **leak** — ค้างอยู่ใน runtime ตลอดไป เปลืองหน่วยความจำและ goroutine slot วิธีแก้คือตรวจสอบให้แน่ใจว่า: (a) channel มี buffer พอสำหรับ sends ทั้งหมด, (b) receiver drain channel จนกว่า `close`, หรือ (c) sender ก็ select บน `ctx.Done()` ด้วย ใน production รัน `go tool pprof` บน goroutine profile เพื่อตรวจจับ leak
 </Callout>
 
 export const quizPatterns = [

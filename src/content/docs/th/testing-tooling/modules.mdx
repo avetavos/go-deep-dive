@@ -78,7 +78,7 @@ import "github.com/go-chi/chi/v5"
 go mod tidy
 ```
 
-มันเพิ่ม `require` lines ที่ขาดหาย ลบ `require` lines สำหรับ packages ที่ไม่ได้ import แล้ว และอัปเดต `go.sum` ให้ตรงกัน รันก่อน commit ทุกครั้ง
+คำสั่งนี้เพิ่ม `require` lines ที่ขาดหาย ลบ `require` lines สำหรับ packages ที่ไม่ได้ import แล้ว และอัปเดต `go.sum` ให้ตรงกัน รันก่อน commit ทุกครั้ง
 
 ## Semantic import versioning
 
@@ -96,23 +96,23 @@ go get github.com/foo/bar/v2@v2.0.0
 
 ซึ่งหมายความว่า major version สองเวอร์ชันของ module เดียวกันสามารถอยู่ร่วมกันใน binary เดียวได้โดยไม่ขัดแย้ง การเปลี่ยน import path เป็นเจตนา: v2 API อนุญาตให้ไม่เข้ากันกับ v1
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | `go.mod` (explicit versioning) | reproducible build, dependency ชัดเจน | ต้อง update เมื่อ dependency เปลี่ยน — `go mod tidy` บ่อยๆ |
 | semantic versioning | backward compatibility contract ชัดเจน | major version bump ทำ import path เปลี่ยน — migration cost |
 | `go.sum` (hash verification) | ป้องกัน supply chain attack, verify integrity | ต้อง commit `go.sum` ด้วย — หลายคนลืม |
 | `go mod vendor` | air-gapped build ได้, ไม่ต้องพึ่ง network | `vendor/` directory ใหญ่, ต้อง sync ทุก dependency update |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **`go get` เหมือน `npm install`** — `go get` update `go.mod` และ download source ไม่ install binary แยก ต่างจาก npm มาก
 - **สามารถ ignore `go.sum`** — `go.sum` ต้อง commit ร่วมกับ `go.mod` เพื่อ verify dependency integrity — ถ้าขาด build อาจไม่ reproducible
 - **`replace` directive ใช้ใน production ได้** — `replace` directive ควรเป็น temporary เท่านั้น (เช่น local testing) ไม่ควรอยู่ใน production `go.mod`
 - **`GOPATH/pkg/mod` เป็น module cache ถาวร** — `go clean -modcache` ล้าง cache ได้ — ไม่ใช่ permanent storage ควร treat เป็น cache
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** มี `go.mod` ที่มี dependency หลักร้อยตัว — `vendor/` ถูก commit เพื่อให้ build reproducible ในทุก environment
 >
@@ -121,7 +121,7 @@ go get github.com/foo/bar/v2@v2.0.0
 > **Docker**: multi-stage Dockerfile ใช้ `go mod download` ก่อน copy source เพื่อ cache layer — rebuild เร็วขึ้นมากเมื่อ source เปลี่ยนแต่ dependency ไม่เปลี่ยน
 
 <Callout title="module คือกลุ่มของ packages ที่มี version ร่วมกัน">
-คิดว่า module คือหน่วยของการแจกจ่ายและ versioning ส่วน package คือหน่วยของการ compile module หนึ่งประกอบด้วยหลาย packages เมื่อคุณรัน `go get` คุณกำลังเพิ่ม module (และ packages ทั้งหมดของมันพร้อมใช้งาน) เมื่อคุณเขียน `import` คุณกำลัง import package path เฉพาะภายใน module สองแนวคิดนี้มีความเกี่ยวข้องกันอย่างใกล้ชิดแต่แตกต่างกัน
+คิดว่า module คือหน่วยของการแจกจ่ายและ versioning ส่วน package คือหน่วยของการ compile module หนึ่งประกอบด้วยหลาย packages เมื่อคุณรัน `go get` คุณกำลังเพิ่ม module (และ packages ทั้งหมดข้างในพร้อมใช้งาน) เมื่อคุณเขียน `import` คุณกำลัง import package path เฉพาะภายใน module สองแนวคิดนี้มีความเกี่ยวข้องกันอย่างใกล้ชิดแต่แตกต่างกัน
 </Callout>
 
 export const quizModules = [

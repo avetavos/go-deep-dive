@@ -38,7 +38,7 @@ Derived contexts สร้าง tree การ cancel parent จะ cancel ล�
 
 ## Cancellation Contract
 
-เมื่อเรียก `context.WithCancel` หรือ `context.WithTimeout` คุณได้รับสองค่า: derived context และ `cancel` function คุณ **ต้อง** เรียก `cancel()` เมื่องานเสร็จ — แม้ context จะหมดอายุตามธรรมชาติ ถ้าไม่เรียก parent context จะถือ reference ถึง child context จนกว่า parent จะถูก cancel ด้วย ซึ่งทำให้ leak ทรัพยากร
+เมื่อเรียก `context.WithCancel` หรือ `context.WithTimeout` คุณได้รับสองค่า: derived context และ `cancel` function คุณ **ต้อง** เรียก `cancel()` เมื่องานเสร็จ — แม้ context จะหมดอายุตามธรรมชาติ ถ้าไม่เรียก parent context จะถือ reference ถึง child context จนกว่าจะ cancel parent ด้วย ซึ่งทำให้ leak ทรัพยากร
 
 ## ฟัง Cancellation
 
@@ -100,22 +100,22 @@ func main() {
 
 <Playground code={contextCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | context.WithCancel | propagate cancellation tree | ต้อง call cancel() เสมอ ไม่งั้น goroutine leak |
 | context.WithTimeout | deadline อัตโนมัติ | ต้อง handle context.DeadlineExceeded |
 | context.WithValue | pass value ผ่าน call stack | type unsafe, ใช้ unexported key เพื่อหลีกเลี่ยง collision |
 | ctx.Done() channel | non-blocking check via select | ต้อง check ในทุก loop iteration ที่อาจรันนาน |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **context.WithValue เหมาะสำหรับ pass business data** — ใช้สำหรับ request-scoped metadata เท่านั้น (trace ID, auth token)
 - **cancel() ทำให้ goroutine หยุดทันที** — cancel() ส่ง signal ผ่าน channel — goroutine ต้องตรวจสอบ ctx.Done() เอง
 - **context ส่ง value ได้ทุก type** — context.Value() คืน any ต้องใช้ type assertion และอาจ nil
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ส่ง context จาก API server → controller → goroutine ทุกตัว เพื่อ graceful shutdown
 >
@@ -124,7 +124,7 @@ func main() {
 > **gRPC** propagate deadline ผ่าน context ข้าม service boundary อัตโนมัติ
 
 <Callout title="defer cancel() เสมอเพื่อหลีกเลี่ยง context leak">
-ทุกการเรียก `context.WithCancel`, `context.WithTimeout`, หรือ `context.WithDeadline` ต้องมีการเรียก `cancel` function คู่กัน ถ้าไม่เรียก `cancel` parent context จะถือ internal reference ถึง child context จนกว่า parent จะถูก cancel เองใน server ที่รันนาน ๆ สิ่งนี้สะสมเป็น goroutine และ memory leak Pattern idiomatic เสมอ: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`
+ทุกการเรียก `context.WithCancel`, `context.WithTimeout`, หรือ `context.WithDeadline` ต้องมีการเรียก `cancel` function คู่กัน ถ้าไม่เรียก `cancel` parent context จะถือ internal reference ถึง child context จนกว่าจะ cancel parent เองใน server ที่รันนาน ๆ สิ่งนี้สะสมเป็น goroutine และ memory leak Pattern idiomatic เสมอ: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`
 </Callout>
 
 export const quizContext = [

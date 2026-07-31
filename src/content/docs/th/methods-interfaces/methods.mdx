@@ -52,7 +52,7 @@ func (t Celsius) String() string {
 }
 ```
 
-คุณไม่สามารถนิยาม method บน type จาก package อื่น (เช่น `func (s string) Upper()` ผิดกฎ) แต่การห่อมันใน named type ในท้องถิ่นใช้ได้เสมอ
+คุณไม่สามารถนิยาม method บน type จาก package อื่น (เช่น `func (s string) Upper()` ผิดกฎ) แต่การห่อ type นั้นใน named type ในท้องถิ่นใช้ได้เสมอ
 
 ## Method sets
 
@@ -100,28 +100,28 @@ func main() {
 
 <Playground code={methodsCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | value receiver | immutable, เรียกได้บน non-addressable values | copy struct ทุกครั้งที่เรียก |
 | pointer receiver | mutate ได้, ไม่ copy struct | ต้อง nil-check, pointer ต้อง addressable |
 | method บน non-struct type | ขยาย behavior ของ any type ใน package | ไม่สามารถ add method บน imported type ได้ |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **value receiver และ pointer receiver ใช้แทนกันได้** — value receiver ทำงานบนสำเนา ไม่สามารถ mutate receiver ได้
 - **สามารถเพิ่ม method บน type ของ package อื่นได้** — Go ไม่อนุญาต ต้อง wrap หรือ embed แทน
 - **method set ของ T และ *T เหมือนกัน** — *T มี method set ใหญ่กว่า (รวมทั้ง pointer-receiver methods) ส่งผลต่อ interface satisfaction
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **net/http**: http.ResponseWriter เป็น interface — Handler ทุกตัวรับ interface นี้แทน concrete type ทำให้ test ได้ง่ายด้วย mock
 >
 > **Kubernetes**: reconcile loop ใช้ pointer receiver ทุกตัวเพราะ controller มี state ที่ต้องแก้ไข — consistency ของ receiver type สำคัญมาก
 
 <Callout title="ใช้ pointer receiver เมื่อต้องการแก้ไข — และใช้ให้สม่ำเสมอ">
-Value receiver ทำงานบนสำเนาเสมอ ดังนั้นการแก้ไขจะถูกทิ้งโดยเงียบ ๆ ใช้ pointer receiver ทุกครั้งที่ method ต้องเปลี่ยนสถานะของ receiver เมื่อเลือกใช้ pointer receiver กับ method ใดใน type หนึ่ง ให้ใช้กับทุก method ใน type นั้นเพื่อให้ method set สอดคล้องกันและหลีกเลี่ยงช่องว่าง interface-satisfaction ที่น่าแปลกใจ
+Value receiver ทำงานบนสำเนาเสมอ ดังนั้นการแก้ไขจะหายไปเงียบ ๆ ใช้ pointer receiver ทุกครั้งที่ method ต้องเปลี่ยนสถานะของ receiver เมื่อเลือกใช้ pointer receiver กับ method ใดใน type หนึ่ง ให้ใช้กับทุก method ใน type นั้นเพื่อให้ method set สอดคล้องกันและหลีกเลี่ยงช่องว่าง interface-satisfaction ที่น่าแปลกใจ
 </Callout>
 
 export const quizMethods = [

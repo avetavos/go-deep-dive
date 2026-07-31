@@ -115,9 +115,9 @@ func main() {
 
 <Playground code={syncCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | sync.Mutex | ง่าย, เร็วสำหรับ simple shared state | goroutine ที่ lock ต้อง unlock เสมอ |
 | sync.RWMutex | read parallel ได้ | RLock overhead > Mutex lock เมื่อ write บ่อย |
@@ -125,14 +125,14 @@ func main() {
 | sync/atomic | เร็วที่สุดสำหรับ simple counter | จำกัดแค่ primitive types |
 | channel | composable, safer | overhead มากกว่า mutex |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **mutex ช้ากว่า channel เสมอ** — mutex เร็วกว่า channel สำหรับ protect simple counter
 - **sync.Map แทน map+mutex ได้เสมอ** — sync.Map เหมาะกับ read-heavy, append-only ไม่ใช่ general map
 - **atomic.AddInt64 ใช้งานได้โดยไม่มีข้อกังวล** — ต้องระวัง 64-bit alignment บน 32-bit platform
 - **defer mu.Unlock() ช้ากว่า explicit unlock** — defer มี overhead น้อยมาก ใช้เพื่อ safety เสมอ
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ sync.RWMutex protect in-memory object cache — หลาย reader, writer น้อย เหมาะกับ RWMutex
 >

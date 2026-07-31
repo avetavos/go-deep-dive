@@ -81,7 +81,7 @@ func main() {
 
 <Playground code={indexCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
 | Approach | Benefit | Cost |
 |----------|---------|------|
@@ -90,13 +90,13 @@ func main() {
 | `go test ./...` | รัน test ทุก package ใน module ครั้งเดียว | parallel test อาจ race ถ้าไม่ระวัง shared state |
 | race detector (`-race`) | ตรวจหา concurrent bugs อัตโนมัติ | ช้าลง 2-10x — ควรรันใน CI ไม่ใช่ทุก local run |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **ต้องใช้ testing framework เหมือน Python/Node** — Go standard library มีทุกอย่างที่ต้องการ ไม่ต้องติดตั้ง testify หรือ gomega เพิ่ม
 - **coverage 100% = code ปลอดภัย** — coverage วัดว่า line ถูกรันหรือไม่ ไม่ได้วัด correctness — test ที่ไม่มี assertion ก็ทำให้ coverage 100% ได้
 - **`go test` ช้า** — `go test` cache ผลลัพธ์ — ถ้าไม่มีไฟล์เปลี่ยน จะ return cached result ทันที
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ `go test ./...` ทั้งหมด ไม่ใช้ external testing framework — standard library เพียงพอสำหรับ codebase ระดับ enterprise
 >
@@ -130,10 +130,10 @@ export const quizIndex = [
   {
     q: "อะไรทำให้ฟังก์ชันเป็น candidate ที่ดีสำหรับ unit test แรก?",
     options: [
-      "มันเปิด database connection",
-      "มันเป็น pure — ขึ้นอยู่กับ argument เท่านั้นโดยไม่มี side effect",
-      "มันใช้ goroutines",
-      "มันเขียนลงไฟล์"
+      "เปิด database connection",
+      "เป็น pure — ขึ้นอยู่กับ argument เท่านั้นโดยไม่มี side effect",
+      "ใช้ goroutines",
+      "เขียนลงไฟล์"
     ],
     answer: 1
   },

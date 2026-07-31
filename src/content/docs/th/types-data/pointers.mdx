@@ -147,7 +147,7 @@ heap allocation:  GC ต้องจัดการ, เพิ่ม latency เ
 Escape Analysis ตัดสินใจว่า variable ควรอยู่บน stack หรือ heap
 ```
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
 | Usage | Benefit | Cost |
 |-------|---------|------|
@@ -156,14 +156,14 @@ Escape Analysis ตัดสินใจว่า variable ควรอยู่
 | pointer receiver | mutate ได้, ไม่ต้อง copy | ต้อง nil-check, อาจเกิด aliasing bug |
 | `*T = nil` เป็น optional | แทน "ไม่มีค่า" ได้โดยไม่ต้องใช้ sentinel | ต้อง nil-check ก่อน dereference ทุกครั้ง |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **pointer ใน Go อันตรายเหมือน C** — Go ไม่มี pointer arithmetic; GC จัดการ lifetime ให้; dangling pointer เป็นไปไม่ได้
 - **pointer เสมอเร็วกว่า value** — pointer อาจทำให้ variable escape to heap → GC ต้องทำงานเพิ่ม → latency สูงขึ้น
 - **interface value เก็บ value โดยตรง** — interface value เก็บ (type metadata, data pointer) pair — เสมอมี indirection อย่างน้อยหนึ่งชั้น
 - **nil pointer = ปัญหาเหมือน NullPointerException ใน Java** — Go panic มี stack trace ชัดเจน และตรวจสอบ nil ได้ง่ายด้วย `if p == nil`
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ pointer to struct สำหรับ object ที่แชร์ระหว่าง goroutine เช่น `*corev1.Pod` — ลด copy overhead ใน reconciliation loop
 >

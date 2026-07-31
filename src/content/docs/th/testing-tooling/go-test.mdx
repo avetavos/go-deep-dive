@@ -117,23 +117,23 @@ go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
 flag `-covermode=atomic` จำเป็นต้องใช้ร่วมกับ `-race` เพื่อให้ได้ coverage counts ที่แม่นยำ เนื่องจาก race detector เขียนทับ memory accesses
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | table-driven test | test หลาย case ใน 1 function | ถ้า table ยาวเกิน อ่านยาก |
 | `t.Run()` subtests | isolate failure, parallel-friendly | nested output อ่านยากขึ้น |
 | `t.Parallel()` | รัน test ขนาน เร็วขึ้น | ต้องระวัง shared state — race condition ง่าย |
 | `-race` flag | ตรวจหา race condition อัตโนมัติ | ช้าลง 2-10x — ใช้ใน CI ไม่ใช่ทุก local run |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **`t.Fatal()` กับ `t.Error()` เหมือนกัน** — `t.Fatal()` หยุด test ทันที, `t.Error()` mark failed แต่รัน assertion ต่อไปได้
 - **`go test -cover 100%` = code ถูกต้อง** — coverage วัดว่า line ถูกรันหรือไม่ ไม่ได้วัดว่า behavior ถูกต้อง — test ไม่มี assertion ก็ทำให้ 100% ได้
 - **ต้องเขียน test file แยก package** — Go รองรับทั้ง same package (white-box) และ `_test` package (black-box) — เลือกตาม use case
 - **`t.Helper()` optional** — `t.Helper()` ทำให้ error report ชี้ไปยัง caller ไม่ใช่ helper function — ควรเรียกเสมอใน helper
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** controller package ใช้ table-driven test — test ร้อยกรณีใน 1 function, เพิ่ม edge case ได้โดยแค่เพิ่มแถวในตาราง
 >

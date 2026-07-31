@@ -131,23 +131,23 @@ func main() {
 
 <Playground code={encodingJsonCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | json.Marshal/Unmarshal | ง่าย, ไม่ต้อง schema | reflect-based — ช้ากว่า code-gen 2-5x |
 | struct tags (json:"name") | control field names, omitempty | runtime-only — ไม่มี compile-time check ว่า tag ถูกต้อง |
 | json.Decoder (streaming) | decode large/stream JSON โดยไม่ load ทั้งหมดใน memory | API ซับซ้อนกว่า Unmarshal |
 | omitempty | ไม่ส่ง zero value ใน JSON | 0, false, "" ถือเป็น empty — อาจ surprise |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **json.Marshal/Unmarshal thread-safe** — ใช่ — แต่ json.Decoder/Encoder แต่ละ instance ไม่ thread-safe อย่าแชร์ข้าม goroutine
 - **unexported field ถูก marshal** — ไม่ — unexported field ถูก ignore โดย encoding/json ไม่ว่าจะมี tag หรือไม่
 - **omitempty ทำงานกับ pointer เหมือน value** — omitempty บน *T: nil → omit, non-nil → include แม้ว่า value ข้างใน pointer เป็น zero
 - **interface\{\} field ใน struct marshal เป็น null เสมอ** — marshal ตาม concrete type ที่ store อยู่ใน interface ตอน runtime
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes API**: ทุก Kubernetes resource (Pod, Deployment, Service) marshal/unmarshal ผ่าน encoding/json — struct tags ควบคุม JSON key ทั้งหมด
 >

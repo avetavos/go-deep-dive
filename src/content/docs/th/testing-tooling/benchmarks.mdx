@@ -100,23 +100,23 @@ BenchmarkFibClassic-8 5000000      236 ns/op     0 B/op    0 allocs/op
 
 `Fibonacci` ไม่ allocate อะไรเลยเพราะใช้แค่ stack variables — นั่นคือเหตุผลที่ทั้งสองคอลัมน์ alloc เป็นศูนย์ ฟังก์ชันที่สร้าง `[]string` จะแสดงค่าที่ไม่ใช่ศูนย์
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | `go test -bench` | วัด performance ด้วยเครื่องมือ built-in | ต้องรันซ้ำหลายครั้ง ระวัง noise จาก GC และ CPU throttling |
 | `b.N` auto-calibration | framework กำหนด iteration count ให้ได้ผลที่เสถียร | ถ้าใส่ setup ใน loop = benchmark นับ setup ด้วย |
 | `b.ReportAllocs()` | เห็น heap allocation ต่อ operation ชัดเจน | ต้องเข้าใจ Escape Analysis เพื่อตีความผลลัพธ์ |
 | pprof profiling | วิเคราะห์ CPU/memory hotspot เชิงลึก | overhead ขณะ profiling — อย่าใช้ใน production โดยไม่ตั้งใจ |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **benchmark result บน dev machine = production** — ต้องคำนึง CPU throttling, GC state, background processes ที่ต่างกัน
 - **`b.N` คือจำนวนที่กำหนดเอง** — Go calibrate `b.N` อัตโนมัติให้ benchmark ใช้เวลาประมาณ 1 วินาที — อย่ากำหนดค่า `b.N` เอง
 - **`allocs/op = 0` หมายถึง optimal เสมอ** — zero allocation ดี แต่ถ้า CPU work เพิ่มขึ้นแทน อาจไม่ได้ดีกว่า
 - **benchmark สำหรับ micro-optimization เท่านั้น** — benchmark ช่วย validate architectural decision ได้ด้วย เช่น channel vs mutex, slice vs map
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ benchmark สำหรับ JSON marshaling ของ API object และ etcd client latency — ป้องกัน performance regression ระหว่าง release
 >
@@ -132,10 +132,10 @@ export const quizBenchmarks = [
   {
     q: "benchmark framework ทำอะไรกับ b.N ระหว่างการรัน benchmark?",
     options: [
-      "มันถูกกำหนดเป็น 1000 เสมอ",
+      "ถูกกำหนดเป็น 1000 เสมอ",
       "คุณกำหนดครั้งเดียวก่อน loop",
-      "framework เพิ่มค่ามันจนกว่าการวัดจะเสถียร",
-      "มันเท่ากับจำนวน test cases ในไฟล์"
+      "framework เพิ่มค่าจนกว่าการวัดจะเสถียร",
+      "เท่ากับจำนวน test cases ในไฟล์"
     ],
     answer: 2
   },

@@ -22,11 +22,11 @@ if err != nil {
 }
 ```
 
-`%w` คือกุญแจสำคัญ มันทำการ wrap error เดิมไว้ภายใน error ใหม่ รักษา chain ทั้งหมดไว้สำหรับ caller ที่ต้องการตรวจสอบ
+`%w` คือกุญแจสำคัญ เพราะ wrap error เดิมไว้ภายใน error ใหม่ รักษา chain ทั้งหมดไว้สำหรับ caller ที่ต้องการตรวจสอบ
 
 ## fmt.Errorf และ %w
 
-`fmt.Errorf` สร้าง error ใหม่ที่มี message รวมค่าอื่น แต่วิธีที่มันรวม error argument ขึ้นอยู่กับ verb ที่เลือก:
+`fmt.Errorf` สร้าง error ใหม่ที่มี message รวมค่าอื่น แต่วิธีรวม error argument ขึ้นอยู่กับ verb ที่เลือก:
 
 - **`%v`** จัดรูปแบบ message string ของ error และฝังเป็น plain text type ของ error เดิมหายไป chain ถูกตัด
 - **`%w`** บันทึก error เดิมไว้ใน error ใหม่ message ยังมี message เดิม แต่ error เดิมยังสามารถเข้าถึงได้โดยใช้โปรแกรม
@@ -99,7 +99,7 @@ func (e *AppError) Error() string  { return fmt.Sprintf("code %d: %v", e.Code, e
 func (e *AppError) Unwrap() error  { return e.Err }
 ```
 
-เมื่อมี `Unwrap` แล้ว `errors.Is` และ `errors.As` สามารถมองผ่าน `AppError` เพื่อไปถึง error ที่มันครอบอยู่
+เมื่อมี `Unwrap` แล้ว `errors.Is` และ `errors.As` สามารถมองผ่าน `AppError` เพื่อไปถึง error ที่ครอบอยู่ข้างใน
 
 export const wrappingCode = `package main
 
@@ -163,23 +163,23 @@ func main() {
 
 <Playground code={wrappingCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | fmt.Errorf("%w", err) | wrap พร้อม context, errors.Is/As ทำงานได้ | verbose กว่า `return err` เฉยๆ |
 | errors.Is() ใน chain | ตรวจ sentinel ใน chain ลึกแค่ไหนก็ได้ | ช้ากว่า `==` comparison (traversal) |
 | custom error type | เก็บ structured context (field, code, status) | ต้อง maintain type, implement Error() |
 | %v vs %w ใน fmt.Errorf | %v แสดง message ใน string, %w preserve chain | สับสนง่ายระหว่างสอง verb |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **wrap error ทุกชั้นยิ่งให้ context ยิ่งดี** — wrapping ลึกเกินไปทำ error message อ่านยาก ให้ wrap เฉพาะเมื่อ caller ต้องการ context นั้น
 - **errors.Unwrap() คืน nil เสมอถ้าไม่ได้ wrap** — errors.Unwrap() เรียกบน non-wrapped error คืน nil — ไม่ panic
 - **%w ใน fmt.Errorf รองรับ error เดียวเท่านั้น** — Go 1.20+ รองรับ `fmt.Errorf("msg: %w and %w", e1, e2)` เพื่อ wrap หลาย error
 - **errors.Is เปรียบเทียบ message string** — errors.Is ตรวจ identity (`==`) ไม่ใช่ message string — sentinel errors ต้องเป็น package-level var
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** controller ทุก layer เพิ่ม context ด้วย wrapping — `fmt.Errorf("reconcile pod %s: %w", pod.Name, err)` — ทำให้ stack ของ log มีความหมาย
 >

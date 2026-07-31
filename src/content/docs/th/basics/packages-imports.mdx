@@ -32,7 +32,7 @@ func main() {
 }
 ```
 
-Package อื่น ๆ (เช่น library) ไม่มี `func main` พวกมันถูก import และใช้โดย package อื่น
+Package อื่น ๆ (เช่น library) ไม่มี `func main` แต่ถูก import ไปใช้โดย package อื่น
 
 ## การ Import
 
@@ -52,7 +52,7 @@ import (
 
 Go compiler จะ error ทันทีถ้าคุณ import package แล้วไม่ใช้ สิ่งนี้บังคับให้ code สะอาด
 
-หากต้องการ import package เพื่อ side effect เท่านั้น (เช่น `init()` ของมัน) ใช้ blank identifier:
+หากต้องการ import package เพื่อ side effect เท่านั้น (เช่น `init()` ของ package นั้น) ใช้ blank identifier:
 
 ```go
 import _ "net/http/pprof"
@@ -118,22 +118,22 @@ func main() {
 
 <Playground code={packagesCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | uppercase = exported | visibility rule เรียบง่าย ไม่ต้องใช้ keyword `public`/`private` | ต้อง rename identifier ถ้าต้องการเปลี่ยน visibility |
 | unused import = compile error | ไม่มี dead import ใน codebase | ต้องลบ import ที่ไม่ใช้ทุกครั้ง (goimports ช่วยได้) |
 | `init()` function | setup เกิดขึ้นอัตโนมัติ | hidden side effects ยากต่อการ debug และ test |
 | module system (go.mod) | reproducible build, explicit dependency | learning curve สูงกว่า GOPATH เดิม |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **"circular import ใช้ได้ใน test files"** — Go ไม่อนุญาต circular import ไม่ว่าจะเป็น production code หรือ test files
 - **"`import _` ใช้ได้แค่กับ database driver"** — ใช้ได้กับทุก package ที่ต้องการให้ `init()` ทำงาน เช่น register codec, plugin, หรือ HTTP handler
 - **"Go module คือแค่ package manager เหมือน npm"** — Go module จัดการ versioning และ reproducible build ที่ระดับ module ทั้งหมด ไม่ใช่แค่ package เดี่ยว
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** จัดระเบียบ codebase หลายล้านบรรทัดด้วย package structure ที่ชัดเจน — แต่ละ package มีความรับผิดชอบเดียว ทำให้ team ขนาดใหญ่ทำงานร่วมกันได้
 >

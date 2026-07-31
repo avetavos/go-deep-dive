@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Goroutine คืออะไร?
 
-**Goroutine** คือฟังก์ชันที่ทำงานพร้อมกันกับ goroutines อื่น ๆ ในพื้นที่ address เดียวกัน คุณสร้างมันด้วย keyword เดียว:
+**Goroutine** คือฟังก์ชันที่ทำงานพร้อมกันกับ goroutines อื่น ๆ ในพื้นที่ address เดียวกัน คุณสร้างได้ด้วย keyword เดียว:
 
 ```go
 go f(args)
@@ -36,7 +36,7 @@ Scheduler ทำงานบนสามแนวคิด:
 | **M** | Machine — OS thread |
 | **P** | Processor — scheduling context (มี GOMAXPROCS ตัว) |
 
-แต่ละ P มี run queue ของ Gs M ต้องถือ P ถึงจะรัน G ได้ เมื่อ G บล็อกบน I/O M ของมันจะปล่อย P เพื่อให้ M อื่นรับช่วงต่อ
+แต่ละ P มี run queue ของ Gs M ต้องถือ P ถึงจะรัน G ได้ เมื่อ G บล็อกบน I/O M ที่รันอยู่จะปล่อย P เพื่อให้ M อื่นรับช่วงต่อ
 
 ## รอด้วย sync.WaitGroup
 
@@ -102,23 +102,23 @@ Work stealing:
   P1 run queue ว่าง → steal G จาก P2 run queue
 ```
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | goroutine (2-8 KB stack) | สร้างได้หลักแสนตัว | scheduler overhead ต่อ goroutine |
 | dynamic stack growth | ไม่เสีย memory ล่วงหน้า | stack copy cost เมื่อขยาย |
 | M:N scheduler | ไม่ block OS thread บน I/O | scheduler complexity, preemption cost |
 | work stealing | CPU utilization สูง | cache miss เมื่อ goroutine ย้าย P |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **goroutine = OS thread** — goroutine stack เริ่มต้น 2-8 KB, OS thread 1-8 MB
 - **สร้าง goroutine ฟรีทั้งหมด** — มี ~4 KB allocation + scheduler bookkeeping ต่อ goroutine
 - **GOMAXPROCS มากขึ้น = เร็วขึ้นเสมอ** — I/O-bound workload ได้ประโยชน์น้อยกว่า CPU-bound
 - **goroutine leak ไม่เป็นปัญหา** — goroutine ที่ไม่มีทางออกคือ memory leak
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** controller manager มี goroutine ต่อ resource type (Pod, Service, Deployment ฯลฯ)
 >
@@ -127,7 +127,7 @@ Work stealing:
 > **Prometheus** เปิด goroutine ต่อ scrape job — scrape หลักพัน target พร้อมกัน
 
 <Callout title="ข้อควรระวัง: goroutines ที่เริ่มใน main อาจไม่รันถ้า main return ก่อน">
-ถ้า `main` return ก่อนที่ goroutine จะมีโอกาสรัน goroutine นั้นจะถูกยกเลิกอย่างเงียบ ๆ Go runtime exit ทันทีที่ `main` goroutine return — มันไม่รอ background goroutines ใช้ `sync.WaitGroup`, channel, หรือ synchronization mechanism อื่น ๆ เพื่อให้ `main` มีชีวิตนานพอให้ goroutines เสร็จสิ้น
+ถ้า `main` return ก่อนที่ goroutine จะมีโอกาสรัน goroutine นั้นจะถูกยกเลิกอย่างเงียบ ๆ Go runtime exit ทันทีที่ `main` goroutine return — ไม่รอ background goroutines ใช้ `sync.WaitGroup`, channel, หรือ synchronization mechanism อื่น ๆ เพื่อให้ `main` มีชีวิตนานพอให้ goroutines เสร็จสิ้น
 </Callout>
 
 export const quizGoroutines = [

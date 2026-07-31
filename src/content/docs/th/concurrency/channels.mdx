@@ -121,23 +121,23 @@ G1 ──send──→ [_][_][_] ←──recv── G2
              G1/G2 ทำงานอิสระมากกว่า
 ```
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | unbuffered channel | synchronization guarantee แข็งแกร่ง | G ส่ง block จนกว่า G รับพร้อม |
 | buffered channel | decouple sender/receiver timing | ต้อง size buffer ให้เหมาะ, อาจ hide backpressure |
 | channel direction (`chan<-`, `<-chan`) | compile-time safety | verbose ใน function signature |
 | close + range | notify completion ง่าย | ส่งหลัง close → panic |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **channel เสมอเร็วกว่า mutex** — channel มี overhead มากกว่า mutex สำหรับ simple counter
 - **buffered channel ช่วยป้องกัน deadlock** — ไม่เสมอ — deadlock ยังเกิดได้ถ้า buffer เต็มและไม่มี receiver
 - **close(ch) ลบข้อมูลใน buffer** — ไม่ — receiver ยังรับข้อมูลที่เหลือใน buffer ได้หลัง close
 - **สามารถ close channel จาก receiver ได้** — sender เท่านั้นที่ควร close channel
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **net/http** ใช้ channel pattern ภายใน สำหรับ read/write pipeline ระหว่าง connection handler กับ request body
 >
@@ -146,7 +146,7 @@ G1 ──send──→ [_][_][_] ←──recv── G2
 > **Docker** ใช้ channel เชื่อม container process กับ log collector สำหรับ container log streaming
 
 <Callout title="ข้อควรระวัง: ส่งเข้า channel ที่ปิดแล้วจะ panic">
-การเรียก `close(ch)` แล้วส่งเข้า `ch` จะทำให้เกิด runtime panic การรับจาก channel ที่ปิดแล้วไม่มีทาง panic — มันจะ return zero value ของ type นั้น และ return value ตัวที่สอง comma-ok จะเป็น `false` หลักง่าย ๆ: เฉพาะ **sender** เท่านั้นที่ปิด channel และปิดก็ต่อเมื่อรู้ว่าจะไม่ส่งอีกแล้ว อย่าปิด channel จากฝั่ง receiver
+การเรียก `close(ch)` แล้วส่งเข้า `ch` จะทำให้เกิด runtime panic การรับจาก channel ที่ปิดแล้วไม่มีทาง panic — แต่จะ return zero value ของ type นั้น และ return value ตัวที่สอง comma-ok จะเป็น `false` หลักง่าย ๆ: เฉพาะ **sender** เท่านั้นที่ปิด channel และปิดก็ต่อเมื่อรู้ว่าจะไม่ส่งอีกแล้ว อย่าปิด channel จากฝั่ง receiver
 </Callout>
 
 export const quizChannels = [

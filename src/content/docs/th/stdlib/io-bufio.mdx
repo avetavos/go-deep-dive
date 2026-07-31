@@ -24,7 +24,7 @@ type Writer interface {
 }
 ```
 
-Interface ทั้งสองนี้คือภาษากลางของ I/O ใน Go มี type จำนวนมากที่ implement มัน: ไฟล์, network connection, HTTP request และ response body, in-memory buffer และอื่นๆ ฟังก์ชันที่รับ `io.Reader` หรือ `io.Writer` จะทำงานกับทุก type เหล่านั้นโดยไม่ต้องแก้ไขโค้ด
+Interface ทั้งสองนี้คือภาษากลางของ I/O ใน Go มี type จำนวนมากที่ implement ทั้งสอง: ไฟล์, network connection, HTTP request และ response body, in-memory buffer และอื่นๆ ฟังก์ชันที่รับ `io.Reader` หรือ `io.Writer` จะทำงานกับทุก type เหล่านั้นโดยไม่ต้องแก้ไขโค้ด
 
 ## strings.NewReader — Reader ในหน่วยความจำ
 
@@ -142,23 +142,23 @@ bufio.Writer batching:
   many syscalls                  one syscall
 ```
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | bufio.Reader | ลด syscall (batching reads) | เพิ่ม memory สำหรับ buffer |
 | bufio.Writer | ลด syscall (batching writes) | ต้อง Flush() ก่อน close |
 | io.Reader chain | composable, zero-copy pipeline | error handling ซับซ้อนเมื่อ chain ยาว |
 | io.Copy | efficient transfer ระหว่าง Reader→Writer | ไม่ inspect data ระหว่างทาง |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **unbuffered read เร็วพอ** — ทุก Read() call โดยไม่มี buffer = 1 syscall — ช้ามากสำหรับ small reads จำนวนมาก
 - **bufio.Writer flush อัตโนมัติ** — ไม่ — ต้อง Flush() เองก่อน close หรือส่ง response ไม่งั้น data อาจหาย
 - **io.Reader อ่าน exact n bytes เสมอ** — Read() อาจ return น้อยกว่า n bytes — ต้องวน loop ถ้าต้องการ exact read
 - **strings.NewReader กับ bytes.NewReader เหมือนกัน** — strings.NewReader สำหรับ string literal, bytes.NewReader สำหรับ []byte ที่มีอยู่แล้ว
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes**: etcd client ใช้ bufio สำหรับ gRPC message buffering — ลด syscall overhead เมื่อรับ stream ของ events
 >

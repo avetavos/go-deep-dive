@@ -139,23 +139,23 @@ func main() {
 
 <Playground code={structsCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | value semantics | predictable behavior, ไม่มี aliasing | copy cost สำหรับ struct ขนาดใหญ่ |
 | embedding (composition) | reuse field และ method โดยไม่ต้อง inheritance | field shadowing อาจสับสนเมื่อ embedded type มี field ชื่อเดียวกัน |
 | struct tags | metadata สำหรับ JSON/DB/validation แบบ declarative | runtime-only — ไม่มี compile-time check ว่า tag ถูกต้อง |
 | exported vs unexported fields | control API surface ได้ชัดเจน | refactoring ที่ expose field ใหม่เป็น breaking change |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **struct embedding = inheritance** — Go ไม่มี inheritance — `Person` ที่ embed `Address` ไม่ใช่ subtype ของ `Address`
 - **struct copy เสมอแพง** — struct เล็ก (2-4 fields) copy เร็วกว่าการใช้ pointer ที่ต้อง dereference และอาจทำให้ object escape to heap
 - **unexported field = private ใน type** — unexported หมายถึง package-level visibility — code ใน package เดียวกันเข้าถึงได้ทั้งหมด
 - **struct tags มีผลตอน compile** — struct tags เป็น string literal ที่ reflection อ่านตอน runtime — typo ใน tag จะไม่มี compile error
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ struct ลึกหลายชั้น เช่น `PodSpec` embed `Container`, `Volume`, `Affinity` — struct tags ควบคุม JSON serialization ทั้งหมด
 >

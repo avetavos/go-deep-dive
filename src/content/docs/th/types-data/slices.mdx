@@ -13,7 +13,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Array: รากฐาน
 
-**Array** ใน Go มีขนาดคงที่ซึ่งเป็นส่วนหนึ่งของ type `[3]int` และ `[4]int` คือ type คนละตัวกัน:
+**Array** ใน Go มีขนาดคงที่ที่เป็นส่วนหนึ่งของ type `[3]int` และ `[4]int` คือ type คนละตัวกัน:
 
 ```go
 arr := [3]int{10, 20, 30}
@@ -138,23 +138,23 @@ append เกิน cap:
                          backing array เดิมยัง live ถ้ามี slice อื่นชี้อยู่
 ```
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | slice header เป็น value (24 bytes) | pass to function ถูก | mutation ผ่าน slice copy กระทบ backing array เดิม |
 | dynamic append | ขยายได้อัตโนมัติ | reallocation เมื่อเกิน cap — O(n) copy |
 | slicing `[a:b]` | zero-copy subview | backing array ที่แชร์ — อาจ prevent GC ของ array ใหญ่ |
 | `make([]T, len, cap)` | pre-allocate หลีกเลี่ยง realloc | ต้องประมาณ cap ล่วงหน้า |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **slice และ array คือสิ่งเดียวกัน** — slice คือ (pointer, len, cap) header ที่ชี้ไปยัง array; array คือ fixed-size value type
 - **`append` ปลอดภัยเสมอและ mutate in-place** — append อาจ return slice ที่ชี้ backing array ใหม่ทั้งหมด — ต้อง assign ผลลัพธ์กลับเสมอ
 - **`len` และ `cap` เหมือนกัน** — len คือจำนวน element ที่เข้าถึงได้ตอนนี้, cap คือขนาดสูงสุดก่อน reallocation
 - **`copy(dst, src)` ทำ deep copy** — copy ถ่ายโอน values แต่ถ้า element เป็น pointer หรือ interface ยัง share underlying data เดิม
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ `make([]Pod, 0, capacity)` เพื่อ pre-allocate pod list และลด GC pressure ใน reconcile loop
 >

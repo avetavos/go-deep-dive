@@ -121,23 +121,23 @@ func main() {
 
 <Playground code={mapsCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | built-in hash map | O(1) average lookup, ใช้งานง่าย | ไม่ thread-safe — ต้องใช้ mutex หรือ sync.Map |
 | zero value for missing key | ไม่ panic เมื่ออ่าน key ที่ไม่มี | ซ่อน bug ถ้าลืมใช้ comma-ok idiom |
 | dynamic sizing | map ขยายอัตโนมัติ | map ไม่คืน memory หลัง delete — ต้องสร้างใหม่ถ้าต้องการ shrink |
 | randomized iteration | ป้องกัน code ที่พึ่งพา order โดยไม่ตั้งใจ | ต้อง sort key ถ้าต้องการ deterministic output |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **map safe สำหรับ concurrent access** — map ไม่ใช่ — goroutine หลายตัวอ่าน/เขียนพร้อมกันทำให้เกิด race condition และ crash
 - **iteration order ของ map เป็น insertion order** — Go map iterate แบบ random order โดยเจตนา ทุก run อาจต่างกัน
 - **`delete()` ลด memory ทันที** — Go map ไม่คืน memory ที่ใช้กับ bucket หลัง delete — สร้าง map ใหม่ถ้าต้องการ shrink
 - **`len(m)` slow เหมือน iterate** — `len(map)` เป็น O(1) Go track count ไว้ใน map header
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ `map[string]string` สำหรับ pod label, annotation, และ config — label selector ก็เป็น map เช่นกัน
 >

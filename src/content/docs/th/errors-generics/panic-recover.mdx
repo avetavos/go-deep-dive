@@ -41,7 +41,7 @@ defer func() {
 }()
 ```
 
-เมื่อ deferred function เรียก `recover()` และ goroutine กำลัง panic อยู่ `recover()` จะหยุด panic คืนค่า panic และให้ deferred function ทำงานต่อได้ปกติ หลังจาก deferred function คืนค่า **ฟังก์ชันที่ panic จะคืนค่า** ไม่ใช่กลับไปที่จุดที่เรียก `panic` แต่คืนค่าไปยัง caller ของมัน พร้อม zero values สำหรับ named return variables (ยกเว้นจะกำหนดใน deferred function)
+เมื่อ deferred function เรียก `recover()` และ goroutine กำลัง panic อยู่ `recover()` จะหยุด panic คืนค่า panic และให้ deferred function ทำงานต่อได้ปกติ หลังจาก deferred function คืนค่า **ฟังก์ชันที่ panic จะคืนค่า** ไม่ใช่กลับไปที่จุดที่เรียก `panic` แต่คืนค่าไปยัง caller ของฟังก์ชันนั้น พร้อม zero values สำหรับ named return variables (ยกเว้นจะกำหนดใน deferred function)
 
 การใช้งานทั่วไปคือแปลง panic เป็น error ที่ package boundary:
 
@@ -126,23 +126,23 @@ func main() {
 
 <Playground code={panicRecoverCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | panic | abort ทันทีเมื่อ invariant ถูกละเมิด | ถ้าไม่ recover — crash program ทั้งหมด |
 | recover ใน defer | หยุด panic propagation, convert เป็น error | ต้องอยู่ใน deferred function โดยตรง |
 | panic สำหรับ programming error | ชัดเจนว่า bug ไม่ใช่ expected error | ยาก test, ยาก trace ใน goroutine อื่น |
 | recover ใน server handler | ป้องกัน 1 request crash ทั้ง server | อาจ hide bugs ที่ควร fix ถ้าใช้บ่อยเกินไป |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **panic = exception ที่ควรใช้สำหรับ error handling** — panic ใช้สำหรับ programming error เท่านั้น (nil pointer, out of bounds, invariant violation)
 - **recover ช่วยดัก panic ได้ทุกที่** — recover ทำงานเฉพาะใน deferred function ที่เรียกโดยตรงจาก panicking goroutine เท่านั้น
 - **panic propagate ข้าม goroutine** — panic ไม่ข้าม goroutine boundary — unrecovered panic ใน goroutine crash program ทั้งหมด
 - **defer ไม่รันระหว่าง panic** — defer รันเสมอรวมถึงระหว่าง panic stack unwinding — นี่คือเหตุผลที่ recover ต้องอยู่ใน defer
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **net/http** server ใช้ recover ใน handler goroutine เพื่อป้องกัน 1 request panic crash ทั้ง server — panic ถูก log และ return 500 แทน
 >

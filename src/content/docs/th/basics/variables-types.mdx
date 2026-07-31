@@ -66,7 +66,7 @@ var bt  byte    // raw byte (uint8)
 
 ## Constants และ iota
 
-Constants ใน Go ไม่มี type เสมอไปจนกว่าจะถูกใช้ (untyped constants) ทำให้ใช้ได้ยืดหยุ่น:
+Constants ใน Go ยังไม่มี type จนกว่าจะนำไปใช้ (untyped constants) ทำให้ใช้ได้ยืดหยุ่น:
 
 ```go
 const Pi    = 3.14159   // untyped float constant
@@ -148,22 +148,22 @@ func main() {
 
 <Playground code={variablesCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | static typing | compiler จับ type mismatch ก่อน runtime | เขียน type annotation มากขึ้น |
 | zero values | ไม่มี uninitialized variable, ไม่มี null dereference | ต้องเช็คว่า zero value มีความหมายในบริบทนั้นหรือเปล่า |
 | no implicit conversion | ไม่มี hidden precision loss | ต้องเขียน `float64(x)` ทุกครั้งที่แปลง type |
 | `iota` enum | สร้าง enum ได้กระชับ | ไม่มี built-in string representation — ต้องเขียน `String()` method เอง |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **"`int` มีขนาด 32-bit เสมอ"** — ขนาดของ `int` ขึ้นกับ platform (32-bit บน 32-bit OS, 64-bit บน 64-bit OS) ถ้าต้องการ size คงที่ ใช้ `int32` หรือ `int64`
 - **"`var x = y` กับ `x := y` เหมือนกันเสมอ"** — `:=` ใช้ได้เฉพาะใน function scope เท่านั้น ไม่สามารถใช้ที่ package scope ได้
 - **"zero value ของ pointer คือ 0"** — zero value ของ pointer, slice, map, channel, และ function คือ `nil` ไม่ใช่ตัวเลข 0
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Cloudflare** ใช้ static typing ของ Go ในการป้องกัน bug ที่เกิดจาก type mismatch ใน edge routing logic — compiler จับ error ก่อนที่จะ deploy
 >

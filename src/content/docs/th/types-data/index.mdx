@@ -81,22 +81,22 @@ func main() {
 
 <Playground code={indexCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Type | Benefit | Cost |
+| ประเภท | ประโยชน์ | ต้นทุน |
 |------|---------|------|
 | value type (struct, array) | predictable behavior, ไม่มี aliasing | copy cost สำหรับ type ขนาดใหญ่ |
 | reference-like type (slice, map) | แชร์ data โดยไม่ต้อง copy | shared mutation — goroutine หนึ่งแก้ไขอาจกระทบอีกตัว |
 | static typing | compiler catch errors เร็ว | verbose type declarations |
 | composite literals | readable initialization | syntax แตกต่างกันตาม type |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **array และ slice คือสิ่งเดียวกัน** — array มีขนาดคงที่เป็นส่วนของ type เช่น `[3]int` ≠ `[4]int`; slice เป็น dynamic view ของ array
 - **map safe สำหรับ concurrent access** — Go map ไม่ใช่ — ต้องใช้ `sync.Mutex` หรือ `sync.RWMutex` ถ้า goroutine หลายตัวอ่าน/เขียนพร้อมกัน
 - **struct copy เสมอแพง** — struct เล็ก (2-4 fields) copy เร็วมาก บางครั้งเร็วกว่าการใช้ pointer ที่ต้อง dereference และอาจ escape to heap
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** ใช้ slice สำหรับ pod list และ container list — แต่ละ reconcile loop สร้าง slice ใหม่ผ่าน append
 >

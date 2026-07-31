@@ -127,28 +127,28 @@ func main() {
 
 <Playground code={embeddingCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | struct embedding | reuse fields และ methods โดยไม่ต้อง inheritance | field shadowing ถ้า outer type มี field ชื่อเดียวกับ embedded type |
 | interface embedding | compose interface ขนาดใหญ่จาก interface เล็ก | ยิ่ง interface ใหญ่ implement ยิ่งยาก |
 | method promotion | เรียก method ของ embedded type โดยตรง | อาจสับสนว่า method มาจาก type ใดเมื่อมี embedding หลายชั้น |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **embedding = inheritance** — embedded type ไม่รู้จัก outer type; ไม่มี virtual dispatch; ไม่มี IS-A relationship
 - **embedding สร้าง subtype relationship** — Person ที่ embed Address ไม่ใช่ subtype ของ Address — เป็นแค่ composition
 - **promoted method ทำงานบน outer type** — promoted method เรียก receiver ของ embedded type เสมอ ไม่ใช่ outer type
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **io.ReadWriter** embed io.Reader และ io.Writer — type ที่ implement ทั้งสองอัตโนมัติ satisfy io.ReadWriter โดยไม่ต้องประกาศเพิ่ม
 >
 > **sync.RWMutex** expose Lock/Unlock จาก embedded sync.Mutex — embedding ช่วยเพิ่ม write-lock API โดยไม่ต้อง duplicate code
 
 <Callout title="Embedding คือ composition ไม่ใช่ inheritance">
-ไม่มี virtual dispatch บน outer type ถ้า `Employee` embeds `Named` และคุณเรียก `e.Named.Describe()` คุณเรียก `Describe` ของ `Named` เสมอ — compiler ไม่มองหา override ใน `Employee` นี่เป็นเจตนา: embedding ของ Go คือกลไก code-reuse ไม่ใช่กลไก polymorphism สำหรับ polymorphism ให้นิยาม interface และให้ทั้งสอง types ตอบสนองมันอย่างอิสระ
+ไม่มี virtual dispatch บน outer type ถ้า `Employee` embeds `Named` และคุณเรียก `e.Named.Describe()` คุณเรียก `Describe` ของ `Named` เสมอ — compiler ไม่มองหา override ใน `Employee` นี่เป็นเจตนา: embedding ของ Go คือกลไก code-reuse ไม่ใช่กลไก polymorphism สำหรับ polymorphism ให้นิยาม interface และให้ทั้งสอง types ตอบสนองอย่างอิสระ
 </Callout>
 
 export const quizEmbedding = [

@@ -139,23 +139,23 @@ func main() {
 
 <Playground code={genericsCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | type parameters | code reuse โดยไม่ต้องใช้ `interface{}` | compile time เพิ่มขึ้น, syntax ซับซ้อน |
 | type constraints | compile-time type safety | ต้อง define constraint interface ก่อนใช้ |
 | comparable constraint | ใช้ `==` กับ generic type ได้ | ไม่รองรับ deep equality (slice, map) |
 | ~T (tilde/approximation) | constraint ครอบคลุม named types เช่น `type MyID int` | เข้าใจยากสำหรับผู้เริ่มต้น |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **generics ทำให้ binary ใหญ่ขึ้นมาก** — Go ใช้ GC-shape stenciling — code ที่มี pointer shape ใช้ instance เดียวกัน ไม่ขยายแบบ C++ templates
 - **generic function เร็วกว่า interface เสมอ** — generics avoid boxing แต่ overhead ของ instantiation per type อาจมีผลในบางกรณี
 - **generics เหมือน C++ templates** — Go generics ตรวจสอบ constraint ตอน definition ไม่ใช่ instantiation — error messages ดีกว่ามาก
 - **ควรใช้ generics แทน interface เสมอ** — interface เหมาะกว่าสำหรับ runtime polymorphism, generics เหมาะกว่าสำหรับ compile-time type-safe algorithms
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **golang.org/x/exp/slices**: generic `slices.Sort[S ~[]E, E cmp.Ordered](s S)` — type-safe sort ที่ทำงานกับทุก ordered type โดยไม่ต้อง cast
 >

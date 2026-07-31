@@ -20,7 +20,7 @@ type error interface {
 }
 ```
 
-type ใดก็ตามที่ implement method เดียว — `Error() string` — จะ satisfy interface นี้และสามารถใช้ได้ทุกที่ที่ต้องการ `error` ค่า `nil` เป็น `error` ที่ถูกต้องและหมายถึง "ไม่มี error เกิดขึ้น" โดยสากล ไม่มีอะไรพิเศษเกี่ยวกับ type `error` ในระดับภาษา มันเป็นแค่ interface ธรรมดาที่ถูก predeclare ไว้เท่านั้น
+type ใดก็ตามที่ implement method เดียว — `Error() string` — จะ satisfy interface นี้และสามารถใช้ได้ทุกที่ที่ต้องการ `error` ค่า `nil` เป็น `error` ที่ถูกต้องและหมายถึง "ไม่มี error เกิดขึ้น" โดยสากล ไม่มีอะไรพิเศษเกี่ยวกับ type `error` ในระดับภาษา เป็นแค่ interface ธรรมดาที่ predeclare ไว้ล่วงหน้าเท่านั้น
 
 ## การคืนค่า error จากฟังก์ชัน
 
@@ -76,7 +76,7 @@ Sentinel เหมาะที่สุดสำหรับเงื่อน�
 
 ## รูปแบบ if err != nil
 
-การตรวจสอบ `if err != nil` อย่างชัดเจนอาจดูซ้ำซากในตอนแรก แต่มันออกแบบมาอย่างตั้งใจ Go ถือว่าทุกความล้มเหลวเป็นจุดตัดสินใจ: คุณต้องเลือกว่าจะ propagate error, wrap มันพร้อม context, retry, fallback ไปยังค่า default หรือ log แล้วดำเนินต่อ ภาษาไม่ได้ตัดสินใจแทนคุณ
+การตรวจสอบ `if err != nil` อย่างชัดเจนอาจดูซ้ำซากในตอนแรก แต่ออกแบบมาอย่างตั้งใจ Go ถือว่าทุกความล้มเหลวเป็นจุดตัดสินใจ: คุณต้องเลือกว่าจะ propagate error, wrap พร้อม context, retry, fallback ไปยังค่า default หรือ log แล้วดำเนินต่อ ภาษาไม่ได้ตัดสินใจแทนคุณ
 
 วินัยนี้ทำให้โค้ดมองเห็นทุก call ที่อาจเกิด error ได้ที่ callsite เมื่ออ่านฟังก์ชัน Go คุณจะเห็นชัดเจนว่า operation ใดที่อาจล้มเหลวได้และ caller ทำอะไรกับแต่ละกรณี — ไม่มีการ propagate แบบ implicit ไม่มีเส้นทาง exception ที่มองไม่เห็น
 
@@ -124,23 +124,23 @@ func main() {
 
 <Playground code={errorValuesCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | error interface (1 method) | implement ง่าย, compose ได้ | ไม่มี stack trace โดยตรง |
 | errors.Is() | match sentinel ใน chain ลึกแค่ไหนก็ได้ | ต้อง wrap error ด้วย %w ให้ถูกต้องก่อน |
 | errors.As() | extract concrete error type พร้อม field | ต้อง type assertion ใน chain |
 | sentinel errors | เปรียบเทียบง่าย, self-documenting | เป็น public API — refactor ยากถ้า name ต้องเปลี่ยน |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **return nil error หมายถึง function สำเร็จเสมอ** — ถ้า caller ละเว้น error ด้วย `_` โดยไม่ตั้งใจ error ถูก ignore โดยสมบูรณ์
 - **errors.New() และ fmt.Errorf() เหมือนกัน** — fmt.Errorf กับ `%w` สามารถ wrap error chain ได้, errors.New ไม่สามารถ
 - **error message ควร capitalize** — Go convention: error message ไม่ capitalize และไม่มี punctuation ท้าย เช่น `"not found"` ไม่ใช่ `"Not found."`
 - **panic ดีกว่า return error สำหรับ critical error** — ใช้ panic เฉพาะสำหรับ programming error ที่ should not happen, ไม่ใช่ expected failure
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** คืน error chain ที่ wrap context ของทุก layer — apiserver error → controller error → client error — ทำให้ log มี context ครบ
 >

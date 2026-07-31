@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## คำสั่ง select
 
-`select` เป็นวิธีของ Go ในการรอหลาย channel operations พร้อมกัน มันบล็อกจนกว่า case หนึ่งพร้อม แล้วรัน case นั้น ถ้าหลาย case พร้อมพร้อมกัน จะเลือกหนึ่งแบบ **สุ่ม** — นี่คือการออกแบบภาษาโดยตั้งใจเพื่อหลีกเลี่ยง starvation
+`select` เป็นวิธีของ Go ในการรอหลาย channel operations พร้อมกัน โดยบล็อกจนกว่า case หนึ่งพร้อม แล้วรัน case นั้น ถ้าหลาย case พร้อมพร้อมกัน จะเลือกหนึ่งแบบ **สุ่ม** — นี่คือการออกแบบภาษาโดยตั้งใจเพื่อหลีกเลี่ยง starvation
 
 ```go
 select {
@@ -105,22 +105,22 @@ func main() {
 
 <Playground code={selectCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | select over multiple channels | handle หลาย event source พร้อมกัน | random selection เมื่อหลาย case ready |
 | default case | non-blocking check | loop tight ทำให้ CPU spin |
 | timeout with time.After | กำหนด deadline ง่าย | leak timer goroutine ถ้าไม่ drain channel |
 | select กับ context.Done() | cancellation ง่าย | ต้องใส่ทุก select ที่อาจรันนาน |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **select เหมือน switch** — select เลือกแบบ random ถ้าหลาย case ready — ไม่ใช่ first-match
 - **default ใน select ทำให้เร็วขึ้น** — default loop แบบ tight = CPU spinning = ใช้ CPU สูง
 - **time.After ไม่ leak** — time.After สร้าง timer goroutine ใหม่ทุกครั้ง — ใน tight loop ควรใช้ time.NewTimer แทน
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** controller loop ใช้ select รอ channel หลายตัว: workqueue, stopCh, ticker สำหรับ reconciliation
 >

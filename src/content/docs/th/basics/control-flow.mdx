@@ -173,22 +173,22 @@ func main() {
 
 <Playground code={controlFlowCode} />
 
-## Trade-offs
+## ข้อแลกเปลี่ยน
 
-| Feature | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | `for` keyword เดียว | เรียนรู้น้อยกว่า, code สม่ำเสมอ | ต้องจำรูปแบบสามแบบ (C-style, condition-only, infinite) |
 | `for range` | อ่านง่าย ไม่ต้องจัดการ index เอง | range copy value — mutation ใน loop body ไม่กระทบ original slice |
 | `switch` ไม่มี fallthrough อัตโนมัติ | ลด bug จาก forgotten `break` | ต้องเขียน `fallthrough` ชัดเจนถ้าต้องการ (rare) |
 | if init statement | scope ของ `err` แคบที่สุด | syntax แปลกสำหรับ developer ที่มาจากภาษาอื่น |
 
-## Common Misconceptions
+## ความเข้าใจผิดที่พบบ่อย
 
 - **"`defer` ช้า"** — `defer` มี overhead น้อยมาก (nanosecond range) ใช้ได้สบายใน production code สำหรับ cleanup
 - **"`range` copy ทั้ง slice"** — range copy เฉพาะ value ของแต่ละ element เท่านั้น ไม่ copy ทั้ง slice และ slice header ก็ถูก evaluate แค่ครั้งเดียวตอนเริ่ม loop
 - **"Go `for` loop ต้องใช้ semicolon เหมือน C"** — `for i := 0; i < n; i++` ใช้ semicolon แต่ `for range` และ condition-only loop ไม่ต้องใช้
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Prometheus** ใช้ `for range` ใน metric collection loop — iterate ผ่าน target หลายพัน target อย่างมีประสิทธิภาพ
 >
