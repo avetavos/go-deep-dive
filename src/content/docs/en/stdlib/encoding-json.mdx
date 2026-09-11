@@ -1,6 +1,6 @@
 ---
 title: encoding/json
-description: 'json.Marshal and Unmarshal, struct tags, nested structs, and map[string]any for flexible JSON handling.'
+description: 'json.Marshal and Unmarshal, struct tags, nested structs, map[string]any for flexible JSON handling, and the Go 1.27 encoding/json/v2 package.'
 sidebar:
   order: 4
 ---
@@ -130,6 +130,50 @@ func main() {
 }`;
 
 <Playground code={encodingJsonCode} />
+
+## encoding/json/v2 (Go 1.27)
+
+Go 1.27 ships `encoding/json/v2` and its low-level companion `encoding/json/jsontext` as stable packages. Everything above still works: the v1 `encoding/json` API is unchanged, but it is now *implemented on top of v2*, so existing programs get the faster decoder for free (opt out with `GOEXPERIMENT=nojsonv2` if you hit a behavioural difference).
+
+Import v2 when you want its API and stricter defaults:
+
+```go
+// needs Go 1.27+ — run on go.dev/play, not in the in-browser runner
+import "encoding/json/v2"
+
+data, err := json.Marshal(u)                   // same shape as v1 …
+err = json.Unmarshal(data, &u)
+
+data, err = json.Marshal(u, json.Deterministic(true))   // … plus variadic Options
+err = json.MarshalWrite(os.Stdout, u)          // straight to an io.Writer
+err = json.UnmarshalRead(resp.Body, &u)        // straight from an io.Reader
+```
+
+What is different from v1:
+
+| Area | v1 `encoding/json` | v2 `encoding/json/v2` |
+|------|--------------------|-----------------------|
+| Invalid UTF-8 in strings | silently replaced | **rejected** |
+| Duplicate object keys | last one wins | **rejected** |
+| Field name matching | case-insensitive | exact match by default (`json.MatchCaseInsensitiveNames(true)` to relax) |
+| Options | global `Encoder` setters | per-call `Options` values, composable |
+| Embedding a struct's fields | anonymous field | `json:",embed"` tag (the old `inline` name was renamed) |
+| Unmarshal speed | baseline | significantly faster; Marshal on par |
+
+`jsontext` is the streaming layer underneath: `jsontext.Decoder` and `jsontext.Encoder` walk a document as `Token`s and `Value`s while validating syntax, which is what you want for very large payloads or for rewriting JSON without decoding it into Go values.
+
+```go
+// needs Go 1.27+
+dec := jsontext.NewDecoder(r)
+for {
+    tok, err := dec.ReadToken()
+    if err == io.EOF { break }
+    // inspect tok.Kind(): '{', '}', '"', '0', …
+}
+```
+
+Rule of thumb for 2026: keep v1 for existing code and for wire formats that tolerate sloppy input; start new services on v2 so malformed JSON fails loudly at the boundary.
+
 
 <Callout title="Only exported fields are marshaled; tags control the JSON key names">
 Fields that start with a lowercase letter are unexported and are completely invisible to `encoding/json` — they will never appear in the output and will never be populated during unmarshaling, regardless of what tag you write on them. Always make fields you want to serialize start with an uppercase letter. The `json:"name"` tag then controls the key name in the JSON output independently of the Go field name, so you can follow Go naming conventions (`UserID`) while producing clean JSON (`"user_id"`).

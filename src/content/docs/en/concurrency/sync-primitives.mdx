@@ -57,6 +57,20 @@ The `sync/atomic` package provides lock-free operations on integer and pointer t
 
 Key operations: `atomic.AddInt64`, `atomic.LoadInt64`, `atomic.StoreInt64`, `atomic.CompareAndSwapInt64`.
 
+## sync.WaitGroup.Go (Go 1.25+)
+
+`WaitGroup` is the primitive you reach for most often, and since Go 1.25 it has a shortcut: `wg.Go(f)` does `Add(1)`, starts `f` in a new goroutine, and calls `Done()` when `f` returns.
+
+```go
+var wg sync.WaitGroup
+for _, url := range urls {
+    wg.Go(func() { fetch(url) })   // per-iteration url since Go 1.22, no capture dance
+}
+wg.Wait()
+```
+
+Reach for `wg.Go` in new code — it cannot get the `Add` placement wrong — and let `go fix` (the `waitgroupgo` modernizer, Go 1.26+) rewrite the old triple in existing code.
+
 ## Channels vs mutexes — a practical guide
 
 | Use channels when... | Use mutexes when... |

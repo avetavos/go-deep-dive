@@ -1,0 +1,190 @@
+---
+title: Iterators
+description: 'Iterator แบบ range-over-func ตั้งแต่ Go 1.23 — iter.Seq และ iter.Seq2, การเขียน push iterator ด้วย yield, การหยุดก่อนจบ และ helper ใน slices/maps/strings ที่สร้างและใช้ iterator'
+sidebar:
+  order: 6
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทำไมต้องมี iterator?
+
+ก่อน Go 1.23 ฟังก์ชันที่ผลิตลำดับข้อมูลมีทางเลือกที่ไม่สวยอยู่สามทาง: สร้างแล้วคืน slice ทั้งก้อน (allocate ทุกอย่างตั้งแต่แรก), ส่ง channel ออกมา (ต้องเปิด goroutine และช้า) หรือคิด type `Next()` ของตัวเองที่ `range` ไม่รู้จัก Go 1.23 เพิ่ม **range-over-func**: `for` วนซ้ำบนฟังก์ชันที่มีรูปแบบเฉพาะได้ และ standard library ได้ package `iter` มาตั้งชื่อรูปแบบเหล่านั้น
+
+ผลลัพธ์คือลำดับข้อมูลแบบ lazy ที่ไม่ allocate และใช้กับ syntax ของ loop ที่คุณรู้จักอยู่แล้ว
+
+## `iter.Seq` และ `iter.Seq2`
+
+package `iter` นิยาม generic function type ไว้สองแบบ:
+
+```go
+package iter
+
+type Seq[V any] func(yield func(V) bool)
+type Seq2[K, V any] func(yield func(K, V) bool)
+```
+
+iterator คือฟังก์ชันที่รับ callback ชื่อ `yield` มันเรียก `yield` หนึ่งครั้งต่อ element; `yield` คืน `false` เมื่อผู้ใช้ต้องการหยุด และ iterator **ต้อง** return ทันทีในกรณีนั้น `Seq2` yield เป็นคู่ — index กับ value หรือ key กับ value — ล้อกับ `range` แบบสองตัวแปร
+
+## การเขียน push iterator
+
+นี่คือ counter ที่ yield `0..n-1` และหยุดก่อนจบเมื่อถูกขอ:
+
+```go
+func Count(n int) iter.Seq[int] {
+    return func(yield func(int) bool) {
+        for i := 0; i < n; i++ {
+            if !yield(i) {
+                return // ฝั่งผู้ใช้ break ออกจาก loop แล้ว
+            }
+        }
+    }
+}
+
+for v := range Count(5) {
+    if v == 3 {
+        break // yield ใน Count คืน false แล้ว Count ก็ return
+    }
+    fmt.Println(v)
+}
+```
+
+`break`, `return` และ `continue` ใน loop body ทำงานตามที่คาดทุกอย่าง: compiler แปลง body ให้เป็นฟังก์ชัน `yield` และแปลง control flow ให้เอง iterator เห็นแค่ `yield` คืน `false`
+
+เพราะลำดับถูกผลิตตามความต้องการ `Count(1_000_000_000)` จึงไม่มีต้นทุนจนกว่าจะเริ่มวน — และถ้าหยุดหลังสามตัว ก็ผลิตแค่สามตัว
+
+## Iterator บน type ของคุณเอง
+
+รูปแบบ idiomatic คือ method ชื่อ `All`, `Keys`, `Values` หรือทำนองนั้น ที่คืน iterator แทน slice:
+
+```go
+type List[T any] struct{ items []T }
+
+func (l *List[T]) All() iter.Seq2[int, T] {
+    return func(yield func(int, T) bool) {
+        for i, v := range l.items {
+            if !yield(i, v) {
+                return
+            }
+        }
+    }
+}
+
+for i, v := range list.All() {
+    fmt.Println(i, v)
+}
+```
+
+ผู้เรียกไม่ต้องแตะ backing slice และคุณเปลี่ยน representation ทีหลังได้อิสระ — linked list, database cursor, HTTP API แบบแบ่งหน้า — โดย loop ไม่ต้องเปลี่ยนเลย
+
+## Standard library พูดภาษา iterator
+
+ตั้งแต่ Go 1.23 package `slices`, `maps` และ `strings` ทั้ง **ผลิต** และ **ใช้** iterator:
+
+```go
+import ("maps"; "slices"; "strings")
+
+// ใช้: เปลี่ยน iterator เป็น slice
+evens := slices.Collect(filter(Count(10), isEven))   // []int
+keys  := slices.Sorted(maps.Keys(m))                  // key ที่ sort แล้ว บรรทัดเดียว
+
+// ผลิต: วนซ้ำโดยไม่ copy
+for i, v := range slices.All(xs)    { /* index, value */ }
+for v := range slices.Values(xs)    { /* value อย่างเดียว */ }
+for k, v := range maps.All(m)       { /* key, value */ }
+
+// strings (Go 1.24): แยกแบบ lazy
+for line := range strings.Lines(text)          { /* ทีละบรรทัด คง newline ไว้ */ }
+for part := range strings.SplitSeq(csv, ",")   { /* ไม่ allocate []string */ }
+```
+
+`slices.Collect`, `slices.Sorted`, `slices.SortedFunc`, `maps.Collect` และ `maps.Insert` คือสะพานกลับสู่ข้อมูลจริง ส่วน `strings.SplitSeq` และ `strings.FieldsSeq` คือฝาแฝดแบบ lazy ของ `Split` และ `Fields`
+
+`filter` เล็ก ๆ ไว้อ้างอิง — combinator แบบนี้ประกอบกันได้เป็นธรรมชาติ:
+
+```go
+func filter[T any](seq iter.Seq[T], keep func(T) bool) iter.Seq[T] {
+    return func(yield func(T) bool) {
+        for v := range seq {
+            if keep(v) && !yield(v) {
+                return
+            }
+        }
+    }
+}
+```
+
+## Pull iterator
+
+range-over-func เป็นโมเดลแบบ **push**: ฝั่งผู้ผลิตเป็นคนขับ ส่วน loop body ของผู้ใช้เป็น callback เมื่อต้องดึงทีละ element เอง — เช่น merge ลำดับที่ sort แล้วสองชุด — `iter.Pull` แปลง push iterator ให้เป็นคู่ `next()`/`stop()`:
+
+```go
+next, stop := iter.Pull(Count(3))
+defer stop()
+v, ok := next() // 0, true
+```
+
+`iter.Pull` ใช้ coroutine อยู่ข้างใน จึงช้ากว่า `range` ธรรมดา ใช้เฉพาะเมื่อจำเป็นต้องได้รูปแบบ pull จริง ๆ
+
+## แนวทางการออกแบบ
+
+- **คืน slice เมื่อข้อมูลเป็น slice อยู่แล้ว** และมีขนาดเล็ก iterator ไม่ได้เพิ่มอะไรตรงนั้น
+- **คืน iterator** เมื่อลำดับมีขนาดใหญ่ ไม่มีที่สิ้นสุด ผลิตแพง มี I/O อยู่ข้างหลัง หรือเมื่อต้องการซ่อน representation
+- **เคารพ `yield == false` เสมอ** iterator ที่ยังเรียก `yield` ต่อหลังจากมันคืน `false` จะ panic
+- **ตั้งชื่อ accessor ว่า `All`, `Keys`, `Values`, `Backward`** ให้ตรงกับ standard library
+- iterator เป็นฟังก์ชันธรรมดา: ไม่ได้ปลอดภัยต่อ goroutine โดยอัตโนมัติ และถือทุกอย่างที่ closure จับไว้
+
+ลองรัน code ในบทนี้บน go.dev/play ด้วย Go 1.23 ขึ้นไป — playground ใน browser ที่ใช้ในบทอื่นของคอร์สรัน interpreter รุ่นเก่ากว่าที่ยังไม่รองรับ range-over-func
+
+<Callout title="Iterator คือฟังก์ชันที่เรียก yield">
+`iter.Seq[V]` คือ `func(yield func(V) bool)` loop `for v := range seq` กลายเป็น callback `yield`; `break` ทำให้ `yield` คืน `false` และ iterator ต้อง return ตอนนั้น `slices.Collect`, `slices.Sorted`, `maps.Keys`, `strings.Lines` และ `strings.SplitSeq` ช่วยให้ผสมลำดับแบบ lazy กับ slice และ map ธรรมดาได้โดยไม่ allocate สิ่งที่ไม่ได้ใช้
+</Callout>
+
+export const quizIterators = [
+  {
+    q: "iter.Seq[V] นิยามว่าอย่างไร?",
+    options: [
+      "type Seq[V any] chan V",
+      "type Seq[V any] func(yield func(V) bool)",
+      "type Seq[V any] interface{ Next() (V, bool) }",
+      "type Seq[V any] []V"
+    ],
+    answer: 1
+  },
+  {
+    q: "ใน iterator เมื่อ yield คืน false iterator ต้องทำอะไร?",
+    options: [
+      "เรียก yield อีกครั้งด้วย element ถัดไป",
+      "panic",
+      "return ทันทีและหยุดผลิต",
+      "ปิด channel"
+    ],
+    answer: 2
+  },
+  {
+    q: "call ใดเปลี่ยน iterator เป็น slice ที่ sort แล้วในบรรทัดเดียว?",
+    options: [
+      "sort.Slice(seq)",
+      "slices.Sorted(seq)",
+      "slices.Sort(seq)",
+      "maps.Collect(seq)"
+    ],
+    answer: 1
+  },
+  {
+    q: "เมื่อไรที่การคืน slice ธรรมดาเป็นการออกแบบที่ดีกว่า?",
+    options: [
+      "เมื่อลำดับไม่มีที่สิ้นสุด",
+      "เมื่อข้อมูลเป็น slice เล็ก ๆ อยู่แล้ว",
+      "เมื่อข้อมูลมาจาก network stream",
+      "เมื่อต้องซ่อน representation"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="errors-generics/iterators" questions={quizIterators} />
+
+<ProgressTracker client:visible id="errors-generics/iterators" />

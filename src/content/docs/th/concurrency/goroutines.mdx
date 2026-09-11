@@ -46,6 +46,20 @@ Scheduler ทำงานบนสามแนวคิด:
 - `wg.Done()` — ลด counter ลง 1 (เรียกด้วย `defer` ใน goroutine)
 - `wg.Wait()` — บล็อกจนกว่า counter จะถึงศูนย์
 
+### wg.Go — Go 1.25+
+
+ตั้งแต่ Go 1.25 `WaitGroup` มี method `Go` ที่รวม `Add(1)`, `go` statement และ `defer Done()` ไว้ในการเรียกครั้งเดียว:
+
+```go
+var wg sync.WaitGroup
+for i := 1; i <= 3; i++ {
+    wg.Go(func() { work(i) })
+}
+wg.Wait()
+```
+
+`wg.Go` ตัดความผิดพลาดคลาสสิกสองอย่างออกไป — ลืม `Add` ก่อน `go` statement หรือลืม `Done` — และ `go vet` (analyzer `waitgroup`, Go 1.25+) จะเตือนเมื่อวาง `Add` ผิดที่ รูปแบบ `Add/Done` ด้านล่างยังใช้ได้และเป็นสิ่งที่คุณจะเจอในโค้ดเก่า runner ในเบราว์เซอร์เกิดก่อน `wg.Go` playground จึงยังใช้รูปแบบคลาสสิก
+
 export const goroutinesCode = `package main
 
 import (
@@ -80,6 +94,23 @@ func main() {
 }`;
 
 <Playground code={goroutinesCode} />
+
+## Runtime ในปี 2026
+
+การเปลี่ยนแปลงของ runtime สามอย่างจาก Go 1.25–1.27 ที่มีผลกับโค้ด goroutine ในชีวิตประจำวัน:
+
+- **`GOMAXPROCS` รู้จัก container (Go 1.25)** — บน Linux ค่า default เคารพ cgroup CPU limit แล้ว pod ที่ถูกจำกัด 2 CPU บน node 64 core จะได้ `GOMAXPROCS=2` แทนที่จะเป็น 64 และ runtime ตรวจซ้ำเป็นระยะหาก limit เปลี่ยน ไม่ต้องใช้ `uber-go/automaxprocs` อีกต่อไป และ `runtime.SetDefaultGOMAXPROCS()` ใช้คืนค่า default หลังตั้งเองด้วยมือ
+- **Green Tea garbage collector (default ตั้งแต่ Go 1.26)** — marking phase ที่ออกแบบใหม่ให้ memory locality ดีขึ้น ลด GC overhead ลง 10–40% ในโปรแกรมจริง ไม่ต้องแก้โค้ด ปิดได้ด้วย `GOEXPERIMENT=nogreenteagc`
+- **Goroutine leak profile (GA ใน Go 1.27)** — `runtime/pprof` มี profile `goroutineleak` (เสิร์ฟที่ `/debug/pprof/goroutineleak` ผ่าน `net/http/pprof` ด้วย) ที่ใช้ reachability analysis ของ GC หา goroutine ที่ block บน channel หรือ lock ซึ่งไม่มีใครปลดได้อีกแล้ว traceback ของ module `go 1.27+` ยังพิมพ์ goroutine label ของ `runtime/pprof` ทำให้ระบุที่มาของ goroutine ที่รั่วง่ายขึ้น
+
+```go
+// ต้องใช้ Go 1.27+ — รันบน go.dev/play หรือในเครื่อง ไม่ใช่ runner ในเบราว์เซอร์
+import _ "net/http/pprof"
+
+// จากนั้น เมื่อ mount pprof handler ไว้ที่ :6060
+// curl "localhost:6060/debug/pprof/goroutineleak?debug=1"
+```
+
 
 ## Runtime Behavior
 

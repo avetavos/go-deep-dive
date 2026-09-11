@@ -85,7 +85,6 @@ func TestFibonacci(t *testing.T) {
     }
 
     for _, tc := range cases {
-        tc := tc // capture range variable (pre-Go 1.22)
         t.Run(tc.name, func(t *testing.T) {
             got := Fibonacci(tc.n)
             if got != tc.want {
@@ -107,6 +106,41 @@ go test -v -run TestFibonacci ./...
 #     --- PASS: TestFibonacci/fib(10) (0.00s)
 ```
 
+## ทดสอบโค้ด concurrent ด้วย testing/synctest (Go 1.25+)
+
+test ที่มี goroutine, timer หรือ timeout เคยต้องใช้ sleep จริงและมักจะ flaky `testing/synctest` รันฟังก์ชันใน *bubble* ที่เวลาเป็นแบบ virtual: `time.Sleep` และ timer เดินหน้าทันทีเมื่อ goroutine ทุกตัวใน bubble block อยู่ และ `synctest.Wait()` จะ block จนกว่าทุกตัวจะ block
+
+```go
+// ต้องใช้ Go 1.25+ — รันในเครื่อง ไม่ใช่ runner ในเบราว์เซอร์
+import (
+    "testing"
+    "testing/synctest"
+    "time"
+)
+
+func TestCacheExpiry(t *testing.T) {
+    synctest.Test(t, func(t *testing.T) {
+        c := NewCache(1 * time.Minute)
+        c.Set("k", "v")
+
+        time.Sleep(2 * time.Minute) // return ทันทีใน bubble
+        synctest.Wait()             // ให้ goroutine ที่ทำ expiry ได้รัน
+
+        if _, ok := c.Get("k"); ok {
+            t.Fatal("entry should have expired")
+        }
+    })
+}
+```
+
+Go 1.27 เพิ่ม `synctest.Sleep(d)` (sleep แล้ว `Wait` ต่อ) และ `httptest.NewTestServer()` ซึ่งเป็น `httptest.Server` บน fake network ใน memory ที่ทำงานใน bubble ได้ — HTTP client ที่ตั้ง timeout 30 วินาทีจึงทดสอบได้ในระดับ microsecond
+
+## Artifact และ attribute ของ test (Go 1.25–1.26)
+
+- `t.Attr(key, value)` (1.25) แนบ metadata ที่โผล่ใน output แบบ `-json` — สะดวกสำหรับผูก test กับ issue หรือ trace ID
+- `t.Output()` (1.25) คือ `io.Writer` ที่ส่งให้ logger ได้ เพื่อให้บรรทัด log แทรกอยู่ในลำดับที่ถูกต้องกับ log ของ test
+- `t.ArtifactDir()` (1.26) คืน directory สำหรับไฟล์ที่ test อยากเก็บไว้ — screenshot, dump, golden file รันด้วย `go test -artifacts` แล้ว runner จะพิมพ์ `=== ARTIFACTS TestName /path` และเก็บ directory ไว้ใต้ `-outputdir`
+
 ## Race detector
 
 เพิ่ม `-race` เพื่อตรวจจับ data races ในเวลา test — นี่คือสิ่งที่ต้องมีใน CI:
@@ -116,6 +150,9 @@ go test -race -coverprofile=coverage.out -covermode=atomic ./...
 ```
 
 flag `-covermode=atomic` จำเป็นต้องใช้ร่วมกับ `-race` เพื่อให้ได้ coverage counts ที่แม่นยำ เนื่องจาก race detector เขียนทับ memory accesses
+
+`go test` ยังรัน `go vet` ชุดย่อยเล็ก ๆ ก่อนทุกครั้ง ตั้งแต่ Go 1.27 ชุดนั้นรวม `stdversion` ที่ทำให้ build fail เมื่อคุณเรียก API ของ standard library ที่ใหม่กว่าบรรทัด `go` ใน `go.mod` — module ที่ระบุ `go 1.25` จึงแอบพึ่งฟังก์ชันของ 1.27 ไม่ได้
+
 
 ## ข้อแลกเปลี่ยน
 

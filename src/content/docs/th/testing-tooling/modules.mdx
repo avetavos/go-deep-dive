@@ -27,10 +27,17 @@ go mod init github.com/yourname/myapp
 ```go
 module github.com/yourname/myapp
 
-go 1.22
+go 1.26.0
 ```
 
 module path (`github.com/yourname/myapp`) ทำหน้าที่ทั้งเป็น import path prefix สำหรับ packages ของคุณเองและเป็น identifier ที่ modules อื่นใช้เมื่อ depend บน module ของคุณ ไม่จำเป็นต้องเป็น URL จริงระหว่าง development แต่ต้องไม่ซ้ำกันหากคุณเผยแพร่ใน Go module proxy
+
+สังเกตเวอร์ชัน: `go mod init` ของ Go 1.27 จงใจเขียน `go 1.26.0` ต่ำกว่า toolchain หนึ่ง minor release เพื่อให้ module ใหม่เอี่ยม build บน Go รุ่นก่อนได้ด้วย เมื่อต้องใช้ API ที่มีเฉพาะ 1.27 ให้ยกบรรทัดขึ้น:
+
+```bash
+go get go@1.27          # เขียนบรรทัด go ใหม่เป็น 1.27.x
+```
+
 
 ## go.mod และ go.sum
 
@@ -41,13 +48,28 @@ module path (`github.com/yourname/myapp`) ทำหน้าที่ทั้�
 ```
 module github.com/yourname/myapp
 
-go 1.22
+go 1.27
+
+toolchain go1.27.1
+
+ignore ./testdata/fixtures
 
 require (
-    github.com/go-chi/chi/v5 v5.1.0
-    golang.org/x/text v0.14.0 // indirect
+    github.com/go-chi/chi/v5 v5.2.1
+)
+
+require (
+    golang.org/x/text v0.28.0 // indirect
 )
 ```
+
+สามบรรทัดที่ควรดูใกล้ ๆ:
+
+- **`go 1.27`** คือเวอร์ชันของภาษาและ library ที่ module นี้เขียนขึ้นมาเทียบกับ — compiler บังคับใช้ และตั้งแต่ Go 1.27 การตรวจ `stdversion` ของ `go test` จะปฏิเสธการเรียก API ที่ใหม่กว่าบรรทัดนี้
+- **`toolchain go1.27.1`** (ไม่บังคับ) ตรึง toolchain ตัวเป๊ะ binary `go` ที่เก่ากว่าจะดาวน์โหลดและรันตัวนั้นให้อัตโนมัติ
+- **`ignore`** (Go 1.25) บอกคำสั่ง `go` ให้ข้าม directory tree นั้นไปเลย — มีประโยชน์กับโฟลเดอร์ใหญ่แบบ `node_modules` หรือ fixture ที่ไม่ใช่โค้ด Go
+
+บล็อก `require` สองบล็อกไม่ใช่เรื่องสไตล์: สำหรับ module `go 1.27+` `go mod tidy` *บังคับ* layout นี้ — dependency ทางตรงในบล็อกแรก ตัว `// indirect` ในบล็อกที่สอง — และรวมบล็อกซ้ำที่เจอเข้าด้วยกัน
 
 **go.sum** — ทะเบียน cryptographic checksum ทุก zip archive ของ dependency และ `go.mod` ถูก hash ที่นี่ Go toolchain ตรวจสอบ hash เหล่านี้ทุก build เพื่อรับประกัน reproducibility และป้องกัน supply-chain attacks ให้ commit ทั้งสองไฟล์ลง version control
 
@@ -141,7 +163,7 @@ export const quizModules = [
       "แสดงรายการเฉพาะ direct dependencies ของ module",
       "เก็บ cryptographic checksums เพื่อรับประกัน reproducibility และตรวจจับการแก้ไข",
       "เป็นไฟล์ cache ที่ optional และลบได้อย่างปลอดภัย",
-      "แทนที่ go.mod ใน Go 1.22+"
+      "แทนที่ go.mod ใน Go 1.27+"
     ],
     answer: 1
   },

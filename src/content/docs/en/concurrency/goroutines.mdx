@@ -46,6 +46,20 @@ Each P holds a run queue of Gs. An M must hold a P to run Gs. When a G blocks on
 - `wg.Done()` — decrement the counter by 1 (call with `defer` inside the goroutine)
 - `wg.Wait()` — block until the counter reaches zero
 
+### wg.Go — Go 1.25+
+
+Since Go 1.25 `WaitGroup` has a `Go` method that bundles `Add(1)`, the `go` statement, and the deferred `Done()` into one call:
+
+```go
+var wg sync.WaitGroup
+for i := 1; i <= 3; i++ {
+    wg.Go(func() { work(i) })
+}
+wg.Wait()
+```
+
+`wg.Go` removes the two classic mistakes — forgetting `Add` before the `go` statement, or forgetting `Done` — and `go vet` (the `waitgroup` analyzer, Go 1.25+) flags a misplaced `Add`. The `Add/Done` form below still works and is what you will read in older code; the in-browser runner predates `wg.Go`, so the playground keeps the classic form.
+
 export const goroutinesCode = `package main
 
 import (
@@ -80,6 +94,23 @@ func main() {
 }`;
 
 <Playground code={goroutinesCode} />
+
+## The runtime in 2026
+
+Three runtime changes from Go 1.25–1.27 matter for everyday goroutine code:
+
+- **Container-aware `GOMAXPROCS` (Go 1.25).** On Linux the default now respects cgroup CPU limits, so a pod limited to 2 CPUs on a 64-core node gets `GOMAXPROCS=2` instead of 64, and the value is re-checked periodically if the limit changes. The `uber-go/automaxprocs` workaround is no longer needed; `runtime.SetDefaultGOMAXPROCS()` restores the default after a manual override.
+- **Green Tea garbage collector (default since Go 1.26).** A redesigned marking phase with better memory locality cuts GC overhead by 10–40% in real programs. No code changes; the opt-out is `GOEXPERIMENT=nogreenteagc`.
+- **Goroutine leak profile (GA in Go 1.27).** `runtime/pprof` gains a `goroutineleak` profile — also served at `/debug/pprof/goroutineleak` by `net/http/pprof` — that uses the GC's reachability analysis to list goroutines blocked on a channel or lock that nothing can ever unblock. Tracebacks from `go 1.27+` modules also print `runtime/pprof` goroutine labels, which makes a leaked goroutine easier to attribute.
+
+```go
+// needs Go 1.27+ — run on go.dev/play or locally, not in the in-browser runner
+import _ "net/http/pprof"
+
+// then, with the pprof handler mounted on :6060
+// curl "localhost:6060/debug/pprof/goroutineleak?debug=1"
+```
+
 
 <Callout title="Gotcha: goroutines started in main may not run if main returns">
 If `main` returns before a goroutine has a chance to execute, that goroutine is silently killed. The Go runtime exits as soon as the `main` goroutine returns — it does not wait for background goroutines. Always use `sync.WaitGroup`, a channel, or another synchronization mechanism to ensure `main` stays alive long enough for goroutines to finish.

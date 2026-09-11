@@ -68,8 +68,8 @@ func main() {
 
 <Playground code={indexCode} />
 
-<Callout title="Key point: always pass i by value">
-The loop variable `i` changes on every iteration. Closing over it directly inside `go func() { ... }()` means every goroutine may see the same final value of `i`. Always pass loop variables as an explicit argument — `go func(id int) { ... }(i)` — so each goroutine gets its own snapshot. In Go 1.22+ the loop variable is re-bound per iteration, but passing explicitly is still the clearest pattern.
+<Callout title="Key point: loop variables are per-iteration since Go 1.22">
+Since Go 1.22 (for modules with `go 1.22` or newer) every iteration of a `for` loop gets its own `i`, so `go func() { use(i) }()` captures the value you expect. Before 1.22 the variable was shared and every goroutine could see the final value — that is why older code passes it explicitly, `go func(id int) { ... }(i)`, or copies it with `i := i` (a copy `go fix` now removes). Passing the value as an argument is still fine and makes the dependency visible; just know the bug it once guarded against is gone on Go 1.27.
 </Callout>
 
 export const quizIndex = [

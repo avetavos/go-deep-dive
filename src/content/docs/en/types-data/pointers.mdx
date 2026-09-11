@@ -69,6 +69,20 @@ n := new(int)   // *int pointing to 0
 *n = 7
 ```
 
+### `new` with an initial value (Go 1.26)
+
+Since Go 1.26 `new` also accepts an expression and returns a pointer to a copy of its value. This removes the old two-step dance of declaring a variable just to take its address, which is common with optional struct fields:
+
+```go
+type Person struct {
+    Name string
+    Age  *int // optional
+}
+
+p := Person{Name: "Ada", Age: new(36)}          // *int pointing to 36
+q := Person{Name: "Bob", Age: new(yearsSince(born))} // any expression works
+```
+
 ## Nil pointers
 
 The zero value of any pointer type is `nil`. Dereferencing a nil pointer causes a runtime panic:

@@ -93,6 +93,22 @@ type Person struct {
 
 หลังจาก embed แล้ว `person.City` คือ shorthand ของ `person.Address.City` นี่คือ **composition** ไม่ใช่ inheritance — embedded type ไม่รู้ว่าตัวเองถูก embed และ outer type ไม่ใช่ subtype ของ inner type
 
+### key ใน literal เป็น field selector ได้ (Go 1.27)
+
+ตั้งแต่ Go 1.27 key ใน struct literal เป็น **field selector** ที่ถูกต้องอะไรก็ได้ ไม่จำกัดแค่ชื่อ field ระดับบนสุด ทำให้กำหนดค่า promoted field ของ struct ที่ embed ไว้ได้ตรง ๆ โดยไม่ต้องซ้อน literal อีกชั้น:
+
+```go
+type Base struct{ ID int }
+type User struct {
+    Base
+    Name string
+}
+
+u := User{Base.ID: 7, Name: "Ada"} // Go 1.27+; แบบเดิมคือ User{Base: Base{ID: 7}, Name: "Ada"}
+```
+
+playground ด้านล่างรันบน interpreter ใน browser ที่เป็นเวอร์ชันเก่ากว่า ตัวอย่างนี้ลองรันบน go.dev/play แทน
+
 export const structsCode = `package main
 
 import "fmt"

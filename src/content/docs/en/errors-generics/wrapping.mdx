@@ -72,6 +72,18 @@ if errors.As(err, &ve) {
 
 Use `errors.As` when you have a custom error type that carries extra information — field names, HTTP status codes, retry hints — and you need to access those fields, not just check that the error exists.
 
+### `errors.AsType` — the generic form (Go 1.26)
+
+Go 1.26 added `errors.AsType[T]`, a type-safe alternative to `errors.As`. It returns the matched value and a bool, so there is no pointer-to-pointer argument to get wrong and the compiler checks `T`:
+
+```go
+if ve, ok := errors.AsType[*ValidationError](err); ok {
+    fmt.Println(ve.Field)
+}
+```
+
+Prefer `AsType` in new code; `errors.As` remains for older toolchains. (`go fix` can migrate existing call sites.)
+
 ## Custom error types
 
 Any struct that implements `Error() string` satisfies the `error` interface. Custom types let you carry structured context alongside the message:

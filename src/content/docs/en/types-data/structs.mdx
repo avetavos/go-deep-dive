@@ -93,6 +93,22 @@ type Person struct {
 
 After embedding, `person.City` is shorthand for `person.Address.City`. This is **composition**, not inheritance — the embedded type does not know it is embedded, and the outer type is not a subtype of the inner type.
 
+### Literal keys can be field selectors (Go 1.27)
+
+Since Go 1.27 a key in a struct literal may be any valid **field selector**, not only a top-level field name. That lets you set a promoted field of an embedded struct directly instead of nesting a second literal:
+
+```go
+type Base struct{ ID int }
+type User struct {
+    Base
+    Name string
+}
+
+u := User{Base.ID: 7, Name: "Ada"} // Go 1.27+; previously User{Base: Base{ID: 7}, Name: "Ada"}
+```
+
+The playground below runs on the older in-browser interpreter, so try this one on go.dev/play.
+
 export const structsCode = `package main
 
 import "fmt"

@@ -67,6 +67,27 @@ for i := 0; i < 5; i++ {
 result := strings.TrimSpace(b.String()) // "item0 item1 item2 item3 item4"
 ```
 
+### Cut, CutLast และ helper แบบ iterator
+
+helper สามกลุ่มที่มาในรุ่นหลัง ๆ แทนที่การคำนวณ index ไปได้เยอะ:
+
+```go
+// Go 1.18: แยกที่ separator ตัวแรก
+key, val, ok := strings.Cut("user=alice", "=")      // "user", "alice", true
+
+// Go 1.27: แยกที่ separator ตัวสุดท้าย — แทนการเล่นท่า strings.LastIndex
+dir, file, ok := strings.CutLast("a/b/c.txt", "/") // "a/b", "c.txt", true
+
+// Go 1.24: iterator แบบ lazy — ไม่ allocate []string ตรงกลาง
+for line := range strings.Lines(text) { fmt.Print(line) }      // เก็บ "\n" ไว้
+for part := range strings.SplitSeq("a,b,c", ",") { use(part) }
+for word := range strings.FieldsSeq("  a  b ") { use(word) }
+```
+
+`Lines`, `SplitSeq` และ `FieldsSeq` คืน `iter.Seq[string]` ใช้เมื่อต้องการเดินผ่านชิ้นส่วนเพียงรอบเดียว และใช้ `Split`/`Fields` ต่อไปเมื่อต้องการ slice ที่ index ได้ package `bytes` มีชุดเดียวกัน (`bytes.CutLast` และเพื่อน)
+
+ของเล็ก ๆ อีกสองอย่างที่ควรรู้: package `uuid` ใหม่ (Go 1.27) สร้างและ parse UUID ได้โดยไม่ต้องพึ่ง module ภายนอก และ `log/slog.NewMultiHandler` (Go 1.26) กระจาย logger ตัวเดียวออกไปหลาย handler
+
 ## strconv — การแปลงระหว่าง string และตัวเลข
 
 `strconv` แปลงระหว่าง string และ numeric type ฟังก์ชันที่พบบ่อยที่สุด:

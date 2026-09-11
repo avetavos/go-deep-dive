@@ -84,6 +84,21 @@ for i, r := range "Go!" {
 
 `range` ยังใช้กับ map (key, value) และ channel (value จนกว่าปิด) ได้ด้วย
 
+## Range บน integer และ loop variable แบบต่อรอบ
+
+ตั้งแต่ Go 1.22 `range` รับ integer ได้ด้วย ใช้แทน counting loop แบบเดิมเมื่อต้องการแค่ index:
+
+```go
+for i := range 5 {        // 0, 1, 2, 3, 4
+    fmt.Println(i)
+}
+for range 3 {             // วนซ้ำสามรอบ ไม่ต้องมีตัวแปร
+    fmt.Println("tick")
+}
+```
+
+Go 1.22 ยังเปลี่ยน semantics ของ loop variable ด้วย: แต่ละรอบได้ `i` (และ `v`) **ตัวใหม่** ดังนั้น closure และ goroutine ที่สร้างใน loop จะไม่เห็นค่าสุดท้ายพร้อมกันอีกต่อไป การเขียน `i := i` เพื่อ copy จึงไม่จำเป็นแล้วใน module ที่ `go.mod` ระบุ `go 1.22` ขึ้นไป
+
 ## switch
 
 `switch` ใน Go ไม่มี **automatic fallthrough** ต่างจาก C/Java ทุก case หยุดโดยอัตโนมัติ ถ้าต้องการ fallthrough ต้องระบุ `fallthrough` keyword อย่างชัดเจน:

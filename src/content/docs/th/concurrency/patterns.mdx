@@ -107,6 +107,9 @@ func main() {
 
 <Playground code={patternsCode} />
 
+บน Go 1.25+ สามบรรทัด `wg.Add(1)` / `go` / `defer wg.Done()` ใน `workerPool` ยุบเหลือ `wg.Go(func() { ... })` playground ยังใช้รูปแบบคลาสสิกเพราะ runner ของมันเกิดก่อน method นี้
+
+
 ## ข้อแลกเปลี่ยน
 
 | Pattern | ประโยชน์ | ต้นทุน |

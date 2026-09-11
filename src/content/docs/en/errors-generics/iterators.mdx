@@ -1,0 +1,190 @@
+---
+title: Iterators
+description: 'Range-over-func iterators from Go 1.23 — iter.Seq and iter.Seq2, writing a push iterator with yield, early exit, and the slices/maps/strings helpers that produce and consume them.'
+sidebar:
+  order: 6
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why iterators?
+
+Before Go 1.23, a function that produced a sequence had three awkward choices: build and return a whole slice (allocates everything up front), hand out a channel (spawns a goroutine and is slow), or invent a custom `Next()` type that nobody's `range` loop understood. Go 1.23 added **range-over-func**: `for` can range over a function of a specific shape, and the standard library gained the `iter` package to name those shapes.
+
+The result is lazy, allocation-free sequences that work with the loop syntax you already know.
+
+## `iter.Seq` and `iter.Seq2`
+
+The `iter` package defines two generic function types:
+
+```go
+package iter
+
+type Seq[V any] func(yield func(V) bool)
+type Seq2[K, V any] func(yield func(K, V) bool)
+```
+
+An iterator is a function that receives a `yield` callback. It calls `yield` once per element; `yield` returns `false` when the consumer wants to stop, and the iterator **must** return immediately in that case. `Seq2` yields pairs — index and value, or key and value — mirroring the two-variable `range` form.
+
+## Writing a push iterator
+
+Here is a counter that yields `0..n-1` and stops early when asked:
+
+```go
+func Count(n int) iter.Seq[int] {
+    return func(yield func(int) bool) {
+        for i := 0; i < n; i++ {
+            if !yield(i) {
+                return // consumer broke out of the loop
+            }
+        }
+    }
+}
+
+for v := range Count(5) {
+    if v == 3 {
+        break // yield returns false inside Count, which returns
+    }
+    fmt.Println(v)
+}
+```
+
+`break`, `return`, and `continue` inside the loop body all do what you expect: the compiler turns the body into the `yield` function and translates control flow for you. The iterator only sees `yield` returning `false`.
+
+Because the sequence is produced on demand, `Count(1_000_000_000)` costs nothing until you iterate — and if you stop after three items, only three are ever produced.
+
+## Iterators over your own types
+
+The idiomatic shape is a method named `All`, `Keys`, `Values`, or similar that returns an iterator instead of a slice:
+
+```go
+type List[T any] struct{ items []T }
+
+func (l *List[T]) All() iter.Seq2[int, T] {
+    return func(yield func(int, T) bool) {
+        for i, v := range l.items {
+            if !yield(i, v) {
+                return
+            }
+        }
+    }
+}
+
+for i, v := range list.All() {
+    fmt.Println(i, v)
+}
+```
+
+Callers never touch the backing slice, and you are free to change the representation later — a linked list, a database cursor, a paged HTTP API — without changing the loop.
+
+## The standard library speaks iterators
+
+Since Go 1.23 the `slices`, `maps`, and `strings` packages both **produce** and **consume** iterators:
+
+```go
+import ("maps"; "slices"; "strings")
+
+// consume: turn an iterator into a slice
+evens := slices.Collect(filter(Count(10), isEven))   // []int
+keys  := slices.Sorted(maps.Keys(m))                  // sorted keys, one line
+
+// produce: iterate without copying
+for i, v := range slices.All(xs)    { /* index, value */ }
+for v := range slices.Values(xs)    { /* value only */ }
+for k, v := range maps.All(m)       { /* key, value */ }
+
+// strings (Go 1.24): lazy splitting
+for line := range strings.Lines(text)          { /* each line, newline kept */ }
+for part := range strings.SplitSeq(csv, ",")   { /* no []string allocated */ }
+```
+
+`slices.Collect`, `slices.Sorted`, `slices.SortedFunc`, `maps.Collect`, and `maps.Insert` are the bridges back to concrete data. `strings.SplitSeq` and `strings.FieldsSeq` are the lazy twins of `Split` and `Fields`.
+
+A tiny `filter` for reference — combinators like this compose naturally:
+
+```go
+func filter[T any](seq iter.Seq[T], keep func(T) bool) iter.Seq[T] {
+    return func(yield func(T) bool) {
+        for v := range seq {
+            if keep(v) && !yield(v) {
+                return
+            }
+        }
+    }
+}
+```
+
+## Pull iterators
+
+Range-over-func is a **push** model: the producer drives, the consumer's loop body is a callback. When you need to pull one element at a time — merging two sorted sequences, for example — `iter.Pull` converts a push iterator into a `next()`/`stop()` pair:
+
+```go
+next, stop := iter.Pull(Count(3))
+defer stop()
+v, ok := next() // 0, true
+```
+
+`iter.Pull` uses a coroutine under the hood, so it is slower than a plain `range`; reach for it only when the pull shape is genuinely required.
+
+## Design guidance
+
+- **Return a slice when the data is already a slice** and small. An iterator adds nothing there.
+- **Return an iterator** when the sequence is large, unbounded, expensive to produce, backed by I/O, or when you want to hide the representation.
+- **Always honour `yield == false`.** An iterator that keeps calling `yield` after it returned `false` panics.
+- **Name accessors `All`, `Keys`, `Values`, `Backward`** to match the standard library.
+- Iterators are plain functions: they are not goroutine-safe by magic, and they hold whatever the closure captured.
+
+Try the code in this lesson on go.dev/play with Go 1.23 or newer — the in-browser playground used elsewhere in this course runs an older interpreter that does not support range-over-func.
+
+<Callout title="Iterators are functions that call yield">
+`iter.Seq[V]` is `func(yield func(V) bool)`. A `for v := range seq` loop becomes the `yield` callback; `break` makes `yield` return `false`, and the iterator must return then. `slices.Collect`, `slices.Sorted`, `maps.Keys`, `strings.Lines`, and `strings.SplitSeq` let you mix lazy sequences with ordinary slices and maps without allocating what you do not use.
+</Callout>
+
+export const quizIterators = [
+  {
+    q: "What is the definition of iter.Seq[V]?",
+    options: [
+      "type Seq[V any] chan V",
+      "type Seq[V any] func(yield func(V) bool)",
+      "type Seq[V any] interface{ Next() (V, bool) }",
+      "type Seq[V any] []V"
+    ],
+    answer: 1
+  },
+  {
+    q: "Inside an iterator, yield returns false. What must the iterator do?",
+    options: [
+      "Call yield again with the next element",
+      "Panic",
+      "Return immediately and stop producing",
+      "Close the channel"
+    ],
+    answer: 2
+  },
+  {
+    q: "Which call turns an iterator into a sorted slice in one line?",
+    options: [
+      "sort.Slice(seq)",
+      "slices.Sorted(seq)",
+      "slices.Sort(seq)",
+      "maps.Collect(seq)"
+    ],
+    answer: 1
+  },
+  {
+    q: "When is returning a plain slice the better design?",
+    options: [
+      "When the sequence is unbounded",
+      "When the data is already a small slice",
+      "When the data comes from a network stream",
+      "When the representation must stay hidden"
+    ],
+    answer: 1
+  }
+];
+
+<Quiz client:visible id="errors-generics/iterators" questions={quizIterators} />
+
+<ProgressTracker client:visible id="errors-generics/iterators" />

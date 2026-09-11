@@ -86,6 +86,27 @@ dst[0] = 0
 fmt.Println(fresh[0], dst[0]) // 10 0 — เป็นอิสระต่อกัน
 ```
 
+## `min`, `max`, `clear` และ package `slices`
+
+Go 1.21 เพิ่ม builtin สามตัวและ package `slices` แบบ generic ทำให้ helper loop ที่เคยเขียนเองส่วนใหญ่หายไปจาก code สมัยใหม่:
+
+```go
+import "slices"
+
+n := min(3, 7, 1)          // 1 — ใช้ได้กับทุก ordered type
+m := max(2.5, 1.0)         // 2.5
+clear(s)                   // ทำให้ทุก element เป็น zero value โดยคง len และ cap
+
+xs := []int{3, 1, 2}
+slices.Sort(xs)            // [1 2 3]
+slices.Contains(xs, 2)     // true
+i, found := slices.BinarySearch(xs, 3) // 2, true
+ys := slices.Clone(xs)     // copy อิสระ ไม่ต้อง make+copy
+xs = slices.Insert(xs, 0, 9)
+```
+
+`slices.Sort`, `slices.Index`, `slices.Reverse`, `slices.Compact` และเพื่อน ๆ เป็น type-safe และมักเร็วกว่า package `sort` ตั้งแต่ Go 1.23 `slices.Collect`, `slices.Sorted` และ `slices.Values` ยังเชื่อม slice กับ iterator ด้วย — ดูบท [Iterators](/go/th/errors-generics/iterators/) การรัน `go fix` (Go 1.26+) จะเขียน loop เก่า ๆ หลายแบบใหม่เป็น call เหล่านี้ให้อัตโนมัติ
+
 export const slicesCode = `package main
 
 import "fmt"

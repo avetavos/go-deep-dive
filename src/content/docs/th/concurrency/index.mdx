@@ -86,8 +86,8 @@ func main() {
 >
 > **Prometheus** เปิด goroutine ต่อ scrape target ทำให้ collect metrics แบบ parallel
 
-<Callout title="ข้อควรระวัง: ส่ง i เป็น value เสมอ">
-ตัวแปร loop `i` เปลี่ยนค่าในทุก iteration การ close over ตัวแปรนั้นโดยตรงใน `go func() { ... }()` หมายความว่า goroutine ทุกตัวอาจเห็นค่าสุดท้ายของ `i` ค่าเดียวกัน ให้ส่ง loop variable เป็น argument ชัดเจน — `go func(id int) { ... }(i)` — เพื่อให้แต่ละ goroutine มี snapshot ของตัวเอง ใน Go 1.22+ ตัวแปร loop จะถูก bind ใหม่ทุก iteration แต่การส่งชัดเจนยังคงเป็นแบบแผนที่ชัดเจนที่สุด
+<Callout title="จุดสำคัญ: ตัวแปร loop เป็นของแต่ละ iteration ตั้งแต่ Go 1.22">
+ตั้งแต่ Go 1.22 (สำหรับ module ที่ระบุ `go 1.22` ขึ้นไป) ทุก iteration ของ `for` loop มี `i` เป็นของตัวเอง `go func() { use(i) }()` จึง capture ค่าที่คุณคาดหวัง ก่อน 1.22 ตัวแปรถูกแชร์และ goroutine ทุกตัวอาจเห็นค่าสุดท้าย — นั่นคือเหตุผลที่โค้ดเก่าส่งค่าเข้าไปชัด ๆ แบบ `go func(id int) { ... }(i)` หรือ copy ด้วย `i := i` (copy ที่ตอนนี้ `go fix` ลบให้) การส่งค่าเป็น argument ยังใช้ได้ดีและทำให้เห็น dependency ชัด แค่รู้ไว้ว่า bug ที่มันเคยกันไว้หายไปแล้วบน Go 1.27
 </Callout>
 
 export const quizIndex = [

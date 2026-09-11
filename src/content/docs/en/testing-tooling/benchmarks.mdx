@@ -46,7 +46,7 @@ func BenchmarkFib(b *testing.B) {
 }
 ```
 
-Both forms are correct. `b.Loop()` is preferred in Go 1.24+ because it handles timer reset internally and is less error-prone.
+Both forms are correct. `b.Loop()` is preferred in Go 1.24+ because it handles timer reset internally and is less error-prone; since Go 1.26 it no longer blocks inlining of the benchmarked call, so there is no performance reason left to keep `b.N`, and it remains the recommended form in Go 1.27.
 
 ## Setup outside the loop
 

@@ -69,6 +69,20 @@ n := new(int)   // *int ที่ชี้ไป 0
 *n = 7
 ```
 
+### `new` พร้อมค่าเริ่มต้น (Go 1.26)
+
+ตั้งแต่ Go 1.26 `new` รับ expression ได้ด้วย และคืน pointer ที่ชี้ไปยัง copy ของค่านั้น หมดยุคที่ต้องประกาศตัวแปรก่อนแค่เพื่อเอา address ซึ่งพบบ่อยกับ optional field ใน struct:
+
+```go
+type Person struct {
+    Name string
+    Age  *int // optional
+}
+
+p := Person{Name: "Ada", Age: new(36)}          // *int ชี้ไปที่ 36
+q := Person{Name: "Bob", Age: new(yearsSince(born))} // ใช้ expression อะไรก็ได้
+```
+
 ## Nil pointer
 
 Zero value ของ pointer type ทุกชนิดคือ `nil` การ dereference nil pointer ทำให้เกิด runtime panic:

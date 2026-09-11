@@ -91,6 +91,73 @@ func (s *Stack[T]) Pop() (T, bool) {
 
 methods บน generic type ใช้ type parameter ซ้ำใน receiver — `(s *Stack[T])` — แต่ไม่เพิ่ม constraint ใหม่ constraint ถูกกำหนดไว้แล้วครั้งเดียวตอนประกาศ type
 
+## Generic type alias (Go 1.24)
+
+ตั้งแต่ Go 1.24 type alias รับ type parameter ได้ เหมาะกับการย่อ instantiation ยาว ๆ โดยไม่ต้องสร้าง named type ใหม่:
+
+```go
+type Set[T comparable] = map[T]struct{}
+
+var seen Set[string] = map[string]struct{}{} // type เดียวกัน แค่ชื่อสั้นลง
+```
+
+## Self-referential constraint (Go 1.26)
+
+generic type อ้างถึงตัวเองใน type parameter list ของตัวเองได้ ใช้แสดงความหมายว่า "type ที่รวมกับค่าของ type เดียวกันได้" — รูปแบบ `Adder` แบบคลาสสิก:
+
+```go
+type Adder[A Adder[A]] interface {
+    Add(A) A
+}
+
+func Sum[A Adder[A]](xs ...A) A {
+    var acc A
+    for _, x := range xs {
+        acc = acc.Add(x)
+    }
+    return acc
+}
+```
+
+## Generic method (Go 1.27)
+
+ก่อน Go 1.27 มีแค่ function และ type เท่านั้นที่ประกาศ type parameter ได้ method ใช้ได้เฉพาะ parameter ของ receiver Go 1.27 ยกข้อจำกัดนี้: **method ประกาศ type parameter ของตัวเองได้** standard library ใช้มันใน `math/rand/v2` ที่ `(*Rand).N` ตอนนี้ทำงานเหมือน `rand.N` ระดับบนสุด:
+
+```go
+// math/rand/v2, Go 1.27
+func (r *Rand) N[Int intType](n Int) Int
+
+r := rand.New(rand.NewPCG(1, 2))
+d := r.N(10 * time.Second)   // อนุมาน Int เป็น time.Duration
+i := r.N[int64](100)          // หรือระบุเอง
+```
+
+type ของคุณเองก็ทำได้เหมือนกัน:
+
+```go
+type Registry struct{ items map[string]any }
+
+func (r *Registry) Get[T any](key string) (T, bool) {
+    v, ok := r.items[key].(T)
+    return v, ok
+}
+
+port, ok := reg.Get[int]("port")
+```
+
+สองกฎที่ต้องจำ: **method ใน interface ประกาศ type parameter ไม่ได้** และ generic method จึงใช้ satisfy interface ไม่ได้ generic method ต้องใช้ Go 1.27+ (`go 1.27` ใน `go.mod`) ส่วน playground ใน browser รัน interpreter รุ่นเก่ากว่า ลองรันตัวอย่างนี้บน go.dev/play แทน
+
+## การอนุมาน function type แบบทั่วไปขึ้น (Go 1.27)
+
+การ assign generic function ให้ตัวแปร — หรือ convert — เป็น function type ที่ตรงกัน ตอนนี้อนุมาน type argument ได้ในทุกบริบทแบบนั้น ไม่ใช่แค่ตอน call:
+
+```go
+func Max[T cmp.Ordered](a, b T) T { /* ... */ }
+
+var maxInt func(int, int) int = Max   // อนุมาน T เป็น int (Go 1.27)
+sortBy := (func(string, string) string)(Max)
+```
+
 export const genericsCode = `package main
 
 import "fmt"

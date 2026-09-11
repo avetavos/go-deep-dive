@@ -91,6 +91,73 @@ func (s *Stack[T]) Pop() (T, bool) {
 
 Methods on a generic type repeat the type parameter in the receiver — `(s *Stack[T])` — but do not add a new constraint. The constraint is fixed once when the type is declared.
 
+## Generic type aliases (Go 1.24)
+
+Since Go 1.24 a type alias may take type parameters, which is handy for shortening a long instantiation without creating a new named type:
+
+```go
+type Set[T comparable] = map[T]struct{}
+
+var seen Set[string] = map[string]struct{}{} // same type, just a shorter name
+```
+
+## Self-referential constraints (Go 1.26)
+
+A generic type may refer to itself in its own type parameter list. This expresses "a type that can be combined with values of its own type" — the classic `Adder` shape:
+
+```go
+type Adder[A Adder[A]] interface {
+    Add(A) A
+}
+
+func Sum[A Adder[A]](xs ...A) A {
+    var acc A
+    for _, x := range xs {
+        acc = acc.Add(x)
+    }
+    return acc
+}
+```
+
+## Generic methods (Go 1.27)
+
+Until Go 1.26, only functions and types could declare type parameters; a method could only use the parameters of its receiver. Go 1.27 lifts that restriction: a **method may declare its own type parameters**. The standard library uses it in `math/rand/v2`, where `(*Rand).N` now mirrors the top-level `rand.N`:
+
+```go
+// math/rand/v2, Go 1.27
+func (r *Rand) N[Int intType](n Int) Int
+
+r := rand.New(rand.NewPCG(1, 2))
+d := r.N(10 * time.Second)   // Int inferred as time.Duration
+i := r.N[int64](100)          // or explicit
+```
+
+Your own types can do the same:
+
+```go
+type Registry struct{ items map[string]any }
+
+func (r *Registry) Get[T any](key string) (T, bool) {
+    v, ok := r.items[key].(T)
+    return v, ok
+}
+
+port, ok := reg.Get[int]("port")
+```
+
+Two rules to remember: **interface methods cannot declare type parameters**, and a generic method therefore cannot be used to satisfy an interface. Generic methods need Go 1.27+ (`go 1.27` in `go.mod`); the in-browser playground runs an older interpreter, so try these on go.dev/play.
+
+## Function type inference, generalized (Go 1.27)
+
+Assigning a generic function to a variable — or converting it — to a matching function type now infers the type arguments in every such context, not only in calls:
+
+```go
+func Max[T cmp.Ordered](a, b T) T { /* ... */ }
+
+var maxInt func(int, int) int = Max   // T inferred as int (Go 1.27)
+sortBy := (func(string, string) string)(Max)
+```
+
 export const genericsCode = `package main
 
 import "fmt"

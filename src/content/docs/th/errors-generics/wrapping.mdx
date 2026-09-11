@@ -72,6 +72,18 @@ if errors.As(err, &ve) {
 
 ใช้ `errors.As` เมื่อมี custom error type ที่เก็บข้อมูลเพิ่มเติม เช่น field names, HTTP status codes, retry hints และต้องการเข้าถึง field เหล่านั้น ไม่ใช่แค่ตรวจว่า error มีอยู่
 
+### `errors.AsType` — รูปแบบ generic (Go 1.26)
+
+Go 1.26 เพิ่ม `errors.AsType[T]` ทางเลือกแบบ type-safe ของ `errors.As` มันคืนค่าที่ match พร้อม bool จึงไม่มี pointer-to-pointer argument ให้เขียนผิด และ compiler ตรวจ `T` ให้:
+
+```go
+if ve, ok := errors.AsType[*ValidationError](err); ok {
+    fmt.Println(ve.Field)
+}
+```
+
+code ใหม่ควรใช้ `AsType`; `errors.As` ยังอยู่สำหรับ toolchain เก่ากว่า (`go fix` migrate call site เดิมให้ได้)
+
 ## Custom error types
 
 struct ใดก็ตามที่ implement `Error() string` ตรงตาม `error` interface custom types ช่วยให้เก็บ structured context ควบคู่กับ message:

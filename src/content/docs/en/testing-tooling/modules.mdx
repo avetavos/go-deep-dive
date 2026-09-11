@@ -1,6 +1,6 @@
 ---
 title: Go Modules
-description: 'go mod init, go.mod, go.sum, adding dependencies with go get, go mod tidy, and semantic import versioning.'
+description: 'go mod init, go.mod (go, toolchain, ignore), go.sum, adding dependencies with go get, go mod tidy and its Go 1.27 layout rules, and semantic import versioning.'
 sidebar:
   order: 4
 ---
@@ -27,10 +27,17 @@ This creates a `go.mod` file — the module's manifest:
 ```go
 module github.com/yourname/myapp
 
-go 1.22
+go 1.26.0
 ```
 
 The module path (`github.com/yourname/myapp`) is both the import path prefix for your own packages and the identifier other modules use when they depend on yours. It does not have to be a real URL during development, but it must be unique if you publish to the Go module proxy.
+
+Note the version: Go 1.27's `go mod init` deliberately writes `go 1.26.0`, one minor release below the toolchain, so a brand-new module also builds on the previous Go. When you need a 1.27-only API, raise the line:
+
+```bash
+go get go@1.27          # rewrites the go line to 1.27.x
+```
+
 
 ## go.mod and go.sum
 
@@ -41,13 +48,28 @@ After adding a dependency you will find two files in the root of your module:
 ```
 module github.com/yourname/myapp
 
-go 1.22
+go 1.27
+
+toolchain go1.27.1
+
+ignore ./testdata/fixtures
 
 require (
-    github.com/go-chi/chi/v5 v5.1.0
-    golang.org/x/text v0.14.0 // indirect
+    github.com/go-chi/chi/v5 v5.2.1
+)
+
+require (
+    golang.org/x/text v0.28.0 // indirect
 )
 ```
+
+Three lines deserve a closer look:
+
+- **`go 1.27`** is the language and library version the module is written against — the compiler enforces it, and since Go 1.27 `go test`'s `stdversion` check refuses calls to APIs newer than this line.
+- **`toolchain go1.27.1`** (optional) pins the exact toolchain; an older `go` binary downloads and runs it automatically.
+- **`ignore`** (Go 1.25) tells the `go` command to skip a directory tree entirely — useful for large `node_modules`-style folders or fixtures that are not Go code.
+
+The two `require` blocks are not a style choice: for `go 1.27+` modules `go mod tidy` *enforces* this layout — direct dependencies in the first block, `// indirect` ones in the second — and merges any duplicate blocks it finds.
 
 **go.sum** — a cryptographic checksum ledger. Every dependency's zip archive and `go.mod` are hashed here. The Go toolchain verifies these hashes on every build to guarantee reproducibility and protect against supply-chain attacks. Commit both files to version control.
 
@@ -78,7 +100,7 @@ Over time your code and your dependencies can drift apart — you might delete a
 go mod tidy
 ```
 
-It adds any missing `require` lines, removes `require` lines for packages no longer imported, and updates `go.sum` to match. Run it before every commit.
+It adds any missing `require` lines, removes `require` lines for packages no longer imported, updates `go.sum` to match, and (for `go 1.27+` modules) normalises `go.mod` into the direct/indirect two-block layout. Run it before every commit.
 
 ## Semantic import versioning
 
@@ -117,7 +139,7 @@ export const quizModules = [
       "It lists only the direct dependencies of the module",
       "It stores cryptographic checksums to guarantee reproducibility and detect tampering",
       "It is an optional cache file that can be deleted safely",
-      "It replaces go.mod in Go 1.22+"
+      "It replaces go.mod in Go 1.27+"
     ],
     answer: 1
   },

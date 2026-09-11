@@ -84,6 +84,18 @@ for _, k := range keys {
 }
 ```
 
+Since Go 1.23 the `maps` and `slices` packages do this in one line — `maps.Keys` returns an iterator and `slices.Sorted` collects and sorts it:
+
+```go
+import ("maps"; "slices")
+
+for _, k := range slices.Sorted(maps.Keys(scores)) {
+    fmt.Printf("%s: %d\n", k, scores[k])
+}
+```
+
+Two more modern helpers: `clear(m)` (Go 1.21) removes every entry, and `maps.Clone`/`maps.Copy` replace hand-written copy loops.
+
 export const mapsCode = `package main
 
 import (

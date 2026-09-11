@@ -72,6 +72,25 @@ after    := deadline.After(t)           // true
 
 `Add` takes a `Duration` and returns a `Time`. `Sub` takes two `Time` values and returns the `Duration` between them.
 
+## Timers, tickers, and their channels
+
+`time.After`, `time.NewTimer`, and `time.NewTicker` all deliver on a channel. Two semantics changed recently and are now the only behaviour on Go 1.27:
+
+- **Timer channels are unbuffered.** Since Go 1.23 (for `go 1.23+` modules) a timer's channel is synchronous: a value is only ever seen after the timer fires, and `t.Stop()` / `t.Reset()` guarantee no stale value is delivered afterwards — the old "drain the channel after Stop" ritual is gone. The `asynctimerchan` GODEBUG escape hatch was removed in Go 1.27, so every program gets this behaviour.
+- **Unreferenced timers are garbage-collected.** A `time.After` inside a `select` in a loop no longer leaks until it fires; once nothing references the timer it can be collected.
+
+```go
+timer := time.NewTimer(50 * time.Millisecond)
+select {
+case <-timer.C:
+    fmt.Println("fired")
+case <-ctx.Done():
+    timer.Stop() // no drain needed on Go 1.23+ semantics
+}
+```
+
+Still prefer `time.NewTicker` over `time.Tick` in long-lived code so you can `Stop()` it, and `context.WithTimeout` over hand-rolled timers when the deadline belongs to a request.
+
 export const timeCode = `package main
 
 import (
@@ -152,7 +171,7 @@ export const quizTime = [
   {
     q: "Why should you avoid time.Now() in playground / test snippets?",
     options: [
-      "time.Now() is not available in Go 1.22+",
+      "time.Now() is not available in Go 1.27+",
       "time.Now() panics in a WASM runtime",
       "It produces non-deterministic output that changes on every run",
       "It always returns midnight UTC"

@@ -1,6 +1,6 @@
 ---
 title: encoding/json
-description: 'json.Marshal และ Unmarshal, struct tags, nested structs และ map[string]any สำหรับการจัดการ JSON อย่างยืดหยุ่น'
+description: 'json.Marshal และ Unmarshal, struct tags, nested structs, map[string]any สำหรับการจัดการ JSON อย่างยืดหยุ่น และ package encoding/json/v2 ของ Go 1.27'
 sidebar:
   order: 4
 ---
@@ -130,6 +130,50 @@ func main() {
 }`;
 
 <Playground code={encodingJsonCode} />
+
+## encoding/json/v2 (Go 1.27)
+
+Go 1.27 มาพร้อม `encoding/json/v2` และ package ระดับล่างคู่กัน `encoding/json/jsontext` ในสถานะ stable ทุกอย่างข้างบนยังใช้ได้: API ของ v1 `encoding/json` ไม่เปลี่ยน แต่ตอนนี้ *สร้างอยู่บน v2* โปรแกรมเดิมจึงได้ decoder ที่เร็วขึ้นฟรี ๆ (ปิดได้ด้วย `GOEXPERIMENT=nojsonv2` ถ้าเจอพฤติกรรมต่างกัน)
+
+ให้ import v2 เมื่อต้องการ API และ default ที่เข้มงวดกว่า:
+
+```go
+// ต้องใช้ Go 1.27+ — รันบน go.dev/play ไม่ใช่ runner ในเบราว์เซอร์
+import "encoding/json/v2"
+
+data, err := json.Marshal(u)                   // หน้าตาเหมือน v1 …
+err = json.Unmarshal(data, &u)
+
+data, err = json.Marshal(u, json.Deterministic(true))   // … แต่รับ Options แบบ variadic
+err = json.MarshalWrite(os.Stdout, u)          // เขียนลง io.Writer ตรง ๆ
+err = json.UnmarshalRead(resp.Body, &u)        // อ่านจาก io.Reader ตรง ๆ
+```
+
+สิ่งที่ต่างจาก v1:
+
+| เรื่อง | v1 `encoding/json` | v2 `encoding/json/v2` |
+|------|--------------------|-----------------------|
+| UTF-8 ผิดรูปใน string | แทนที่เงียบ ๆ | **ปฏิเสธ** |
+| key ซ้ำใน object | ตัวหลังชนะ | **ปฏิเสธ** |
+| การจับคู่ชื่อ field | ไม่สนตัวพิมพ์ | ต้องตรงเป๊ะโดย default (`json.MatchCaseInsensitiveNames(true)` เพื่อผ่อน) |
+| Options | setter ระดับ `Encoder` | ค่า `Options` ต่อการเรียก ประกอบกันได้ |
+| ฝัง field ของ struct | anonymous field | tag `json:",embed"` (ชื่อเก่า `inline` ถูกเปลี่ยน) |
+| ความเร็ว Unmarshal | baseline | เร็วขึ้นอย่างมีนัยสำคัญ Marshal เท่าเดิม |
+
+`jsontext` คือชั้น streaming ที่อยู่ข้างใต้: `jsontext.Decoder` และ `jsontext.Encoder` เดินผ่าน document เป็น `Token` และ `Value` พร้อมตรวจ syntax ไปด้วย เหมาะกับ payload ขนาดใหญ่มากหรือการเขียน JSON ใหม่โดยไม่ decode เป็นค่า Go
+
+```go
+// ต้องใช้ Go 1.27+
+dec := jsontext.NewDecoder(r)
+for {
+    tok, err := dec.ReadToken()
+    if err == io.EOF { break }
+    // ดู tok.Kind(): '{', '}', '"', '0', …
+}
+```
+
+หลักคิดสำหรับปี 2026: โค้ดเดิมและ wire format ที่ยอมรับ input หลวม ๆ ใช้ v1 ต่อไป service ใหม่เริ่มที่ v2 เพื่อให้ JSON ผิดรูป fail เสียงดังตั้งแต่ขอบระบบ
+
 
 ## ข้อแลกเปลี่ยน
 

@@ -84,6 +84,21 @@ for i, r := range "Go!" {
 }
 ```
 
+## Range over an integer, and per-iteration loop variables
+
+Since Go 1.22 `range` also accepts an integer, which replaces the classic counting loop when you only need the index:
+
+```go
+for i := range 5 {        // 0, 1, 2, 3, 4
+    fmt.Println(i)
+}
+for range 3 {             // repeat three times, no variable
+    fmt.Println("tick")
+}
+```
+
+Go 1.22 also changed loop-variable semantics: each iteration gets a **fresh** `i` (and `v`), so closures and goroutines started inside the loop no longer all see the final value. The old `i := i` copy is unnecessary in modules with `go 1.22` or later in `go.mod`.
+
 ## switch
 
 Go's `switch` evaluates cases top to bottom and **stops at the first match** — there is no automatic fallthrough to the next case. You do not need `break` at the end of each case:

@@ -86,6 +86,27 @@ dst[0] = 0
 fmt.Println(fresh[0], dst[0]) // 10 0 — independent
 ```
 
+## `min`, `max`, `clear`, and the `slices` package
+
+Go 1.21 added three builtins and a generic `slices` package, so most hand-written helper loops are gone from modern code:
+
+```go
+import "slices"
+
+n := min(3, 7, 1)          // 1 — works for any ordered type
+m := max(2.5, 1.0)         // 2.5
+clear(s)                   // zero every element, keeps len and cap
+
+xs := []int{3, 1, 2}
+slices.Sort(xs)            // [1 2 3]
+slices.Contains(xs, 2)     // true
+i, found := slices.BinarySearch(xs, 3) // 2, true
+ys := slices.Clone(xs)     // independent copy, no make+copy needed
+xs = slices.Insert(xs, 0, 9)
+```
+
+`slices.Sort`, `slices.Index`, `slices.Reverse`, `slices.Compact` and friends are type-safe and usually faster than the `sort` package. From Go 1.23, `slices.Collect`, `slices.Sorted` and `slices.Values` also bridge slices and iterators — see the [Iterators](/go/en/errors-generics/iterators/) lesson. Running `go fix` (Go 1.26+) can rewrite many old loops into these calls automatically.
+
 export const slicesCode = `package main
 
 import "fmt"

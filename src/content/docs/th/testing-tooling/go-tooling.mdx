@@ -70,6 +70,28 @@ mu2 := mu                   // vet: assignment copies lock value
 
 `go vet` exit ด้วย non-zero status หากพบปัญหา ทำให้ fail CI pipeline ได้ง่าย
 
+รุ่นหลัง ๆ เพิ่ม analyzer ที่คุณจะเจอในงานจริง: `waitgroup` (Go 1.25) จับ `wg.Add` ที่วางหลัง `go` statement, `hostport` (Go 1.25) แนะนำ `net.JoinHostPort` แทน `fmt.Sprintf("%s:%d", host, port)` ซึ่งพังกับ IPv6 และ `stdversion` (รันโดย `go test` ตั้งแต่ Go 1.27) รายงานการเรียก API ของ standard library ที่ใหม่กว่าบรรทัด `go` ของ module
+
+
+## go fix — modernizer (Go 1.26+)
+
+`go fix` ถูกสร้างใหม่ใน Go 1.26 บน analysis framework เดียวกับ `go vet` แทน fixer ในอดีตไม่กี่ตัว ตอนนี้มี **modernizer** เป็นสิบ ๆ ตัว: analyzer ที่เขียน idiom แบบเก่าใหม่ให้เป็น standard library ปัจจุบัน
+
+```bash
+go fix ./...            # apply modernizer ทุกตัวกับ module
+go fix -diff ./...      # ดูตัวอย่างการเขียนใหม่โดยไม่แตะไฟล์
+```
+
+การเขียนใหม่ที่พบบ่อย: `for` loop ที่หาค่าต่ำสุดด้วยมือกลายเป็น `min(...)`; `sort.Slice` กลายเป็น `slices.Sort`; `for i := 0; i < n; i++` กลายเป็น `for i := range n`; สามบรรทัด `wg.Add(1)` / `go` / `defer wg.Done()` กลายเป็น `wg.Go(...)` (`waitgroupgo`); การ copy ตัวแปร loop แบบ `x := x` ถูกลบ Go 1.27 เพิ่ม `atomictypes`, `embedlit`, `slicesbackward` และ `unsafefuncs` ผู้เขียน library ยัง mark wrapper ด้วย `//go:fix inline` ได้ เพื่อให้ `go fix` inline การเรียกในทุกจุดใช้งาน — กลไกเดียวกับที่ standard library ใช้ย้าย caller ออกจาก helper ที่ deprecated
+
+## อะไรอีกที่เปลี่ยนใน toolchain (Go 1.25–1.27)
+
+- `go mod init` เขียนบรรทัด `go` ต่ำกว่า toolchain หนึ่ง minor version (`go 1.26.0` จาก Go 1.27) เพื่อให้ module ใหม่ build บนรุ่นก่อนหน้าได้ด้วย ยกขึ้นด้วย `go get go@1.27` เมื่อต้องใช้ feature ของ 1.27
+- `go doc example.com/pkg@v1.2.3` (Go 1.27) แสดง doc ของ module version ที่ระบุ และ `go doc -ex` แสดงรายการ example ที่รันได้
+- `go doc -http` (Go 1.25) เสิร์ฟ documentation ในเบราว์เซอร์ ไม่ต้องใช้ `pkgsite` สำหรับงานในเครื่องอีกแล้ว
+- `go tool pprof -http` (Go 1.26) เปิดมาที่หน้า flame graph; `go tool trace -http=:6060` (Go 1.27) bind เฉพาะ localhost เว้นแต่ระบุ address เต็ม
+- `go build -asan` (Go 1.25) รายงาน memory leak ตอนจบโปรแกรม; `go version -m -json` พิมพ์ build info เป็น JSON
+
 ## go doc — เรียกดู documentation
 
 `go doc` แสดง documentation สำหรับ package, type, function, หรือ method ใดก็ได้ — โดยไม่ต้องออกจาก terminal
@@ -79,9 +101,11 @@ go doc fmt                    # ภาพรวม package
 go doc fmt.Println            # ฟังก์ชันเฉพาะ
 go doc net/http.Request       # type ใน sub-package
 go doc -all net/http          # ทุก exported symbol ใน package
+go doc -ex strings.Cut        # พิมพ์ example ที่รันได้ (Go 1.27)
+go doc golang.org/x/text@v0.28.0  # module version ที่ระบุ (Go 1.27)
 ```
 
-สำหรับประสบการณ์แบบ browser ที่สมบูรณ์กว่า ใช้ `pkgsite` หรือเรียกดูที่ `pkg.go.dev`
+สำหรับมุมมองแบบ browser รัน `go doc -http` (Go 1.25+) หรือเรียกดูที่ `pkg.go.dev`
 
 ## รวมทุกอย่าง — CI pipeline ทั่วไป
 

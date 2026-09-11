@@ -107,6 +107,9 @@ func main() {
 
 <Playground code={patternsCode} />
 
+On Go 1.25+ the `wg.Add(1)` / `go` / `defer wg.Done()` triple in `workerPool` collapses to `wg.Go(func() { ... })`; the playground keeps the classic form because its runner predates that method.
+
+
 <Callout title="Gotcha: goroutine leaks when nobody drains a channel">
 If a goroutine is blocked sending to a channel and the receiver exits without draining it, the goroutine is **leaked** — it lives forever in the runtime, wasting memory and a goroutine slot. The fix is always to ensure either: (a) the channel is buffered large enough to accept all sends, (b) a receiver always drains the channel to `close`, or (c) the sender also selects on `ctx.Done()` so it can exit when the work is abandoned. In production, run `go tool pprof` on the goroutine profile to detect leaks.
 </Callout>

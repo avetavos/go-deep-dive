@@ -1,6 +1,6 @@
 ---
 title: The Go Toolchain
-description: 'go run, go build, go fmt, go vet, go doc — the everyday commands that make Go productive and gofmt''s no-config philosophy.'
+description: 'go run, go build, go fmt, go vet, go fix, go doc — the everyday commands that make Go productive, what changed in Go 1.25–1.27, and gofmt''s no-config philosophy.'
 sidebar:
   order: 5
 ---
@@ -70,6 +70,28 @@ mu2 := mu                   // vet: assignment copies lock value
 
 `go vet` exits with a non-zero status if it finds problems, making it easy to fail a CI pipeline.
 
+Recent releases added analyzers you will see in practice: `waitgroup` (Go 1.25) catches `wg.Add` placed after the `go` statement, `hostport` (Go 1.25) suggests `net.JoinHostPort` instead of `fmt.Sprintf("%s:%d", host, port)` — which breaks on IPv6 — and `stdversion` (run by `go test` since Go 1.27) reports calls to standard-library APIs newer than your module's `go` line.
+
+
+## go fix — modernizers (Go 1.26+)
+
+`go fix` was rebuilt in Go 1.26 on the same analysis framework as `go vet`. Instead of a handful of historical fixers it now ships dozens of **modernizers**: analyzers that rewrite older idioms to the current standard library.
+
+```bash
+go fix ./...            # apply every modernizer to the module
+go fix -diff ./...      # preview the rewrite without touching files
+```
+
+Typical rewrites: a hand-written `for` loop that finds the minimum becomes `min(...)`; `sort.Slice` becomes `slices.Sort`; `for i := 0; i < n; i++` becomes `for i := range n`; the `wg.Add(1)` / `go` / `defer wg.Done()` triple becomes `wg.Go(...)` (`waitgroupgo`); `x := x` loop-variable copies are deleted. Go 1.27 adds `atomictypes`, `embedlit`, `slicesbackward`, and `unsafefuncs`. Library authors can also mark a wrapper with `//go:fix inline` so `go fix` inlines the call at every use site — the mechanism the standard library uses to migrate callers off deprecated helpers.
+
+## What else changed in the toolchain (Go 1.25–1.27)
+
+- `go mod init` now writes a `go` line one minor version *below* the toolchain (`go 1.26.0` from Go 1.27) so a fresh module builds on the previous release too; raise it with `go get go@1.27` when you need 1.27 features.
+- `go doc example.com/pkg@v1.2.3` (Go 1.27) documents a specific module version, and `go doc -ex` lists runnable examples.
+- `go doc -http` (Go 1.25) serves the documentation in a browser; `pkgsite` is no longer needed for local use.
+- `go tool pprof -http` (Go 1.26) opens on the flame-graph view; `go tool trace -http=:6060` (Go 1.27) binds to localhost only unless you give a full address.
+- `go build -asan` (Go 1.25) reports memory leaks at exit; `go version -m -json` prints build info as JSON.
+
 ## go doc — browse documentation
 
 `go doc` prints the documentation for any package, type, function, or method — without leaving the terminal.
@@ -79,9 +101,11 @@ go doc fmt                    # package overview
 go doc fmt.Println            # specific function
 go doc net/http.Request       # type in a sub-package
 go doc -all net/http          # every exported symbol in the package
+go doc -ex strings.Cut        # print the runnable examples (Go 1.27)
+go doc golang.org/x/text@v0.28.0  # a specific module version (Go 1.27)
 ```
 
-For a richer browser-based experience, use `pkgsite` (the Go package documentation server) or browse `pkg.go.dev`.
+For a browser-based view run `go doc -http` (Go 1.25+) or browse `pkg.go.dev`.
 
 ## Putting it together — a typical CI pipeline
 

@@ -53,6 +53,20 @@ func getConfig() *Config {
 
 Package `sync/atomic` มี lock-free operations บน integer และ pointer types โดยใช้ CPU hardware instructions สำหรับ counter หรือ flag ง่าย ๆ atomics เร็วกว่า mutex เพราะไม่มี lock contention
 
+## sync.WaitGroup.Go (Go 1.25+)
+
+`WaitGroup` คือ primitive ที่คุณหยิบใช้บ่อยที่สุด และตั้งแต่ Go 1.25 มีทางลัด: `wg.Go(f)` ทำ `Add(1)` เริ่ม `f` ใน goroutine ใหม่ และเรียก `Done()` เมื่อ `f` return
+
+```go
+var wg sync.WaitGroup
+for _, url := range urls {
+    wg.Go(func() { fetch(url) })   // url เป็นของแต่ละ iteration ตั้งแต่ Go 1.22 ไม่ต้อง capture เอง
+}
+wg.Wait()
+```
+
+ในโค้ดใหม่ให้ใช้ `wg.Go` — วาง `Add` ผิดที่ไม่ได้เลย — และปล่อยให้ `go fix` (modernizer `waitgroupgo`, Go 1.26+) เขียนสามบรรทัดแบบเก่าในโค้ดเดิมให้ใหม่
+
 export const syncCode = `package main
 
 import (

@@ -85,7 +85,6 @@ func TestFibonacci(t *testing.T) {
     }
 
     for _, tc := range cases {
-        tc := tc // capture range variable (pre-Go 1.22)
         t.Run(tc.name, func(t *testing.T) {
             got := Fibonacci(tc.n)
             if got != tc.want {
@@ -98,6 +97,8 @@ func TestFibonacci(t *testing.T) {
 
 Run with `-v` to see each sub-test:
 
+(Older code has a `tc := tc` line before `t.Run`; since Go 1.22 every iteration gets its own `tc`, so the copy is unnecessary and `go fix` removes it.)
+
 ```bash
 go test -v -run TestFibonacci ./...
 # --- PASS: TestFibonacci (0.00s)
@@ -106,6 +107,41 @@ go test -v -run TestFibonacci ./...
 #     --- PASS: TestFibonacci/fib(5) (0.00s)
 #     --- PASS: TestFibonacci/fib(10) (0.00s)
 ```
+
+## Testing concurrent code with testing/synctest (Go 1.25+)
+
+Tests that involve goroutines, timers, or timeouts used to need real sleeps and were flaky. `testing/synctest` runs a function inside a *bubble* with virtualised time: `time.Sleep` and timers advance instantly once every goroutine in the bubble is blocked, and `synctest.Wait()` blocks until they all are.
+
+```go
+// needs Go 1.25+ — run locally, not in the in-browser runner
+import (
+    "testing"
+    "testing/synctest"
+    "time"
+)
+
+func TestCacheExpiry(t *testing.T) {
+    synctest.Test(t, func(t *testing.T) {
+        c := NewCache(1 * time.Minute)
+        c.Set("k", "v")
+
+        time.Sleep(2 * time.Minute) // returns immediately in the bubble
+        synctest.Wait()             // let the expiry goroutine run
+
+        if _, ok := c.Get("k"); ok {
+            t.Fatal("entry should have expired")
+        }
+    })
+}
+```
+
+Go 1.27 adds `synctest.Sleep(d)` (a sleep followed by `Wait`) and `httptest.NewTestServer()`, an `httptest.Server` on an in-memory fake network that works inside a bubble — so an HTTP client with a 30-second timeout can be tested in microseconds.
+
+## Test artifacts and attributes (Go 1.25–1.26)
+
+- `t.Attr(key, value)` (1.25) attaches metadata that appears in `-json` output — handy for linking a test to an issue or a trace ID.
+- `t.Output()` (1.25) is an `io.Writer` you can hand to a logger so its lines interleave correctly with the test log.
+- `t.ArtifactDir()` (1.26) returns a directory for files the test wants to keep — screenshots, dumps, goldens. Run with `go test -artifacts` and the runner prints `=== ARTIFACTS TestName /path` and preserves the directory under `-outputdir`.
 
 ## The race detector
 
@@ -116,6 +152,9 @@ go test -race -coverprofile=coverage.out -covermode=atomic ./...
 ```
 
 The `-covermode=atomic` flag is required alongside `-race` for accurate coverage counts because the race detector rewrites memory accesses.
+
+`go test` also runs a small subset of `go vet` before every run; since Go 1.27 that subset includes `stdversion`, which fails the build when you call a standard-library API newer than the `go` line in your `go.mod` — so a module that says `go 1.25` cannot silently depend on a 1.27 function.
+
 
 <Callout title="Table-driven tests are the idiomatic Go pattern">
 You will see table-driven tests in virtually every serious Go codebase and in the Go standard library itself. They keep test logic in one place, make it trivial to add new cases, and produce readable failure messages. When you catch a bug, add a new row to the table — the test becomes a regression guard automatically.
