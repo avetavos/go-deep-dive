@@ -104,7 +104,7 @@ func main() {
 - **Goroutine leak profile (GA ใน Go 1.27)** — `runtime/pprof` มี profile `goroutineleak` (เสิร์ฟที่ `/debug/pprof/goroutineleak` ผ่าน `net/http/pprof` ด้วย) ที่ใช้ reachability analysis ของ GC หา goroutine ที่ block บน channel หรือ lock ซึ่งไม่มีใครปลดได้อีกแล้ว traceback ของ module `go 1.27+` ยังพิมพ์ goroutine label ของ `runtime/pprof` ทำให้ระบุที่มาของ goroutine ที่รั่วง่ายขึ้น
 
 ```go
-// ต้องใช้ Go 1.27+ — รันบน go.dev/play หรือในเครื่อง ไม่ใช่ runner ในเบราว์เซอร์
+// ใน server จริง ที่ mount pprof handler ไว้ที่ :6060
 import _ "net/http/pprof"
 
 // จากนั้น เมื่อ mount pprof handler ไว้ที่ :6060

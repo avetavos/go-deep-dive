@@ -5,6 +5,7 @@ sidebar:
   order: 6
 ---
 
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -136,7 +137,73 @@ v, ok := next() // 0, true
 - **ตั้งชื่อ accessor ว่า `All`, `Keys`, `Values`, `Backward`** ให้ตรงกับ standard library
 - iterator เป็นฟังก์ชันธรรมดา: ไม่ได้ปลอดภัยต่อ goroutine โดยอัตโนมัติ และถือทุกอย่างที่ closure จับไว้
 
-ลองรัน code ในบทนี้บน go.dev/play ด้วย Go 1.23 ขึ้นไป — playground ใน browser ที่ใช้ในบทอื่นของคอร์สรัน interpreter รุ่นเก่ากว่าที่ยังไม่รองรับ range-over-func
+## ลองรันดู
+
+ทุกอย่างข้างบนรวมอยู่ในโปรแกรมเดียวที่รันได้ — `Count`, `filter`, `List.All` และตัวเชื่อม `slices`/`maps`:
+
+<Playground code={iteratorsCode} />
+
+export const iteratorsCode = `package main
+
+import (
+\t"fmt"
+\t"iter"
+\t"maps"
+\t"slices"
+)
+
+// Count yields 0, 1, …, n-1 lazily.
+func Count(n int) iter.Seq[int] {
+\treturn func(yield func(int) bool) {
+\t\tfor i := 0; i < n; i++ {
+\t\t\tif !yield(i) {
+\t\t\t\treturn // the consumer broke out of its loop
+\t\t\t}
+\t\t}
+\t}
+}
+
+func filter[T any](seq iter.Seq[T], keep func(T) bool) iter.Seq[T] {
+\treturn func(yield func(T) bool) {
+\t\tfor v := range seq {
+\t\t\tif keep(v) && !yield(v) {
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}
+}
+
+type List[T any] struct{ items []T }
+
+func (l *List[T]) All() iter.Seq2[int, T] {
+\treturn func(yield func(int, T) bool) {
+\t\tfor i, v := range l.items {
+\t\t\tif !yield(i, v) {
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}
+}
+
+func main() {
+\tisEven := func(n int) bool { return n%2 == 0 }
+\tfmt.Println(slices.Collect(filter(Count(10), isEven)))
+
+\tfor v := range Count(100) {
+\t\tif v > 2 {
+\t\t\tbreak // Count returns as soon as yield reports false
+\t\t}
+\t\tfmt.Println("got", v)
+\t}
+
+\tlist := &List[string]{items: []string{"a", "b", "c"}}
+\tfor i, v := range list.All() {
+\t\tfmt.Println(i, v)
+\t}
+
+\tm := map[string]int{"z": 26, "a": 1, "m": 13}
+\tfmt.Println(slices.Sorted(maps.Keys(m)))
+}`;
 
 <Callout title="Iterator คือฟังก์ชันที่เรียก yield">
 `iter.Seq[V]` คือ `func(yield func(V) bool)` loop `for v := range seq` กลายเป็น callback `yield`; `break` ทำให้ `yield` คืน `false` และ iterator ต้อง return ตอนนั้น `slices.Collect`, `slices.Sorted`, `maps.Keys`, `strings.Lines` และ `strings.SplitSeq` ช่วยให้ผสมลำดับแบบ lazy กับ slice และ map ธรรมดาได้โดยไม่ allocate สิ่งที่ไม่ได้ใช้

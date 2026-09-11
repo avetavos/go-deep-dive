@@ -137,17 +137,44 @@ Go 1.27 ships `encoding/json/v2` and its low-level companion `encoding/json/json
 
 Import v2 when you want its API and stricter defaults:
 
-```go
-// needs Go 1.27+ — run on go.dev/play, not in the in-browser runner
-import "encoding/json/v2"
+<Playground code={jsonV2Code} />
 
-data, err := json.Marshal(u)                   // same shape as v1 …
-err = json.Unmarshal(data, &u)
+export const jsonV2Code = `package main
 
-data, err = json.Marshal(u, json.Deterministic(true))   // … plus variadic Options
-err = json.MarshalWrite(os.Stdout, u)          // straight to an io.Writer
-err = json.UnmarshalRead(resp.Body, &u)        // straight from an io.Reader
-```
+import (
+\t"encoding/json/v2"
+\t"fmt"
+\t"os"
+)
+
+type User struct {
+\tName  string \`json:"name"\`
+\tEmail string \`json:"email,omitempty"\`
+\tAge   int    \`json:"age"\`
+}
+
+func main() {
+\tu := User{Name: "Ada", Age: 36}
+
+\tdata, err := json.Marshal(u) // same shape as v1 …
+\tfmt.Println(string(data), err)
+
+\tvar back User
+\terr = json.Unmarshal(data, &back)
+\tfmt.Printf("%+v %v\\n", back, err)
+
+\tdata, _ = json.Marshal(map[string]int{"b": 2, "a": 1}, json.Deterministic(true)) // … plus variadic Options
+\tfmt.Println(string(data))
+
+\t_ = json.MarshalWrite(os.Stdout, u) // straight to an io.Writer
+\tfmt.Println()
+
+\t// stricter defaults: duplicate keys are rejected
+\terr = json.Unmarshal([]byte(\`{"name":"A","name":"B"}\`), &back)
+\tfmt.Println("duplicate key:", err)
+}`;
+
+`json.UnmarshalRead(r, &u)` is the mirror image of `MarshalWrite` — it decodes straight from an `io.Reader` such as `resp.Body`.
 
 What is different from v1:
 
@@ -163,7 +190,6 @@ What is different from v1:
 `jsontext` is the streaming layer underneath: `jsontext.Decoder` and `jsontext.Encoder` walk a document as `Token`s and `Value`s while validating syntax, which is what you want for very large payloads or for rewriting JSON without decoding it into Go values.
 
 ```go
-// needs Go 1.27+
 dec := jsontext.NewDecoder(r)
 for {
     tok, err := dec.ReadToken()

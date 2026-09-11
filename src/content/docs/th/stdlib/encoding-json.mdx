@@ -137,17 +137,44 @@ Go 1.27 มาพร้อม `encoding/json/v2` และ package ระดั�
 
 ให้ import v2 เมื่อต้องการ API และ default ที่เข้มงวดกว่า:
 
-```go
-// ต้องใช้ Go 1.27+ — รันบน go.dev/play ไม่ใช่ runner ในเบราว์เซอร์
-import "encoding/json/v2"
+<Playground code={jsonV2Code} />
 
-data, err := json.Marshal(u)                   // หน้าตาเหมือน v1 …
-err = json.Unmarshal(data, &u)
+export const jsonV2Code = `package main
 
-data, err = json.Marshal(u, json.Deterministic(true))   // … แต่รับ Options แบบ variadic
-err = json.MarshalWrite(os.Stdout, u)          // เขียนลง io.Writer ตรง ๆ
-err = json.UnmarshalRead(resp.Body, &u)        // อ่านจาก io.Reader ตรง ๆ
-```
+import (
+\t"encoding/json/v2"
+\t"fmt"
+\t"os"
+)
+
+type User struct {
+\tName  string \`json:"name"\`
+\tEmail string \`json:"email,omitempty"\`
+\tAge   int    \`json:"age"\`
+}
+
+func main() {
+\tu := User{Name: "Ada", Age: 36}
+
+\tdata, err := json.Marshal(u) // same shape as v1 …
+\tfmt.Println(string(data), err)
+
+\tvar back User
+\terr = json.Unmarshal(data, &back)
+\tfmt.Printf("%+v %v\\n", back, err)
+
+\tdata, _ = json.Marshal(map[string]int{"b": 2, "a": 1}, json.Deterministic(true)) // … plus variadic Options
+\tfmt.Println(string(data))
+
+\t_ = json.MarshalWrite(os.Stdout, u) // straight to an io.Writer
+\tfmt.Println()
+
+\t// stricter defaults: duplicate keys are rejected
+\terr = json.Unmarshal([]byte(\`{"name":"A","name":"B"}\`), &back)
+\tfmt.Println("duplicate key:", err)
+}`;
+
+`json.UnmarshalRead(r, &u)` คือด้านกลับของ `MarshalWrite` — decode จาก `io.Reader` อย่าง `resp.Body` ได้ตรง ๆ
 
 สิ่งที่ต่างจาก v1:
 
@@ -163,7 +190,6 @@ err = json.UnmarshalRead(resp.Body, &u)        // อ่านจาก io.Reade
 `jsontext` คือชั้น streaming ที่อยู่ข้างใต้: `jsontext.Decoder` และ `jsontext.Encoder` เดินผ่าน document เป็น `Token` และ `Value` พร้อมตรวจ syntax ไปด้วย เหมาะกับ payload ขนาดใหญ่มากหรือการเขียน JSON ใหม่โดยไม่ decode เป็นค่า Go
 
 ```go
-// ต้องใช้ Go 1.27+
 dec := jsontext.NewDecoder(r)
 for {
     tok, err := dec.ReadToken()

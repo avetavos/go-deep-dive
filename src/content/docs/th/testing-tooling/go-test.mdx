@@ -111,7 +111,7 @@ go test -v -run TestFibonacci ./...
 test ที่มี goroutine, timer หรือ timeout เคยต้องใช้ sleep จริงและมักจะ flaky `testing/synctest` รันฟังก์ชันใน *bubble* ที่เวลาเป็นแบบ virtual: `time.Sleep` และ timer เดินหน้าทันทีเมื่อ goroutine ทุกตัวใน bubble block อยู่ และ `synctest.Wait()` จะ block จนกว่าทุกตัวจะ block
 
 ```go
-// ต้องใช้ Go 1.25+ — รันในเครื่อง ไม่ใช่ runner ในเบราว์เซอร์
+// cache_test.go — เป็น test file; รันด้วย: go test ./...
 import (
     "testing"
     "testing/synctest"

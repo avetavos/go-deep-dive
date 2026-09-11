@@ -104,7 +104,7 @@ Three runtime changes from Go 1.25–1.27 matter for everyday goroutine code:
 - **Goroutine leak profile (GA in Go 1.27).** `runtime/pprof` gains a `goroutineleak` profile — also served at `/debug/pprof/goroutineleak` by `net/http/pprof` — that uses the GC's reachability analysis to list goroutines blocked on a channel or lock that nothing can ever unblock. Tracebacks from `go 1.27+` modules also print `runtime/pprof` goroutine labels, which makes a leaked goroutine easier to attribute.
 
 ```go
-// needs Go 1.27+ — run on go.dev/play or locally, not in the in-browser runner
+// in a real server, with the pprof handler mounted on :6060
 import _ "net/http/pprof"
 
 // then, with the pprof handler mounted on :6060

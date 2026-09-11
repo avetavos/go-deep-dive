@@ -63,7 +63,7 @@ func Min[T cmp.Ordered](a, b T) T {
 }
 ```
 
-For the playground snippet below, `cmp.Ordered` is replaced by a local `Number` interface to avoid the external package import — yaegi (the in-browser interpreter) has partial generics support and works most reliably with inline constraints.
+The playground snippet below uses a local `Number` interface instead of `cmp.Ordered` so the constraint is visible in the same file.
 
 ## Generic types
 
@@ -105,19 +105,31 @@ var seen Set[string] = map[string]struct{}{} // same type, just a shorter name
 
 A generic type may refer to itself in its own type parameter list. This expresses "a type that can be combined with values of its own type" — the classic `Adder` shape:
 
-```go
+<Playground code={selfRefCode} />
+
+export const selfRefCode = `package main
+
+import "fmt"
+
 type Adder[A Adder[A]] interface {
-    Add(A) A
+\tAdd(A) A
 }
 
 func Sum[A Adder[A]](xs ...A) A {
-    var acc A
-    for _, x := range xs {
-        acc = acc.Add(x)
-    }
-    return acc
+\tvar acc A
+\tfor _, x := range xs {
+\t\tacc = acc.Add(x)
+\t}
+\treturn acc
 }
-```
+
+type Money int
+
+func (m Money) Add(o Money) Money { return m + o }
+
+func main() {
+\tfmt.Println(Sum(Money(5), Money(10), Money(20)))
+}`;
 
 ## Generic methods (Go 1.27)
 
@@ -134,18 +146,43 @@ i := r.N[int64](100)          // or explicit
 
 Your own types can do the same:
 
-```go
+<Playground code={genericMethodsCode} />
+
+export const genericMethodsCode = `package main
+
+import (
+\t"fmt"
+\t"math/rand/v2"
+\t"time"
+)
+
 type Registry struct{ items map[string]any }
 
+// Get declares its own type parameter T — allowed since Go 1.27.
 func (r *Registry) Get[T any](key string) (T, bool) {
-    v, ok := r.items[key].(T)
-    return v, ok
+\tv, ok := r.items[key].(T)
+\treturn v, ok
 }
 
-port, ok := reg.Get[int]("port")
-```
+func main() {
+\treg := &Registry{items: map[string]any{"port": 8080, "host": "localhost"}}
 
-Two rules to remember: **interface methods cannot declare type parameters**, and a generic method therefore cannot be used to satisfy an interface. Generic methods need Go 1.27+ (`go 1.27` in `go.mod`); the in-browser playground runs an older interpreter, so try these on go.dev/play.
+\tport, ok := reg.Get[int]("port")
+\tfmt.Println(port, ok)
+
+\thost, ok := reg.Get[string]("host")
+\tfmt.Println(host, ok)
+
+\t_, ok = reg.Get[int]("host") // wrong type: zero value, false
+\tfmt.Println(ok)
+
+\tr := rand.New(rand.NewPCG(1, 2))
+\td := r.N(10 * time.Second) // Int inferred as time.Duration
+\ti := r.N[int64](100)       // or explicit
+\tfmt.Println(d < 10*time.Second, i < 100)
+}`;
+
+Two rules to remember: **interface methods cannot declare type parameters**, and a generic method therefore cannot be used to satisfy an interface. Generic methods need Go 1.27+ (`go 1.27` in `go.mod`).
 
 ## Function type inference, generalized (Go 1.27)
 

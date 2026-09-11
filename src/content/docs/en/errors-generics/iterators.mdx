@@ -5,6 +5,7 @@ sidebar:
   order: 6
 ---
 
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -136,7 +137,73 @@ v, ok := next() // 0, true
 - **Name accessors `All`, `Keys`, `Values`, `Backward`** to match the standard library.
 - Iterators are plain functions: they are not goroutine-safe by magic, and they hold whatever the closure captured.
 
-Try the code in this lesson on go.dev/play with Go 1.23 or newer — the in-browser playground used elsewhere in this course runs an older interpreter that does not support range-over-func.
+## Try it
+
+Everything above in one runnable program — `Count`, `filter`, `List.All`, and the `slices`/`maps` bridges:
+
+<Playground code={iteratorsCode} />
+
+export const iteratorsCode = `package main
+
+import (
+\t"fmt"
+\t"iter"
+\t"maps"
+\t"slices"
+)
+
+// Count yields 0, 1, …, n-1 lazily.
+func Count(n int) iter.Seq[int] {
+\treturn func(yield func(int) bool) {
+\t\tfor i := 0; i < n; i++ {
+\t\t\tif !yield(i) {
+\t\t\t\treturn // the consumer broke out of its loop
+\t\t\t}
+\t\t}
+\t}
+}
+
+func filter[T any](seq iter.Seq[T], keep func(T) bool) iter.Seq[T] {
+\treturn func(yield func(T) bool) {
+\t\tfor v := range seq {
+\t\t\tif keep(v) && !yield(v) {
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}
+}
+
+type List[T any] struct{ items []T }
+
+func (l *List[T]) All() iter.Seq2[int, T] {
+\treturn func(yield func(int, T) bool) {
+\t\tfor i, v := range l.items {
+\t\t\tif !yield(i, v) {
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}
+}
+
+func main() {
+\tisEven := func(n int) bool { return n%2 == 0 }
+\tfmt.Println(slices.Collect(filter(Count(10), isEven)))
+
+\tfor v := range Count(100) {
+\t\tif v > 2 {
+\t\t\tbreak // Count returns as soon as yield reports false
+\t\t}
+\t\tfmt.Println("got", v)
+\t}
+
+\tlist := &List[string]{items: []string{"a", "b", "c"}}
+\tfor i, v := range list.All() {
+\t\tfmt.Println(i, v)
+\t}
+
+\tm := map[string]int{"z": 26, "a": 1, "m": 13}
+\tfmt.Println(slices.Sorted(maps.Keys(m)))
+}`;
 
 <Callout title="Iterators are functions that call yield">
 `iter.Seq[V]` is `func(yield func(V) bool)`. A `for v := range seq` loop becomes the `yield` callback; `break` makes `yield` return `false`, and the iterator must return then. `slices.Collect`, `slices.Sorted`, `maps.Keys`, `strings.Lines`, and `strings.SplitSeq` let you mix lazy sequences with ordinary slices and maps without allocating what you do not use.

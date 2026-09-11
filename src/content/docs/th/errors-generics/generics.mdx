@@ -63,7 +63,7 @@ func Min[T cmp.Ordered](a, b T) T {
 }
 ```
 
-สำหรับ playground snippet ด้านล่าง `cmp.Ordered` ถูกแทนที่ด้วย local `Number` interface เพื่อหลีกเลี่ยงการ import package ภายนอก — yaegi (in-browser interpreter) รองรับ generics บางส่วนและทำงานได้น่าเชื่อถือที่สุดกับ inline constraints
+playground snippet ด้านล่างใช้ local `Number` interface แทน `cmp.Ordered` เพื่อให้เห็น constraint อยู่ในไฟล์เดียวกัน
 
 ## Generic Types
 
@@ -105,19 +105,31 @@ var seen Set[string] = map[string]struct{}{} // type เดียวกัน �
 
 generic type อ้างถึงตัวเองใน type parameter list ของตัวเองได้ ใช้แสดงความหมายว่า "type ที่รวมกับค่าของ type เดียวกันได้" — รูปแบบ `Adder` แบบคลาสสิก:
 
-```go
+<Playground code={selfRefCode} />
+
+export const selfRefCode = `package main
+
+import "fmt"
+
 type Adder[A Adder[A]] interface {
-    Add(A) A
+\tAdd(A) A
 }
 
 func Sum[A Adder[A]](xs ...A) A {
-    var acc A
-    for _, x := range xs {
-        acc = acc.Add(x)
-    }
-    return acc
+\tvar acc A
+\tfor _, x := range xs {
+\t\tacc = acc.Add(x)
+\t}
+\treturn acc
 }
-```
+
+type Money int
+
+func (m Money) Add(o Money) Money { return m + o }
+
+func main() {
+\tfmt.Println(Sum(Money(5), Money(10), Money(20)))
+}`;
 
 ## Generic method (Go 1.27)
 
@@ -134,18 +146,43 @@ i := r.N[int64](100)          // หรือระบุเอง
 
 type ของคุณเองก็ทำได้เหมือนกัน:
 
-```go
+<Playground code={genericMethodsCode} />
+
+export const genericMethodsCode = `package main
+
+import (
+\t"fmt"
+\t"math/rand/v2"
+\t"time"
+)
+
 type Registry struct{ items map[string]any }
 
+// Get declares its own type parameter T — allowed since Go 1.27.
 func (r *Registry) Get[T any](key string) (T, bool) {
-    v, ok := r.items[key].(T)
-    return v, ok
+\tv, ok := r.items[key].(T)
+\treturn v, ok
 }
 
-port, ok := reg.Get[int]("port")
-```
+func main() {
+\treg := &Registry{items: map[string]any{"port": 8080, "host": "localhost"}}
 
-สองกฎที่ต้องจำ: **method ใน interface ประกาศ type parameter ไม่ได้** และ generic method จึงใช้ satisfy interface ไม่ได้ generic method ต้องใช้ Go 1.27+ (`go 1.27` ใน `go.mod`) ส่วน playground ใน browser รัน interpreter รุ่นเก่ากว่า ลองรันตัวอย่างนี้บน go.dev/play แทน
+\tport, ok := reg.Get[int]("port")
+\tfmt.Println(port, ok)
+
+\thost, ok := reg.Get[string]("host")
+\tfmt.Println(host, ok)
+
+\t_, ok = reg.Get[int]("host") // wrong type: zero value, false
+\tfmt.Println(ok)
+
+\tr := rand.New(rand.NewPCG(1, 2))
+\td := r.N(10 * time.Second) // Int inferred as time.Duration
+\ti := r.N[int64](100)       // or explicit
+\tfmt.Println(d < 10*time.Second, i < 100)
+}`;
+
+สองกฎที่ต้องจำ: **method ใน interface ประกาศ type parameter ไม่ได้** และ generic method จึงใช้ satisfy interface ไม่ได้ generic method ต้องใช้ Go 1.27+ (`go 1.27` ใน `go.mod`)
 
 ## การอนุมาน function type แบบทั่วไปขึ้น (Go 1.27)
 
