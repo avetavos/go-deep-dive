@@ -81,6 +81,21 @@ func main() {
 
 <Playground code={indexCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Built-in testing package | No install step, one standard API across every Go project | No assertion library — you write `if got != want` yourself |
+| Table-driven tests | Test many cases in one function, easy to add a case | A very long table gets hard to read |
+| `go test ./...` | Runs every package's tests in the module in one command | Parallel tests can race on shared state if you are not careful |
+| Race detector (`-race`) | Catches concurrency bugs automatically | 2-10x slower — run it in CI, not on every local run |
+
+## Common Misconceptions
+
+- **You need a testing framework like Python or Node's** — the Go standard library already has everything you need; there is no need to install testify or gomega.
+- **100% coverage means the code is correct** — coverage only measures whether a line ran, not whether the behavior is correct — a test with no assertions can still reach 100% coverage.
+- **`go test` is slow** — `go test` caches results; if nothing changed, it returns the cached result instantly.
+
 <Callout title="Why pure functions make the best first tests">
 A pure function — one that depends only on its arguments and always returns the same output for the same input — is the ideal starting point for testing. There is no database to mock, no HTTP server to spin up, and no shared state to reset between runs. `Fibonacci` and `IsPrime` both qualify: call them a thousand times with the same input and you get the same result. The next lesson shows how Go's `testing` package makes writing these tests nearly effortless.
 </Callout>

@@ -118,6 +118,26 @@ go get github.com/foo/bar/v2@v2.0.0
 
 This means two major versions of the same module can coexist in the same binary without conflict. The import path change is intentional: a v2 API is allowed to be incompatible with v1.
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| `go.mod` (explicit versioning) | Reproducible builds, dependencies stated explicitly | Needs updating as dependencies change — run `go mod tidy` often |
+| Semantic versioning | Backward-compatibility contract is explicit | A major version bump changes the import path — migration cost |
+| `go.sum` (hash verification) | Guards against supply-chain attacks, verifies integrity | Must commit `go.sum` too — easy to forget |
+| `go mod vendor` | Enables air-gapped builds, no network dependency | The `vendor/` directory is large and must be synced on every dependency update |
+
+## Common Misconceptions
+
+- **`go get` works like `npm install`** — `go get` updates `go.mod` and downloads source; it does not install a separate binary, unlike npm.
+- **You can ignore `go.sum`** — `go.sum` must be committed alongside `go.mod` to verify dependency integrity — without it the build may not be reproducible.
+- **The `replace` directive is never allowed in production** — `replace` in the main module's `go.mod` is fine (e.g. a fork you maintain) but it has no effect on anyone who imports your module — a dependent's `go.mod` never sees your `replace`.
+- **`GOPATH/pkg/mod` is permanent storage** — `go clean -modcache` clears it — treat it as a cache, not permanent storage.
+
+> 💡 Real-world example
+>
+> **Kubernetes** — its `go.mod` lists several hundred direct dependencies, and `vendor/` is committed so the build is reproducible in every environment.
+
 <Callout title="A module is a versioned collection of packages">
 Think of a module as the unit of distribution and versioning, and a package as the unit of compilation. One module contains many packages. When you run `go get`, you are adding a module (and all its packages become available). When you write `import`, you are importing a specific package path within a module. The two concepts are closely related but distinct.
 </Callout>

@@ -16,14 +16,14 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ```go
 x := 42
-p := &x   // & นำ address ของ x; p มี type *int
+p := &x   // & takes the address of x; p has type *int
 ```
 
 เพื่ออ่านหรือเขียนผ่าน pointer ให้ **dereference** ด้วย `*`:
 
 ```go
-fmt.Println(*p) // 42 — อ่านผ่าน p
-*p = 100        // เขียนผ่าน p — x กลายเป็น 100
+fmt.Println(*p) // 42 — read through p
+*p = 100        // write through p — x is now 100
 fmt.Println(x)  // 100
 ```
 
@@ -57,7 +57,7 @@ fmt.Println(x) // 10
 
 ```go
 cfg := &Config{Workers: 4}
-cfg.Debug = true   // shorthand ของ (*cfg).Debug = true
+cfg.Debug = true   // shorthand for (*cfg).Debug = true
 ```
 
 ## `new` allocate zero value
@@ -65,7 +65,7 @@ cfg.Debug = true   // shorthand ของ (*cfg).Debug = true
 Built-in `new(T)` allocate zero value ของ type `T` และคืน `*T`:
 
 ```go
-n := new(int)   // *int ที่ชี้ไป 0
+n := new(int)   // *int pointing to 0
 *n = 7
 ```
 
@@ -82,8 +82,8 @@ type Person struct {
 yearsSince := func(y int) int { return 2026 - y }
 born := 1990
 
-p := Person{Name: "Ada", Age: new(36)}               // *int ชี้ไปที่ 36
-q := Person{Name: "Bob", Age: new(yearsSince(born))} // ใช้ expression อะไรก็ได้
+p := Person{Name: "Ada", Age: new(36)}               // *int pointing to 36
+q := Person{Name: "Bob", Age: new(yearsSince(born))} // any expression works
 ```
 
 ## Nil pointer
@@ -93,7 +93,7 @@ Zero value ของ pointer type ทุกชนิดคือ `nil` การ
 ```go
 var p *int
 fmt.Println(p == nil) // true
-// *p = 1 จะ panic: nil pointer dereference
+// *p = 1 would panic: nil pointer dereference
 ```
 
 ควรตรวจสอบ pointer ว่าเป็น `nil` ก่อน dereference เสมอ เมื่อ pointer นั้นอาจไม่ได้ถูกกำหนดค่า
@@ -166,7 +166,7 @@ Escape Analysis ตัดสินใจว่า variable ควรอยู่
 
 ## ข้อแลกเปลี่ยน
 
-| Usage | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |-------|---------|------|
 | pointer to large struct | หลีกเลี่ยง copy — ส่งแค่ 8 bytes (pointer size) | อาจ escape to heap → GC pressure เพิ่ม |
 | value receiver | ชัดเจนว่าไม่ mutate, cache-friendly | copy struct ทุกครั้งที่เรียก method |

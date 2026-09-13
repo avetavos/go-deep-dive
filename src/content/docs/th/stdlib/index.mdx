@@ -29,7 +29,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Tour โปรแกรมที่รันได้
 
-snippet ด้านล่างครอบคลุมทั้งสี่หัวข้อในฟังก์ชัน `main` เดียว อ่าน output แล้วย้อนติดตาม call แต่ละอันกลับไปยัง package ต้นทาง
+snippet ด้านล่างครอบคลุมทั้งสี่หัวข้อใน function `main` เดียว อ่าน output แล้วย้อนติดตาม call แต่ละอันกลับไปยัง package ต้นทาง
 
 export const stdlibIndexCode = `package main
 
@@ -93,7 +93,7 @@ func main() {
 > **Prometheus** ใช้ net/http สำหรับ /metrics endpoint และ time สำหรับ scrape interval — ไม่ต้องใช้ external HTTP framework
 
 <Callout title="เอกสาร standard library">
-ทุก package ใน standard library มีเอกสารที่ **pkg.go.dev/std** แต่ละหน้าแสดง synopsis ของ package, identifier ที่ export ทั้งหมด และตัวอย่างที่รันได้ บุ๊กมาร์กไว้เลย — เป็นวิธีที่เร็วที่สุดในการตรวจสอบ signature ของฟังก์ชันหรือค้นหา constant ที่ต้องการ
+ทุก package ใน standard library มีเอกสารที่ **pkg.go.dev/std** แต่ละหน้าแสดง synopsis ของ package, identifier ที่ export ทั้งหมด และตัวอย่างที่รันได้ บุ๊กมาร์กไว้เลย — เป็นวิธีที่เร็วที่สุดในการตรวจสอบ signature ของ function หรือค้นหา constant ที่ต้องการ
 </Callout>
 
 export const quizStdlibIndex = [

@@ -91,6 +91,7 @@ Go ships with a rich standard library. A few packages you will use constantly:
 | `sort` | Sorting slices and custom types |
 | `math` | Math functions: `math.Abs`, `math.Sqrt`, `math.Pi` |
 | `time` | Time values, durations, and formatting |
+| `os` | OS interface: file I/O, environment variables, command-line args |
 
 export const packagesCode = `package main
 
@@ -127,6 +128,27 @@ func main() {
 }`;
 
 <Playground code={packagesCode} />
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------------|---------|------|
+| Uppercase = exported | Visibility rule is simple — no `public`/`private` keyword needed | You must rename an identifier to change its visibility |
+| Unused import = compile error | No dead imports lingering in the codebase | You must remove every unused import (`goimports` helps) |
+| `init()` function | Setup happens automatically | Hidden side effects that are hard to debug and test |
+| Module system (`go.mod`) | Reproducible builds, explicit dependencies | Steeper learning curve than the old GOPATH model |
+
+## Common Misconceptions
+
+- **"Circular imports work in test files."** Go does not allow circular imports, whether in production code or test files.
+- **"`import _` only works with database drivers."** It works with any package whose `init()` you want to run — for example, registering a codec, plugin, or HTTP handler.
+- **"A Go module is just a package manager like npm."** A Go module manages versioning and reproducible builds at the whole-module level, not just for a single package.
+
+> 💡 Real-world example
+>
+> `database/sql` uses a blank import so a driver such as `github.com/lib/pq` can register itself via `init()`, which calls `sql.Register("postgres", ...)`.
+>
+> `net/http/pprof` uses the same mechanism — `import _ "net/http/pprof"` registers debug handlers under `/debug/pprof/` via `init()`, without calling anything from the package directly.
 
 <Callout title="Capitalization controls visibility">
 An identifier that starts with an **uppercase** letter (`Add`, `Client`, `MaxRetries`) is exported and accessible from other packages. A **lowercase** identifier (`add`, `client`, `maxRetries`) is package-private. The compiler enforces this — there is no `public` or `private` keyword. When you design a package, deliberately choose which identifiers to capitalize; unexported identifiers are free to change without breaking callers.

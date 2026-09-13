@@ -14,7 +14,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ภาษาส่วนใหญ่จัดการกับความล้มเหลวผ่าน exceptions — กลไกพิเศษที่ควบคุมการไหลของโปรแกรมโดยการ unwind call stack จนกว่า `catch` block จะดักจับปัญหาไว้ได้ Go เลือกแนวทางที่แตกต่างอย่างสิ้นเชิง: **errors คือค่าธรรมดา**
 
-ฟังก์ชันที่อาจล้มเหลวจะคืนค่าสองค่า: ผลลัพธ์และ `error` caller รับทั้งคู่และตัดสินใจว่าจะทำอะไร ไม่มี hidden control flow ไม่มี stack unwinding ไม่มี unchecked exceptions ทุก callsite ที่อาจเกิด error มองเห็นได้ในโค้ด ทำให้โปรแกรมตรวจสอบและทำความเข้าใจได้ง่ายขึ้น
+function ที่อาจล้มเหลวจะคืนค่าสองค่า: ผลลัพธ์และ `error` caller รับทั้งคู่และตัดสินใจว่าจะทำอะไร ไม่มี hidden control flow ไม่มี stack unwinding ไม่มี unchecked exceptions ทุก callsite ที่อาจเกิด error มองเห็นได้ในโค้ด ทำให้โปรแกรมตรวจสอบและทำความเข้าใจได้ง่ายขึ้น
 
 รูปแบบ canonical ที่คุณจะเห็นทุกที่ใน Go:
 
@@ -53,7 +53,7 @@ type ใดก็ตามที่ implement `Error() string` จะ satisfy in
 
 ## ตัวอย่างแรก
 
-ฟังก์ชันเล็ก ๆ ที่คืนค่า `(string, error)` เพื่อแสดงรูปแบบพื้นฐานของการจัดการ error ใน Go:
+function เล็ก ๆ ที่คืนค่า `(string, error)` เพื่อแสดงรูปแบบพื้นฐานของการจัดการ error ใน Go:
 
 export const firstLookCode = `package main
 
@@ -85,7 +85,7 @@ func main() {
 
 <Playground code={firstLookCode} />
 
-`errors.New` สร้าง error value ธรรมดาจาก string คงที่ ฟังก์ชันคืนค่า `nil` เป็น error ในเส้นทางปกติ และคืนค่า error ที่ไม่ใช่ nil ในเส้นทางที่ล้มเหลว caller ตรวจสอบ `if err != nil` ทันทีหลังการเรียก — นี่คือ idiom ที่คุณจะเขียนนับร้อยครั้งใน Go
+`errors.New` สร้าง error value ธรรมดาจาก string คงที่ function คืนค่า `nil` เป็น error ในเส้นทางปกติ และคืนค่า error ที่ไม่ใช่ nil ในเส้นทางที่ล้มเหลว caller ตรวจสอบ `if err != nil` ทันทีหลังการเรียก — นี่คือ idiom ที่คุณจะเขียนนับร้อยครั้งใน Go
 
 ## ข้อแลกเปลี่ยน
 
@@ -104,7 +104,7 @@ func main() {
 
 export const quizErrorsGenericsOverview = [
   {
-    q: "ใน Go เมื่อฟังก์ชันคืนค่า error ที่ไม่ใช่ nil หมายความว่าอะไร?",
+    q: "ใน Go เมื่อ function คืนค่า error ที่ไม่ใช่ nil หมายความว่าอะไร?",
     options: [
       "เกิด panic พร้อมข้อความ error",
       "โยน exception ที่ caller ต้องจับ",

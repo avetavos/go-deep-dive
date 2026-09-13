@@ -133,6 +133,26 @@ func main() {
 
 <Playground code={mapsCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| built-in hash map | O(1) average lookup, easy to use | not thread-safe — needs a mutex or `sync.Map` |
+| zero value for missing key | no panic when reading a missing key | can hide a bug if you forget the comma-ok idiom |
+| dynamic sizing | grows automatically | a map never shrinks automatically (the Swiss table since 1.24 returns some memory on grow); build a new map if you need to release memory |
+| randomized iteration | prevents code from accidentally depending on order | you must sort keys if you need deterministic output |
+
+## Common Misconceptions
+
+- **A map is safe for concurrent access** — it is not — multiple goroutines reading/writing at once causes a race condition and a crash.
+- **Map iteration order is insertion order** — Go deliberately iterates maps in a random order; it can differ on every run.
+- **`delete()` reduces memory immediately** — a Go map does not return the memory used by its buckets after a delete — build a new map if you need to shrink it.
+- **`len(m)` is as slow as iterating** — `len(map)` is O(1); Go tracks the count in the map header.
+
+> 💡 Real-world example
+>
+> **`http.Header`** is just a `map[string][]string` — each request gets its own `Header`, so no locking is needed.
+
 <Callout title="Map iteration order is randomized — always sort for deterministic output">
 Go intentionally randomizes map iteration order on every program run. This prevents bugs that silently depend on hash ordering. If you need stable output — for tests, logs, or user-facing data — collect the keys into a `[]string`, call `sort.Strings`, then range over the sorted slice. Never rely on the order of `for k, v := range myMap`.
 </Callout>

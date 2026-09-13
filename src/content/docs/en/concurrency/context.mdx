@@ -116,6 +116,21 @@ func main() {
 
 <Playground code={contextCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| context.WithCancel | propagates cancellation down the tree | must always call cancel(), or the goroutine/context leaks |
+| context.WithTimeout | automatic deadline | must handle context.DeadlineExceeded |
+| context.WithValue | passes a value through the call stack | not type-safe; use an unexported key to avoid collisions |
+| ctx.Done() channel | non-blocking check via select | must be checked in every loop iteration that might run long |
+
+## Common Misconceptions
+
+- **`context.WithValue` is meant for passing business data** — it is for request-scoped metadata only (trace ID, auth token)
+- **`cancel()` stops the goroutine immediately** — `cancel()` only sends a signal through a channel; the goroutine must check `ctx.Done()` itself
+- **A context can carry a value of any type safely** — `context.Value()` returns `any`; you need a type assertion, and the result can be nil
+
 <Callout title="Always defer cancel() to avoid context leaks">
 Every call to `context.WithCancel`, `context.WithTimeout`, or `context.WithDeadline` must be paired with a call to the returned `cancel` function. Forgetting it keeps the child registered in its parent until the parent itself ends — a memory leak, and `go vet`'s `lostcancel` analyzer flags the most obvious cases at compile time. Call `cancel()` even when the timeout will fire on its own: it releases the underlying timer immediately instead of waiting for it to expire. The idiomatic pattern is always: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`.
 </Callout>

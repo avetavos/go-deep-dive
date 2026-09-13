@@ -68,6 +68,11 @@ export default defineConfig({
           translations: { th: 'Testing และ Tooling' },
           items: [{ autogenerate: { directory: 'testing-tooling' } }],
         },
+        {
+          label: 'Glossary',
+          translations: { th: 'อภิธานศัพท์' },
+          link: 'glossary',
+        },
       ],
       }), preact()],
 });

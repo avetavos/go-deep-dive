@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ทำไมต้อง Wrap Error?
 
-เมื่อฟังก์ชันเรียกใช้อีกฟังก์ชันแล้วล้มเหลว การคืน error เดิมทำให้เสียบริบท ผู้เรียกเห็นแค่ "database error" แต่ไม่รู้ว่า operation ใดที่ทำให้เกิด request ใดที่เกี่ยวข้อง หรือเกิดที่ layer ไหน การ wrap เพิ่มชั้น context ว่ากำลังทำอะไรอยู่ โดยยังเก็บ error เดิมไว้ให้ตรวจสอบได้
+เมื่อ function เรียกใช้อีก function แล้วล้มเหลว การคืน error เดิมทำให้เสียบริบท caller เห็นแค่ "database error" แต่ไม่รู้ว่า operation ใดที่ทำให้เกิด request ใดที่เกี่ยวข้อง หรือเกิดที่ layer ไหน การ wrap เพิ่มชั้น context ว่ากำลังทำอะไรอยู่ โดยยังเก็บ error เดิมไว้ให้ตรวจสอบได้
 
 รูปแบบ idiomatic ใน Go:
 

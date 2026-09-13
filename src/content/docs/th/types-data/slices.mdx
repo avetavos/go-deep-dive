@@ -17,7 +17,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 
 ```go
 arr := [3]int{10, 20, 30}
-fmt.Println(len(arr)) // 3 — เสมอ
+fmt.Println(len(arr)) // 3 — always
 ```
 
 Array เป็น value type: การ assign `a2 := a1` จะ copy ทุก element มีประโยชน์สำหรับข้อมูลขนาดคงที่ แต่ยืดหยุ่นน้อยเกินไปสำหรับงานส่วนใหญ่
@@ -45,9 +45,9 @@ export const sliceHeaderDiagram = `flowchart LR
 สร้าง slice ด้วย `make`, composite literal, หรือการ slice array:
 
 ```go
-s := make([]int, 3, 5)      // len=3, cap=5, ทุกค่าเป็น zero
+s := make([]int, 3, 5)      // len=3, cap=5, all zeros
 t := []int{1, 2, 3}         // len=3, cap=3
-u := arr[1:3]               // len=2, cap=2, มุมมองย่อยของ arr
+u := arr[1:3]               // len=2, cap=2, window into arr
 ```
 
 ## `append` และการเติบโต
@@ -66,10 +66,10 @@ s = append(s, 4, 5, 6)
 
 ```go
 base := []int{1, 2, 3, 4, 5}
-a := base[1:3] // [2 3] — แชร์ backing array กับ base
-b := base[1:4] // [2 3 4] — แชร์ด้วยเช่นกัน
+a := base[1:3] // [2 3] — shares backing array with base
+b := base[1:4] // [2 3 4] — also shares
 a[0] = 99
-fmt.Println(b[0]) // 99 — การแก้ไขมองเห็นได้ผ่าน b ด้วย
+fmt.Println(b[0]) // 99 — mutation visible through b too
 ```
 
 นี่คือพลัง (sub-slicing แบบ zero-copy) แต่อันตรายถ้าลืมเรื่องนี้
@@ -83,7 +83,7 @@ fresh := []int{10, 20, 30}
 dst := make([]int, 3)
 copy(dst, fresh)
 dst[0] = 0
-fmt.Println(fresh[0], dst[0]) // 10 0 — เป็นอิสระต่อกัน
+fmt.Println(fresh[0], dst[0]) // 10 0 — independent
 ```
 
 `slices.Clone(a)` และ `append([]int(nil), a...)` ให้ผลเดียวกับการ `copy` ลง slice ใหม่ — ทั้งสามวิธีได้ backing array ที่เป็นอิสระ
@@ -95,15 +95,15 @@ Go 1.21 เพิ่ม builtin สามตัวและ package `slices` แ
 ```go
 import "slices"
 
-n := min(3, 7, 1)          // 1 — ใช้ได้กับทุก ordered type
+n := min(3, 7, 1)          // 1 — works for any ordered type
 m := max(2.5, 1.0)         // 2.5
-clear(s)                   // ทำให้ทุก element เป็น zero value โดยคง len และ cap
+clear(s)                   // zero every element, keeps len and cap
 
 xs := []int{3, 1, 2}
 slices.Sort(xs)            // [1 2 3]
 slices.Contains(xs, 2)     // true
 i, found := slices.BinarySearch(xs, 3) // 2, true
-ys := slices.Clone(xs)     // copy อิสระ ไม่ต้อง make+copy
+ys := slices.Clone(xs)     // independent copy, no make+copy needed
 xs = slices.Insert(xs, 0, 9)
 ```
 

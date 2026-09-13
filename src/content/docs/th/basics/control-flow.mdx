@@ -15,12 +15,12 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 `if` statement ใน Go คล้ายกับภาษาอื่น แต่มีความสามารถพิเศษ: สามารถมี **init statement** ก่อน condition ได้ ตัวแปรที่ประกาศใน init statement มี scope แค่ภายใน `if` block นั้น:
 
 ```go
-// รูปแบบปกติ
+// standard form
 if x > 10 {
     fmt.Println("big")
 }
 
-// พร้อม init statement — err มี scope แค่ใน if/else block
+// with init statement — err is scoped only to the if/else block
 if err := doSomething(); err != nil {
     fmt.Println("error:", err)
 }
@@ -53,8 +53,7 @@ for n < 100 {
 
 ```go
 for {
-    // ออกด้วย break หรือ return
-    if done {
+    if done() {
         break
     }
 }
@@ -65,18 +64,18 @@ for {
 `for range` ใช้สำหรับ iterate ผ่าน collections:
 
 ```go
-// range over slice: ได้ index และ value
+// range over slice: yields index and value
 nums := []int{10, 20, 30}
 for i, v := range nums {
     fmt.Println(i, v)
 }
 
-// ต้องการเฉพาะ value: ใช้ _ สำหรับ index
+// only need the value: use _ for the index
 for _, v := range nums {
     fmt.Println(v)
 }
 
-// range over string: ได้ rune (Unicode code point) ไม่ใช่ byte
+// range over string: yields rune (Unicode code point), not byte
 for i, r := range "Go!" {
     fmt.Printf("%d: %c\n", i, r)
 }
@@ -92,7 +91,7 @@ for i, r := range "Go!" {
 for i := range 5 {        // 0, 1, 2, 3, 4
     fmt.Println(i)
 }
-for range 3 {             // วนซ้ำสามรอบ ไม่ต้องมีตัวแปร
+for range 3 {             // repeat three times, no variable
     fmt.Println("tick")
 }
 ```
@@ -106,7 +105,7 @@ Go 1.22 ยังเปลี่ยน semantics ของ loop variable ด้�
 ```go
 day := "Monday"
 switch day {
-case "Saturday", "Sunday":   // หลาย value ในหนึ่ง case ได้
+case "Saturday", "Sunday":   // multiple values in one case
     fmt.Println("weekend")
 case "Monday":
     fmt.Println("start of week")

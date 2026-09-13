@@ -160,6 +160,28 @@ func main() {
 
 <Playground code={fmtStringsCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| fmt.Sprintf | Flexible string formatting | Allocates a new string every call |
+| fmt.Fprintf(w, ...) | Write to any io.Writer | You must check the returned error |
+| strings.Builder | Efficient string concatenation | Must call Reset() before reuse |
+| %v / %+v / %#v | Inspect any value | Reflection-based — slower than an explicit conversion |
+
+## Common Misconceptions
+
+- **fmt.Println is fine for production logging** — use a structured logger (`log/slog`, zap) in production instead; `fmt` has no log levels, structured fields, or JSON output.
+- **String concatenation with + is faster than fmt.Sprintf** — it depends on how many concatenations there are; `strings.Builder` is fastest for many pieces in a loop.
+- **%d and %v are very different** — `%d` is explicit for integers, `%v` is generic but produces the same output for an int; they differ for structs.
+- **rune and byte are the same thing** — a `byte` is a `uint8` (1 byte); a `rune` is an `int32` (1-4 bytes for a Unicode code point).
+
+> 💡 Real-world example
+>
+> **kubectl** formats table output with `fmt.Fprintf` and `text/tabwriter`, which aligns columns automatically.
+>
+> **Go HTTP servers** build an error message with `fmt.Sprintf` and pass it to `http.Error`, which accepts a plain string.
+
 <Callout title="%+v and %#v are your debugging friends">
 When you are unsure what is inside a struct, reach for `%+v` first — it prints field names alongside values so you can immediately see which field holds which data. Use `%#v` when you want a copy-pasteable Go literal (useful for writing test fixtures). For production logs, prefer structured logging (`log/slog`) over `fmt.Printf`, but in development and tests `%+v` saves a lot of time.
 </Callout>

@@ -140,6 +140,26 @@ func main() {
 
 <Playground code={structsCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| value semantics | predictable behavior, no aliasing | copy cost for large structs |
+| embedding (composition) | reuse fields and methods without inheritance | field shadowing can be confusing when the embedded type has a field with the same name |
+| struct tags | declarative metadata for JSON/DB/validation | runtime-only — no compile-time check that a tag is correct |
+| exported vs unexported fields | clear control over the API surface | exposing a new field later is a breaking change |
+
+## Common Misconceptions
+
+- **Struct embedding is inheritance** — Go has no inheritance — a `Person` that embeds `Address` is not a subtype of `Address`.
+- **Struct copies are always expensive** — a small struct (2-4 fields) copies faster than using a pointer, which requires a dereference and can make the object escape to the heap.
+- **An unexported field is private to the type** — unexported means package-level visibility — any code in the same package can access it.
+- **Struct tags have an effect at compile time** — struct tags are string literals that reflection reads at runtime — a typo in a tag produces no compile error.
+
+> 💡 Real-world example
+>
+> **`bufio.ReadWriter`** (stdlib) is a struct that embeds `*Reader` and `*Writer` together — it gets both types' methods for free and satisfies `io.ReadWriter` immediately.
+
 <Callout title="Structs are value types — assignment copies">
 Writing `p2 := p1` produces a completely independent copy of the struct. Every field is copied. Mutating `p2.Name` does not touch `p1`. This is different from slices and maps, where assignment copies only the header and the two variables share the same underlying data. If you need to share a struct across goroutines or avoid copying large structs, use a pointer (`*Person`).
 </Callout>

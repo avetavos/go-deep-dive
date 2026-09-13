@@ -81,6 +81,19 @@ func main() {
 
 <Playground code={indexCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|------|---------|------|
+| value type (struct, array) | predictable behavior, no aliasing | copy cost for large types |
+| reference-like type (slice, map) | shares data without copying it | shared mutation — one goroutine's edit can affect another |
+| composite literals | readable initialization | syntax differs per type |
+
+## Common Misconceptions
+
+- **Arrays and slices are the same thing** — an array's size is part of its type, so `[3]int` ≠ `[4]int`; a slice is a dynamic view over an array.
+- **A map is safe for concurrent access** — a Go map is not — you need a `sync.Mutex` or `sync.RWMutex` if multiple goroutines read/write it at once.
+
 <Callout title="Value types are copied; reference-like types share data">
 When you assign a struct to a new variable — `p2 := p1` — you get an independent copy. Modifying `p2` never affects `p1`. Slices and maps behave differently: assigning copies the header, so two variables can point at the same underlying data. This distinction drives most of the design decisions you will encounter throughout this module.
 </Callout>

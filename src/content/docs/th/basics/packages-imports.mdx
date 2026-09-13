@@ -15,7 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 ใน Go ทุก source file ต้องเริ่มต้นด้วย `package` declaration Package คือหน่วยของการจัดระเบียบ code ที่ Go ใช้ควบคุม scope และ visibility
 
 ```go
-package main   // บอกว่า file นี้อยู่ใน package main
+package main   // declares this file belongs to package main
 ```
 
 Package name ปกติจะสั้น, lowercase, และตรงกับชื่อ directory (เช่น directory `strings` → `package strings`)
@@ -28,7 +28,7 @@ Program ที่ executable ต้องมี **`package main`** และ fun
 package main
 
 func main() {
-    // program เริ่มต้นที่นี่
+    // program starts here
 }
 ```
 
@@ -39,10 +39,10 @@ Package อื่น ๆ (เช่น library) ไม่มี `func main` แ�
 ใช้ `import` เพื่อดึง package อื่นเข้ามาใช้ มีสองรูปแบบ:
 
 ```go
-// import เดี่ยว
+// single import
 import "fmt"
 
-// grouped import (แนะนำเมื่อ import หลาย package)
+// grouped import (preferred when importing multiple packages)
 import (
     "fmt"
     "strings"
@@ -55,13 +55,13 @@ Go compiler จะ error ทันทีถ้าคุณ import package แล
 หากต้องการ import package เพื่อ side effect เท่านั้น (เช่น `init()` ของ package นั้น) ใช้ blank identifier:
 
 ```go
-import _ "github.com/lib/pq" // init() ของ driver เรียก sql.Register("postgres", ...)
+import _ "github.com/lib/pq" // the driver's init() calls sql.Register("postgres", ...)
 ```
 
 อีกตัวอย่างที่พบบ่อยคือเปิด debug endpoint โดยไม่ได้เรียกอะไรจาก package นั้นตรง ๆ:
 
 ```go
-import _ "net/http/pprof" // register handler ใต้ /debug/pprof/ บน default mux
+import _ "net/http/pprof" // registers /debug/pprof/ handlers on the default mux
 ```
 
 ## Exported vs Unexported

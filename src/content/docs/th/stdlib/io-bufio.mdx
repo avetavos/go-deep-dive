@@ -24,11 +24,11 @@ type Writer interface {
 }
 ```
 
-Interface ทั้งสองนี้คือภาษากลางของ I/O ใน Go มี type จำนวนมากที่ implement ทั้งสอง: ไฟล์, network connection, HTTP request และ response body, in-memory buffer และอื่นๆ ฟังก์ชันที่รับ `io.Reader` หรือ `io.Writer` จะทำงานกับทุก type เหล่านั้นโดยไม่ต้องแก้ไขโค้ด
+Interface ทั้งสองนี้คือภาษากลางของ I/O ใน Go มี type จำนวนมากที่ implement ทั้งสอง: ไฟล์, network connection, HTTP request และ response body, in-memory buffer และอื่นๆ function ที่รับ `io.Reader` หรือ `io.Writer` จะทำงานกับทุก type เหล่านั้นโดยไม่ต้องแก้ไขโค้ด
 
 ## strings.NewReader — Reader ในหน่วยความจำ
 
-`strings.NewReader(s)` ห่อ string เป็น `io.Reader` มีประโยชน์มากใน test และตัวอย่าง — สามารถทดสอบฟังก์ชันที่อ่านจาก stream ได้โดยไม่ต้องแตะ filesystem
+`strings.NewReader(s)` ห่อ string เป็น `io.Reader` มีประโยชน์มากใน test และตัวอย่าง — สามารถทดสอบ function ที่อ่านจาก stream ได้โดยไม่ต้องแตะ filesystem
 
 ```go
 r := strings.NewReader("hello, world")
@@ -48,16 +48,16 @@ content, _ := io.ReadAll(&buf)
 fmt.Print(string(content))
 ```
 
-`fmt.Fprintln` รับ `io.Writer` ใดก็ได้ ดังนั้นจึงเปลี่ยน output ที่ฟอร์แมตแล้วไปยัง buffer, ไฟล์ หรือ network connection ได้โดยไม่ต้องเปลี่ยนโค้ด
+`fmt.Fprintln` รับ `io.Writer` ใดก็ได้ ดังนั้นจึงเปลี่ยน output ที่ format แล้วไปยัง buffer, ไฟล์ หรือ network connection ได้โดยไม่ต้องเปลี่ยนโค้ด
 
 ## bufio.Scanner — การอ่านทีละบรรทัด
 
-`bufio.Scanner` ห่อ `io.Reader` ใดก็ได้และให้การอ่านทีละบรรทัด (หรือทีละ token) อย่างสะดวก ฟังก์ชัน split แบบ default คือ `bufio.ScanLines`
+`bufio.Scanner` ห่อ `io.Reader` ใดก็ได้และให้การอ่านทีละบรรทัด (หรือทีละ token) อย่างสะดวก function split แบบ default คือ `bufio.ScanLines`
 
 ```go
 scanner := bufio.NewScanner(r)
 for scanner.Scan() {
-    fmt.Println(scanner.Text()) // ทีละบรรทัด
+    fmt.Println(scanner.Text()) // one line at a time
 }
 if err := scanner.Err(); err != nil {
     log.Fatal(err)
@@ -66,16 +66,16 @@ if err := scanner.Err(); err != nil {
 
 `scanner.Scan()` คืน `false` เมื่อ input หมดหรือเกิด error ควรตรวจสอบ `scanner.Err()` หลังลูปเสมอ — การคืน `false` เพียงอย่างเดียวไม่ได้บอกว่าเป็น EOF หรือ error
 
-## ฟังก์ชัน helper ของ io
+## function helper ของ io
 
 Package `io` ยังมี helper ที่มีประโยชน์:
 
 ```go
-io.ReadAll(r)           // อ่านจนถึง EOF คืน []byte
-io.Copy(dst, src)       // copy จาก Reader ไปยัง Writer
-io.MultiReader(r1, r2)  // ต่อ reader หลายตัวตามลำดับ
-io.Discard              // Writer ที่ทิ้ง byte ทั้งหมด (เหมือน /dev/null)
-io.LimitReader(r, n)    // อ่านไม่เกิน n bytes
+io.ReadAll(r)           // read until EOF, return []byte
+io.Copy(dst, src)       // copy from Reader to Writer
+io.MultiReader(r1, r2)  // chain readers sequentially
+io.Discard              // Writer that discards all bytes (like /dev/null)
+io.LimitReader(r, n)    // read at most n bytes
 ```
 
 export const ioBufioCode = `package main
@@ -167,7 +167,7 @@ bufio.Writer batching:
 > **Go HTTP server**: net/http ห่อ TCP connection ด้วย bufio.Reader โดยอัตโนมัติ — request parsing ไม่ต้อง syscall ทุก byte
 
 <Callout title="เขียนโค้ดให้รับ io.Reader และ io.Writer ไม่ใช่ concrete type">
-เขียนฟังก์ชันให้รับ `io.Reader` หรือ `io.Writer` แทนที่จะรับ `*os.File` หรือ `*http.Request` นิสัยเดียวนี้ทำให้โค้ด test ได้ทุกที่ — ส่ง `strings.NewReader` ใน test, ไฟล์จริงใน production และ HTTP body ใน handler โดยไม่ต้องแก้ไขฟังก์ชัน นอกจากนี้ยังหมายความว่าฟังก์ชันจะทำงานร่วมกับ ecosystem I/O composition ทั้งหมดของ Go: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader` และอื่นๆ
+เขียน function ให้รับ `io.Reader` หรือ `io.Writer` แทนที่จะรับ `*os.File` หรือ `*http.Request` นิสัยเดียวนี้ทำให้โค้ด test ได้ทุกที่ — ส่ง `strings.NewReader` ใน test, ไฟล์จริงใน production และ HTTP body ใน handler โดยไม่ต้องแก้ไข function นอกจากนี้ยังหมายความว่า function จะทำงานร่วมกับ ecosystem I/O composition ทั้งหมดของ Go: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader` และอื่นๆ
 </Callout>
 
 export const quizIoBufio = [
@@ -202,12 +202,12 @@ export const quizIoBufio = [
     answer: 1
   },
   {
-    q: "ทำไมควรรับ io.Reader ในฟังก์ชันแทนที่จะรับ *os.File?",
+    q: "ทำไมควรรับ io.Reader ใน function แทนที่จะรับ *os.File?",
     options: [
       "*os.File ทำให้เกิด memory leak บน Linux",
       "io.Reader เร็วกว่า *os.File",
-      "การรับ io.Reader ทำให้ฟังก์ชันทำงานกับทุกแหล่ง: ไฟล์, buffer, string, network — โดยไม่ต้องเปลี่ยนโค้ด",
-      "Go ไม่อนุญาตให้ใช้ *os.File เป็น parameter ของฟังก์ชัน"
+      "การรับ io.Reader ทำให้ function ทำงานกับทุกแหล่ง: ไฟล์, buffer, string, network — โดยไม่ต้องเปลี่ยนโค้ด",
+      "Go ไม่อนุญาตให้ใช้ *os.File เป็น parameter ของ function"
     ],
     answer: 2
   }

@@ -141,6 +141,27 @@ func main() {
 
 <Playground code={syncCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| sync.Mutex | simple, fast for simple shared state | the goroutine that locks must always unlock |
+| sync.RWMutex | readers run in parallel | RLock overhead exceeds Mutex when writes are frequent |
+| sync.Once | thread-safe one-time init | cannot be reset |
+| sync/atomic | fastest for a simple counter | limited to primitive types |
+| channel | composable, safer | more overhead than a mutex |
+
+## Common Misconceptions
+
+- **A mutex is always slower than a channel** — a mutex is faster than a channel for protecting a simple counter
+- **`sync.Map` always replaces `map` + mutex** — `sync.Map` fits read-heavy, append-only access patterns, not a general-purpose map
+- **The typed `atomic.Int64` and the old `atomic.AddInt64` are identical** — the old function form requires the variable it operates on to be 8-byte aligned yourself (a real trap on 32-bit platforms); the typed API (`atomic.Int64`, `atomic.Bool`, `atomic.Pointer[T]`) handles alignment automatically, which is why new code should always prefer it
+- **`defer mu.Unlock()` is slower than an explicit unlock** — `defer` has negligible overhead; use it for safety every time
+
+> 💡 Real-world example
+>
+> **Prometheus client_golang** increments its counter metric lock-free with `atomic.AddUint64` in `prometheus/counter.go` — a hot path called on every metric update, so it avoids lock contention with an atomic instead of a mutex.
+
 <Callout title="Data races: find them with go run -race">
 A data race occurs when two goroutines access the same variable concurrently and at least one access is a write, with no synchronization between them. The result is undefined behaviour. Go ships a built-in race detector: run `go run -race main.go` or `go test -race ./...` to instrument your binary. The detector adds roughly 2–20x runtime overhead and is not suitable for production, but it is mandatory in CI. Mutexes, channels, and atomics all eliminate races.
 </Callout>

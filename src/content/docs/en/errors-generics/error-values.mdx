@@ -126,6 +126,28 @@ func main() {
 
 <Playground code={errorValuesCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| error interface (1 method) | easy to implement, composable | no built-in stack trace |
+| errors.Is() | matches a sentinel at any depth in the chain | the error must be wrapped correctly with %w first |
+| errors.As() | extracts the concrete error type along with its fields | the target must be a pointer to the error's type (`&ve` when `ve *VErr`) — otherwise it panics at runtime |
+| sentinel errors | easy to compare, self-documenting | become part of the public API — hard to rename later |
+
+## Common Misconceptions
+
+- **returning a nil error always means the function succeeded** — if the caller discards the error with `_` by mistake, a real error is silently ignored.
+- **errors.New() and fmt.Errorf() are the same thing** — fmt.Errorf with `%w` can wrap an error chain; errors.New cannot.
+- **error messages should be capitalized** — the Go convention is the opposite: error messages are lowercase with no trailing punctuation, e.g. `"not found"`, not `"Not found."`
+- **panic is better than returning an error for critical failures** — use panic only for programmer errors that should never happen, not for expected failures.
+
+> 💡 Real-world example
+>
+> **net/http**: `http.ErrServerClosed` is a sentinel error for graceful shutdown — callers check it with `errors.Is(err, http.ErrServerClosed)`.
+>
+> **database/sql**: `sql.ErrNoRows` is a sentinel shared by every Go database driver.
+
 <Callout title="Errors are ordinary values">
 In Go, an error is just a value like any other. There is no special syntax to throw or catch it. Returning `nil` means success; returning a non-nil error means failure. This makes error handling explicit, composable, and easy to reason about — every function call site is self-documenting about what can go wrong.
 </Callout>

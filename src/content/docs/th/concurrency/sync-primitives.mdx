@@ -64,7 +64,7 @@ Package `sync/atomic` มี lock-free operations บน integer และ point
 ```go
 var wg sync.WaitGroup
 for _, url := range urls {
-    wg.Go(func() { fetch(url) })   // url เป็นของแต่ละ iteration ตั้งแต่ Go 1.22 ไม่ต้อง capture เอง
+    wg.Go(func() { fetch(url) })   // per-iteration url since Go 1.22, no capture dance
 }
 wg.Wait()
 ```

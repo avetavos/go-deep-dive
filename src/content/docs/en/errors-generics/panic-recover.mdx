@@ -128,6 +128,28 @@ func main() {
 
 <Playground code={panicRecoverCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| panic | aborts immediately when an invariant is violated | crashes the whole program if it is not recovered |
+| recover in defer | stops panic propagation, lets you convert it to an error | must be called directly inside a deferred function |
+| panic for programmer errors | makes clear it's a bug, not an expected error | hard to test, hard to trace across goroutines |
+| recover in a server handler | keeps one bad request from crashing the whole server | can hide bugs that should be fixed, if overused |
+
+## Common Misconceptions
+
+- **panic is an exception that should be used for error handling** — panic is only for programmer errors (nil pointer, out of bounds, invariant violation).
+- **recover can catch a panic anywhere** — recover only works inside a deferred function called directly by the panicking goroutine.
+- **panic propagates across goroutines** — panic never crosses a goroutine boundary — an unrecovered panic in a goroutine crashes the whole program.
+- **defer doesn't run during a panic** — defer always runs, including during panic stack unwinding — that is exactly why recover has to live inside a defer.
+
+> 💡 Real-world example
+>
+> **net/http**: the server recovers a panic that happens in a handler immediately, logs the stack trace, and **closes the connection** (it does not write a 500 response — the connection is simply cut); to close it silently without logging, panic with the value `http.ErrAbortHandler`.
+>
+> **encoding/json**: internal panics are recovered and converted into a returned error before they reach the public API.
+
 <Callout title="Do not use panic for ordinary errors">
 Panic is for programmer errors and impossible states — things that should never happen in a correctly written program. For any error a caller might reasonably expect (missing record, bad input, network failure), return `(T, error)`. Library code should especially avoid panicking on bad user input; convert panics to errors at package boundaries when needed.
 </Callout>

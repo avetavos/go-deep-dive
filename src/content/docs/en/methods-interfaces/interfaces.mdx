@@ -117,6 +117,57 @@ func main() {
 
 <Playground code={interfacesCode} />
 
+## Runtime Behavior
+
+```text
+an interface value is 2 words:
+
+iface
+ ├─ *itab  →  ┌──────────────────────┐
+ │            │ type: Circle         │
+ │            │ methods: [Area,      │
+ │            │          Perimeter]  │
+ │            └──────────────────────┘
+ └─ data   →  Circle{Radius: 5}
+
+dynamic dispatch:
+  shape.Area()
+    ↓
+  itab.fun[0](data)  ← indirect call
+    ↓
+  Circle.Area(data)
+```
+
+You can check that a type satisfies an interface at compile time, without ever creating a value, using a blank assignment:
+
+```go
+var _ Shape = (*Circle)(nil)
+```
+
+This line only compiles if `*Circle` has every method `Shape` requires. It costs nothing at runtime and catches a missing or misspelled method the moment you write it, instead of at the first call site.
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Implicit satisfaction | Decoupled, no import dependency | Harder to discover which type implements which interface |
+| Small interface (1–2 methods) | Composable, easy to implement | May need several interfaces together |
+| `any` / empty interface | Accepts any type | Gives up type safety entirely |
+| Dynamic dispatch | Flexibility | Real cost: an indirect call (~1–3 ns), lost inlining, and the value may escape to the heap when boxed |
+
+## Common Misconceptions
+
+- **Interfaces are free.** An interface adds one layer of indirection and a dynamic-dispatch cost.
+- **A nil interface and an interface holding a nil pointer are the same thing.** A nil interface is `(nil, nil)`; an interface holding a nil pointer is `(*T, nil)` — the two are not equal.
+- **The more methods an interface has, the better.** The Go proverb says the opposite: "the bigger the interface, the weaker the abstraction."
+- **Implicit satisfaction means duck typing.** Go checks interface satisfaction at compile time, not at runtime.
+
+> 💡 Real-world example
+>
+> `io.Reader` (one method): `http.Request.Body`, `os.File`, `bytes.Buffer`, and `strings.Reader` all implement it — composable across the ecosystem with zero import dependency between them.
+>
+> Kubernetes' `runtime.Object` interface (`k8s.io/apimachinery/pkg/runtime`) lets a single generic controller work with every Kubernetes API resource — decoupling through a small interface.
+
 <Callout title="Interfaces are satisfied implicitly">
 Neither `Circle` nor `Rect` ever mentions `Shape`. They satisfy it because they have `Area()` and `Perimeter()` with the right signatures. This means you can define an interface *after* the types that satisfy it — the types do not need to change at all. Retroactive interface satisfaction is one of Go's most powerful refactoring tools.
 </Callout>

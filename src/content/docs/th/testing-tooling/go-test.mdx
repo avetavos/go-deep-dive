@@ -14,7 +14,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 test runner ของ Go ค้นหา tests ผ่านกฎ 2 ข้อที่บังคับใช้โดย toolchain:
 
 1. **ชื่อไฟล์** ลงท้ายด้วย `_test.go` — compiler จะไม่รวมไฟล์เหล่านี้ใน build ปกติ
-2. **ชื่อฟังก์ชัน** ขึ้นต้นด้วย `Test` ตามด้วยตัวพิมพ์ใหญ่ — `TestAdd`, `TestParseURL` เป็นต้น
+2. **ชื่อ function** ขึ้นต้นด้วย `Test` ตามด้วยตัวพิมพ์ใหญ่ — `TestAdd`, `TestParseURL` เป็นต้น
 
 ไฟล์ test ขั้นต่ำสำหรับ source file `math.go` อยู่ใน **package เดียวกัน** และ directory เดียวกัน:
 
@@ -45,7 +45,7 @@ go test -run TestAdd   # รันเฉพาะ tests ที่ชื่อต
 
 ทั้งคู่บันทึกความล้มเหลว แต่ต่างกันตรงที่ test จะหยุดหรือดำเนินต่อ:
 
-| ฟังก์ชัน | บันทึกความล้มเหลว | หยุด test? |
+| Function | บันทึกความล้มเหลว | หยุด test? |
 |----------|--------------|-------------|
 | `t.Errorf` | ใช่ | ไม่ — test ดำเนินต่อ |
 | `t.Fatalf` | ใช่ | ใช่ — test หยุดทันที |
@@ -64,7 +64,7 @@ func TestDivide(t *testing.T) {
 
 ## Table-driven tests ด้วย t.Run
 
-รูปแบบ idiomatic ของ Go สำหรับการทดสอบ input หลายค่ากับฟังก์ชันเดียวกันคือ **table-driven test**: slice ของ `struct` cases ที่วนซ้ำด้วย `t.Run` แต่ละ sub-test มีชื่อ, error message, และ — เมื่อใช้ `-v` — บรรทัดผลลัพธ์เป็นของตัวเอง
+รูปแบบ idiomatic ของ Go สำหรับการทดสอบ input หลายค่ากับ function เดียวกันคือ **table-driven test**: slice ของ `struct` cases ที่วนซ้ำด้วย `t.Run` แต่ละ sub-test มีชื่อ, error message, และ — เมื่อใช้ `-v` — บรรทัดผลลัพธ์เป็นของตัวเอง
 
 ```go
 // fibonacci_test.go
@@ -108,10 +108,10 @@ go test -v -run TestFibonacci ./...
 
 ## ทดสอบโค้ด concurrent ด้วย testing/synctest (Go 1.25+)
 
-test ที่มี goroutine, timer หรือ timeout เคยต้องใช้ sleep จริงและมักจะ flaky `testing/synctest` รันฟังก์ชันใน *bubble* ที่เวลาเป็นแบบ virtual: `time.Sleep` และ timer เดินหน้าทันทีเมื่อ goroutine ทุกตัวใน bubble block อยู่ และ `synctest.Wait()` จะ block จนกว่าทุกตัวจะ block
+test ที่มี goroutine, timer หรือ timeout เคยต้องใช้ sleep จริงและมักจะ flaky `testing/synctest` รัน function ใน *bubble* ที่เวลาเป็นแบบ virtual: `time.Sleep` และ timer เดินหน้าทันทีเมื่อ goroutine ทุกตัวใน bubble block อยู่ และ `synctest.Wait()` จะ block จนกว่าทุกตัวจะ block
 
 ```go
-// cache_test.go — เป็น test file; รันด้วย: go test ./...
+// cache_test.go — a test file; run it with: go test ./...
 package cache_test
 
 import (
@@ -182,7 +182,7 @@ go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
 `go test -race` เปลี่ยน coverage mode เป็น `-covermode=atomic` ให้อัตโนมัติ — `go help testflag` ระบุว่าค่า default คือ `set` เว้นแต่เปิด `-race` ซึ่งจะกลายเป็น `atomic` การใส่ `-covermode=atomic` เองจึงไม่จำเป็น เพียงแต่ทำให้อ่านชัดขึ้น
 
-`go test` ยังรัน `go vet` ชุดย่อยเล็ก ๆ ก่อนทุกครั้ง ตั้งแต่ Go 1.27 ชุดนั้นรวม `stdversion` ที่ทำให้ build fail เมื่อคุณเรียก API ของ standard library ที่ใหม่กว่าบรรทัด `go` ใน `go.mod` — module ที่ระบุ `go 1.25` จึงแอบพึ่งฟังก์ชันของ 1.27 ไม่ได้
+`go test` ยังรัน `go vet` ชุดย่อยเล็ก ๆ ก่อนทุกครั้ง ตั้งแต่ Go 1.27 ชุดนั้นรวม `stdversion` ที่ทำให้ build fail เมื่อคุณเรียก API ของ standard library ที่ใหม่กว่าบรรทัด `go` ใน `go.mod` — module ที่ระบุ `go 1.25` จึงแอบพึ่ง function ของ 1.27 ไม่ได้
 
 
 ## ข้อแลกเปลี่ยน

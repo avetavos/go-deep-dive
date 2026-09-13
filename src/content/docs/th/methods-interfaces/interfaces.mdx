@@ -56,17 +56,17 @@ v = "hello"
 v = []int{1, 2, 3}
 ```
 
-ใช้ `any` อย่างประหยัด — เพราะสละ type safety กรณีใช้งานปกติ: generic containers (ก่อนที่ Go จะมี generics), JSON unmarshalling รูปร่างที่ไม่รู้จัก, และฟังก์ชัน logging แบบ variadic
+ใช้ `any` อย่างประหยัด — เพราะสละ type safety กรณีใช้งานปกติ: generic containers (ก่อนที่ Go จะมี generics), JSON unmarshalling รูปร่างที่ไม่รู้จัก, และ function logging แบบ variadic
 
 ## Accept interfaces, return structs
 
 แนวทาง Go ที่ idiomatic:
 
 - **Function parameters** ควรเป็น interfaces — รับ type กว้างที่สุดที่ครอบคลุมสิ่งที่คุณเรียกจริง
-- **Return values** ควรเป็น concrete structs — ผู้เรียกได้รับ API เต็มของ type จริง; พวกเขา narrow เองได้
+- **Return values** ควรเป็น concrete structs — caller ได้รับ API เต็มของ type จริง; พวกเขา narrow เองได้
 
 ```go
-// ดี: รับ interface, คืน concrete type
+// Good: accepts an interface, returns a concrete type
 func NewReader(rd io.Reader) *bufio.Reader { ... }
 ```
 
@@ -138,6 +138,14 @@ dynamic dispatch:
   Circle.Area(data)
 ```
 
+คุณตรวจสอบว่า type หนึ่งตอบสนอง interface ได้ตั้งแต่ compile time โดยไม่ต้องสร้าง value เลย ด้วย blank assignment:
+
+```go
+var _ Shape = (*Circle)(nil)
+```
+
+บรรทัดนี้ compile ผ่านก็ต่อเมื่อ `*Circle` มีทุก method ที่ `Shape` ต้องการ ไม่มีต้นทุนตอน runtime และจับ method ที่ขาดหรือสะกดผิดได้ทันทีตอนเขียนโค้ด แทนที่จะไปเจอตอนเรียกใช้ครั้งแรก
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -158,7 +166,7 @@ dynamic dispatch:
 >
 > **io.Reader** (1 method): http.Body, os.File, bytes.Buffer, strings.Reader ล้วน implement — composable ทั่ว ecosystem โดยไม่มี import dependency
 >
-> **Kubernetes** ใช้ runtime.Object interface ให้ทุก Kubernetes resource ทำงานกับ generic controller ได้ — decoupling ผ่าน small interface
+> **Kubernetes** ใช้ interface `runtime.Object` (`k8s.io/apimachinery/pkg/runtime`) ให้ทุก Kubernetes resource ทำงานกับ generic controller ได้ — decoupling ผ่าน small interface
 
 <Callout title="Interfaces ตอบสนองโดยนัย">
 ทั้ง `Circle` และ `Rect` ไม่เคยกล่าวถึง `Shape` ทั้งคู่ตอบสนองเพราะมี `Area()` และ `Perimeter()` ที่มี signatures ถูกต้อง นั่นหมายความว่าคุณสามารถนิยาม interface *หลัง* types ที่ตอบสนอง interface นั้น — types เหล่านั้นไม่ต้องเปลี่ยนเลย การตอบสนอง interface แบบย้อนหลังเป็นหนึ่งในเครื่องมือ refactoring ที่ทรงพลังที่สุดของ Go
@@ -188,7 +196,7 @@ export const quizInterfaces = [
   {
     q: "`any` หมายถึงอะไรใน Go 1.18+?",
     options: [
-      "Union type ที่เก็บได้สองประเภทเท่านั้น",
+      "Union type ที่เก็บได้สอง type เท่านั้น",
       "Alias ของ `interface{}` — interface ที่ไม่มี methods",
       "Constraint ที่ใช้เฉพาะใน generic type parameters",
       "Pointer ไปยัง unknown type"
@@ -196,7 +204,7 @@ export const quizInterfaces = [
     answer: 1
   },
   {
-    q: "ฟังก์ชันของคุณต้องการเขียน bytes ควรใช้ parameter type ใดที่ idiomatic ที่สุด?",
+    q: "function ของคุณต้องการเขียน bytes ควรใช้ parameter type ใดที่ idiomatic ที่สุด?",
     options: [
       "`*os.File` — writer ที่พบบ่อยที่สุด",
       "`*bytes.Buffer` — in-memory writer ที่เร็วที่สุด",

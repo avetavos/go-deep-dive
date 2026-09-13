@@ -83,7 +83,7 @@ func main() {
 
 ## ข้อแลกเปลี่ยน
 
-| ประเภท | ประโยชน์ | ต้นทุน |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |------|---------|------|
 | value type (struct, array) | predictable behavior, ไม่มี aliasing | copy cost สำหรับ type ขนาดใหญ่ |
 | reference-like type (slice, map) | แชร์ data โดยไม่ต้อง copy | shared mutation — goroutine หนึ่งแก้ไขอาจกระทบอีกตัว |

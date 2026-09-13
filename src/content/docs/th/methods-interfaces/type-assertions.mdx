@@ -18,7 +18,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ```go
 var s Shape = Circle{Radius: 5}
-c := s.(Circle)   // assert ว่า s เก็บ Circle
+c := s.(Circle)   // asserts that s holds a Circle
 fmt.Println(c.Radius)
 ```
 
@@ -125,7 +125,7 @@ func main() {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **encoding/json**: Unmarshal ใช้ type assertion เพื่อ handle `[]any` และ `map[string]interface\{\}` เมื่อ JSON structure ไม่รู้ล่วงหน้า
+> **encoding/json**: Unmarshal ใช้ type assertion เพื่อ handle `[]any` และ `map[string]any` เมื่อ JSON structure ไม่รู้ล่วงหน้า
 >
 > **net/http**: middleware ตรวจว่า ResponseWriter implement http.Flusher หรือ http.Hijacker ด้วย type assertion เพื่อ enable streaming หรือ WebSocket upgrade
 

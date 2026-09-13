@@ -145,6 +145,38 @@ func main() {
 
 <Playground code={slicesCode} />
 
+## Mental Model
+
+```text
+slice header (3 words, 24 bytes on 64-bit)
+ ├─ pointer ──────────────→ [0][1][2][3][4]  ← backing array (cap=5)
+ ├─ len: 3                    ↑
+ └─ cap: 5                 visible range (len=3)
+
+append within cap:
+ s = append(s, 4)    →  len: 4, cap: 5  (no new allocation)
+
+append past cap:
+ s = append(s, 5, 6) →  Go allocates a new backing array (~2x cap)
+                         the old backing array stays alive if another slice still points at it
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| slice header is a value (24 bytes) | cheap to pass to a function | mutation through a copied slice still hits the original backing array |
+| dynamic append | grows automatically | reallocation past cap — an O(n) copy |
+| slicing `[a:b]` | zero-copy subview | shared backing array — can prevent GC of a large array |
+| `make([]T, len, cap)` | pre-allocate to avoid realloc | you have to estimate cap up front |
+
+## Common Misconceptions
+
+- **A slice and an array are the same thing** — a slice is a (pointer, len, cap) header pointing at an array; an array is a fixed-size value type.
+- **`append` is always safe and mutates in place** — `append` may return a slice pointing at a brand-new backing array — always assign the result back.
+- **`len` and `cap` mean the same thing** — `len` is how many elements are reachable right now; `cap` is the maximum size before reallocation.
+- **`copy(dst, src)` does a deep copy** — `copy` transfers values, but if an element is a pointer or interface it still shares the same underlying data.
+
 <Callout title="append may or may not allocate; slices share backing arrays">
 Two important rules to internalize. First: `append` returns a new slice header — if growth caused a reallocation you now have a completely new backing array. Never ignore the return value. Second: `a[low:high]` does not copy data — both slices share the same backing array. A write through one is visible through the other. Use `copy` when you need a truly independent slice.
 </Callout>

@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Goroutine คืออะไร?
 
-**Goroutine** คือฟังก์ชันที่ทำงานพร้อมกันกับ goroutines อื่น ๆ ในพื้นที่ address เดียวกัน คุณสร้างได้ด้วย keyword เดียว:
+**Goroutine** คือ function ที่ทำงานพร้อมกันกับ goroutines อื่น ๆ ในพื้นที่ address เดียวกัน คุณสร้างได้ด้วย keyword เดียว:
 
 ```go
 go f(args)
@@ -104,10 +104,10 @@ func main() {
 - **Goroutine leak profile (GA ใน Go 1.27)** — `runtime/pprof` มี profile `goroutineleak` (เสิร์ฟที่ `/debug/pprof/goroutineleak` ผ่าน `net/http/pprof` ด้วย) ที่ใช้ reachability analysis ของ GC หา goroutine ที่ block บน channel หรือ lock ซึ่งไม่มีใครปลดได้อีกแล้ว traceback ของ module `go 1.27+` ยังพิมพ์ goroutine label ของ `runtime/pprof` ทำให้ระบุที่มาของ goroutine ที่รั่วง่ายขึ้น
 
 ```go
-// ใน server จริง ที่ mount pprof handler ไว้ที่ :6060
+// in a real server, with the pprof handler mounted on :6060
 import _ "net/http/pprof"
 
-// จากนั้น เมื่อ mount pprof handler ไว้ที่ :6060
+// then, with the pprof handler mounted on :6060
 // curl "localhost:6060/debug/pprof/goroutineleak?debug=1"
 ```
 

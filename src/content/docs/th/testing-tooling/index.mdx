@@ -33,9 +33,9 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 3. **modules** — การจัดการ dependency ด้วย `go mod init`, `go.mod`, `go.sum`, และ `go get`
 4. **go-tooling** — คำสั่งประจำวัน: `go run`, `go build`, `go fmt`, `go vet`, และ `go doc`
 
-## ฟังก์ชันที่คุ้มค่าแก่การทดสอบ
+## Function ที่คุ้มค่าแก่การทดสอบ
 
-วิธีที่ดีที่สุดในการทำความเข้าใจ testing tools ของ Go คือเริ่มต้นด้วย pure function — ฟังก์ชันที่ไม่มี side effect ไม่มี I/O มีแค่ input และ output Playground ด้านล่างรัน `Fibonacci` และ `IsPrime` จาก `main` ในบทเรียนถัดไปคุณจะเขียนไฟล์ `_test.go` สำหรับฟังก์ชันแบบนี้โดยตรง
+วิธีที่ดีที่สุดในการทำความเข้าใจ testing tools ของ Go คือเริ่มต้นด้วย pure function — function ที่ไม่มี side effect ไม่มี I/O มีแค่ input และ output Playground ด้านล่างรัน `Fibonacci` และ `IsPrime` จาก `main` ในบทเรียนถัดไปคุณจะเขียนไฟล์ `_test.go` สำหรับ function แบบนี้โดยตรง
 
 export const indexCode = `package main
 
@@ -83,7 +83,7 @@ func main() {
 
 ## ข้อแลกเปลี่ยน
 
-| Approach | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |----------|---------|------|
 | built-in testing package | ไม่ต้อง install, standard API ทุก Go project | ไม่มี assertion library — ต้องเขียน `if got != want` เอง |
 | table-driven tests | test หลาย case ใน 1 function, เพิ่ม case ได้ง่าย | ถ้า table ยาวมาก อ่านยาก |
@@ -97,7 +97,7 @@ func main() {
 - **`go test` ช้า** — `go test` cache ผลลัพธ์ — ถ้าไม่มีไฟล์เปลี่ยน จะ return cached result ทันที
 
 <Callout title="ทำไม pure function จึงเป็นจุดเริ่มต้นที่ดีที่สุดสำหรับ testing">
-Pure function — ฟังก์ชันที่ขึ้นอยู่กับ argument เท่านั้นและคืนค่าเดิมเสมอสำหรับ input เดิม — คือจุดเริ่มต้นที่เหมาะที่สุดสำหรับ testing ไม่มี database ที่ต้อง mock ไม่มี HTTP server ที่ต้องตั้งค่า และไม่มี shared state ที่ต้อง reset ระหว่าง runs `Fibonacci` และ `IsPrime` ทั้งคู่มีคุณสมบัตินี้: เรียกพันครั้งด้วย input เดิมก็ได้ผลลัพธ์เดิม บทเรียนถัดไปแสดงให้เห็นว่า `testing` package ของ Go ทำให้การเขียน test เหล่านี้แทบไม่ต้องใช้ความพยายามเลย
+Pure function — function ที่ขึ้นอยู่กับ argument เท่านั้นและคืนค่าเดิมเสมอสำหรับ input เดิม — คือจุดเริ่มต้นที่เหมาะที่สุดสำหรับ testing ไม่มี database ที่ต้อง mock ไม่มี HTTP server ที่ต้องตั้งค่า และไม่มี shared state ที่ต้อง reset ระหว่าง runs `Fibonacci` และ `IsPrime` ทั้งคู่มีคุณสมบัตินี้: เรียกพันครั้งด้วย input เดิมก็ได้ผลลัพธ์เดิม บทเรียนถัดไปแสดงให้เห็นว่า `testing` package ของ Go ทำให้การเขียน test เหล่านี้แทบไม่ต้องใช้ความพยายามเลย
 </Callout>
 
 export const quizIndex = [
@@ -122,7 +122,7 @@ export const quizIndex = [
     answer: 2
   },
   {
-    q: "อะไรทำให้ฟังก์ชันเป็น candidate ที่ดีสำหรับ unit test แรก?",
+    q: "อะไรทำให้ function เป็น candidate ที่ดีสำหรับ unit test แรก?",
     options: [
       "เปิด database connection",
       "เป็น pure — ขึ้นอยู่กับ argument เท่านั้นโดยไม่มี side effect",

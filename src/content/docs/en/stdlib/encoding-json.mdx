@@ -255,6 +255,28 @@ for {
 Rule of thumb for 2026: keep v1 for existing code and for wire formats that tolerate sloppy input; start new services on v2 so malformed JSON fails loudly at the boundary.
 
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| json.Marshal/Unmarshal | Simple, no schema required | Reflection-based — 2-5x slower than a code-gen approach |
+| Struct tags (`json:"name"`) | Control field names, omitempty | Checked only at runtime — no compile-time check that a tag is well-formed |
+| json.Decoder (streaming) | Decode large or streamed JSON without loading it all into memory | A more complex API than Unmarshal |
+| omitempty | Keeps zero values out of the JSON | 0, false, and "" all count as empty — this can surprise you |
+
+## Common Misconceptions
+
+- **json.Marshal/Unmarshal are goroutine-safe** — they are; but each `json.Decoder`/`Encoder` instance is not — never share one across goroutines.
+- **Unexported fields get marshaled** — they do not; `encoding/json` ignores unexported fields regardless of any tag you write on them.
+- **omitempty treats a pointer the same as its pointee** — `omitempty` on a `*T` checks the pointer itself: nil is omitted, non-nil is included, even when the value it points to is zero.
+- **An `any` field in a struct always marshals as null** — it marshals according to the concrete type stored in the interface at runtime.
+
+> 💡 Real-world example
+>
+> **Kubernetes API objects**: every Kubernetes resource (Pod, Deployment, Service) marshals and unmarshals through `encoding/json` — struct tags control every JSON key.
+>
+> **Go REST APIs**: `json.NewDecoder(r.Body).Decode(&req)` is the standard pattern nearly every Go API server uses to parse a request body.
+
 <Callout title="Only exported fields are marshaled; tags control the JSON key names">
 Fields that start with a lowercase letter are unexported and are completely invisible to `encoding/json` — they will never appear in the output and will never be populated during unmarshaling, regardless of what tag you write on them. Always make fields you want to serialize start with an uppercase letter. The `json:"name"` tag then controls the key name in the JSON output independently of the Go field name, so you can follow Go naming conventions (`UserID`) while producing clean JSON (`"user_id"`).
 </Callout>

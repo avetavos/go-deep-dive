@@ -248,6 +248,26 @@ func main() {
 
 <Playground code={genericsCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| type parameters | code reuse without `interface{}` | more compile time, more complex syntax |
+| type constraints | compile-time type safety | you must define the constraint interface before using it |
+| comparable constraint | lets you use `==` on a generic type | no support for deep equality (slice, map) |
+| ~T (tilde/approximation) | constraint covers named types too, e.g. `type MyID int` | harder to read for beginners |
+
+## Common Misconceptions
+
+- **generics bloat the binary a lot** — Go uses GC-shape stenciling: types that share the same pointer/interface shape share a single instantiation and pass type info through a dictionary at runtime; it does not expand like C++ templates.
+- **a generic function is always faster than an interface** — because pointer/interface shapes share an instantiation through a dictionary, generics can even be **slower** than an interface in that case; value types (`int`, structs) get their own dedicated code per type, so they stay fast and genuinely avoid boxing.
+- **generics are like C++ templates** — Go generics check constraints at definition time, not at instantiation — the error messages are far better.
+- **you should always prefer generics over interfaces** — interfaces are the better fit for runtime polymorphism; generics are the better fit for compile-time type-safe algorithms.
+
+> 💡 Real-world example
+>
+> **slices**: the generic `slices.Sort[S ~[]E, E cmp.Ordered](s S)` — a type-safe sort that works on any ordered type without casting.
+
 <Callout title="Generics add type safety without interface{} + assertions">
 Before generics, a generic container or algorithm required `interface{}` parameters and runtime type assertions — errors only surfaced at runtime. With type parameters, the compiler verifies type correctness at compile time. Use generics when you find yourself writing the same algorithm for two or more types, or when you need a container that preserves the element type.
 </Callout>

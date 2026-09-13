@@ -13,13 +13,13 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 **benchmark** วัดว่าโค้ดใช้เวลานานเท่าไร Go benchmarks อยู่ในไฟล์ `_test.go` เคียงข้าง unit tests และรันด้วยคำสั่ง `go test` เดียวกัน — เพียงแต่ใช้ flags ต่างกัน
 
-ฟังก์ชัน benchmark มี signature ดังนี้:
+function benchmark มี signature ดังนี้:
 
 ```go
 func BenchmarkXxx(b *testing.B) {
-    // ... setup code (ไม่ถูกวัด) ...
-    for b.Loop() {   // Go 1.24+ รูปแบบที่แนะนำ
-        // โค้ดที่ต้องการวัด
+    // ... setup code (not measured) ...
+    for b.Loop() {   // Go 1.24+ preferred form
+        // code under measurement
     }
 }
 ```
@@ -31,14 +31,14 @@ func BenchmarkXxx(b *testing.B) {
 Go 1.24 แนะนำ `b.Loop()` เป็นทางเลือกที่ดีกว่า classic `b.N` counter loop:
 
 ```go
-// รูปแบบ classic — ใช้ได้กับ Go ทุกเวอร์ชัน
+// Classic form — works in all Go versions
 func BenchmarkFibClassic(b *testing.B) {
     for i := 0; i < b.N; i++ {
         Fibonacci(20)
     }
 }
 
-// รูปแบบ modern — Go 1.24+
+// Modern form — Go 1.24+
 func BenchmarkFib(b *testing.B) {
     for b.Loop() {
         Fibonacci(20)
@@ -53,13 +53,13 @@ func BenchmarkFib(b *testing.B) {
 หาก benchmark ต้องการ setup ที่ใช้เวลามาก (เปิดไฟล์, สร้าง slice ขนาดใหญ่) ให้ทำก่อน loop รูปแบบ classic `b.N` ต้องเรียก `b.ResetTimer()` เองเพื่อไม่ให้เวลา setup ถูกนับ:
 
 ```go
-// รูปแบบ classic b.N — ต้องเรียก ResetTimer เอง
+// Classic b.N form — needs an explicit ResetTimer
 func BenchmarkIsPrimeListClassic(b *testing.B) {
     numbers := make([]int, 1000)
     for i := range numbers {
         numbers[i] = i + 2
     }
-    b.ResetTimer() // เริ่มวัดจากจุดนี้
+    b.ResetTimer() // start measuring from here
 
     for i := 0; i < b.N; i++ {
         for _, n := range numbers {
@@ -99,7 +99,7 @@ go test -bench=. -benchmem ./...
 # รันเฉพาะ benchmarks ที่ชื่อตรงกับ pattern
 go test -bench=BenchmarkFib -benchmem ./...
 
-# รัน benchmarks อย่างน้อย 5 วินาทีต่อฟังก์ชัน
+# รัน benchmarks อย่างน้อย 5 วินาทีต่อ function
 go test -bench=. -benchtime=5s ./...
 ```
 
@@ -120,7 +120,7 @@ BenchmarkFib-11           58771    20169 ns/op    0 B/op    0 allocs/op
 | `0 B/op` | bytes ที่ allocate ต่อ operation (ต้องใช้ `-benchmem`) |
 | `0 allocs/op` | heap allocations ต่อ operation (ต้องใช้ `-benchmem`) |
 
-`Fibonacci` ไม่ allocate อะไรเลยเพราะใช้แค่ stack variables — นั่นคือเหตุผลที่ทั้งสองคอลัมน์ alloc เป็นศูนย์ทั้งสองแถว ฟังก์ชันที่สร้าง `[]string` จะแสดงค่าที่ไม่ใช่ศูนย์
+`Fibonacci` ไม่ allocate อะไรเลยเพราะใช้แค่ stack variables — นั่นคือเหตุผลที่ทั้งสองคอลัมน์ alloc เป็นศูนย์ทั้งสองแถว function ที่สร้าง `[]string` จะแสดงค่าที่ไม่ใช่ศูนย์
 
 ## ข้อแลกเปลี่ยน
 
@@ -139,7 +139,7 @@ BenchmarkFib-11           58771    20169 ns/op    0 B/op    0 allocs/op
 - **benchmark สำหรับ micro-optimization เท่านั้น** — benchmark ช่วย validate architectural decision ได้ด้วย เช่น channel vs mutex, slice vs map
 
 <Callout title="ให้ framework เป็นตัวกำหนด iterations — อย่ากำหนดเอง">
-benchmark framework ควบคุมจำนวน iteration (`b.N` เบื้องหลัง) เพื่อให้ได้การวัดที่เสถียรทางสถิติ หากคุณกำหนด `b.N` โดยตรงหรือใช้ loop count ที่ตายตัว ผลลัพธ์จะไม่น่าเชื่อถือ นอกจากนี้ให้ใช้ `-benchmem` เป็นนิสัย: แม้แต่ฟังก์ชันที่ดูเหมือนไม่ allocate บางครั้งก็ทำให้คุณประหลาดใจ และการตรวจพบ heap allocations ที่ไม่จำเป็นตั้งแต่เนิ่นๆ ถูกกว่าการ profile ใน production มาก
+benchmark framework ควบคุมจำนวน iteration (`b.N` เบื้องหลัง) เพื่อให้ได้การวัดที่เสถียรทางสถิติ หากคุณกำหนด `b.N` โดยตรงหรือใช้ loop count ที่ตายตัว ผลลัพธ์จะไม่น่าเชื่อถือ นอกจากนี้ให้ใช้ `-benchmem` เป็นนิสัย: แม้แต่ function ที่ดูเหมือนไม่ allocate บางครั้งก็ทำให้คุณประหลาดใจ และการตรวจพบ heap allocations ที่ไม่จำเป็นตั้งแต่เนิ่นๆ ถูกกว่าการ profile ใน production มาก
 </Callout>
 
 export const quizBenchmarks = [

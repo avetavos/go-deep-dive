@@ -15,10 +15,10 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 Map คือ hash table ที่ map key ชนิด `K` ไปยัง value ชนิด `V` สร้างด้วย `make` หรือ composite literal:
 
 ```go
-// make — เหมาะเมื่อเพิ่ม entry แบบทีละตัว
+// make — preferred when you add entries incrementally
 scores := make(map[string]int)
 
-// composite literal — เหมาะเมื่อรู้ entry ล่วงหน้า
+// composite literal — preferred when entries are known upfront
 scores := map[string]int{
     "Alice": 95,
     "Bob":   87,
@@ -32,7 +32,7 @@ Key type ต้องเป็น **comparable** (รองรับ `==`) type 
 ```go
 scores["Charlie"] = 72        // set
 fmt.Println(scores["Alice"])  // get → 95
-delete(scores, "Bob")         // delete (ไม่มีผลถ้า key ไม่มีอยู่)
+delete(scores, "Bob")         // delete (no-op if key absent)
 ```
 
 ## Zero value สำหรับ key ที่ไม่มีอยู่
@@ -40,7 +40,7 @@ delete(scores, "Bob")         // delete (ไม่มีผลถ้า key ไ�
 การอ่าน key ที่ไม่มีอยู่ **ไม่ panic** เลย — จะคืน zero value ของ value type:
 
 ```go
-fmt.Println(scores["Dave"]) // 0 — ไม่ใช่ panic
+fmt.Println(scores["Dave"]) // 0 — not a panic
 ```
 
 แม้จะสะดวก แต่ก็ซ่อนบั๊กได้: คุณไม่รู้ว่า key map ไปที่ `0` หรือไม่เคยถูก set ใช้ comma-ok idiom เพื่อแยกแยะ
@@ -64,7 +64,7 @@ if !ok {
 a := map[string]int{"x": 1}
 b := a
 b["x"] = 99
-fmt.Println(a["x"]) // 99 — a และ b แชร์ map เดียวกัน
+fmt.Println(a["x"]) // 99 — a and b share the same map
 ```
 
 ## ลำดับ iteration แบบสุ่ม

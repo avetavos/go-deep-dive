@@ -118,6 +118,22 @@ go build ./...
 
 This four-command pipeline catches formatting drift, static bugs, data races, and compilation errors before code is merged.
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| `go vet` | Catches common mistakes before runtime | Does not cover every semantic bug — pair it with staticcheck |
+| `go build -race` | Catches race conditions in the binary | Binary runs 2-10x slower — not for production builds |
+| `gofmt` (via `go fmt`) | No formatting debates, consistent across the ecosystem | No configuration — you accept the canonical style |
+| `go doc` | Documentation in the terminal, no browser needed | No full-text search — you need to already know the package/function name |
+
+## Common Misconceptions
+
+- **`go fmt` is just a style preference** — gofmt is the de facto standard — most projects enforce it in CI.
+- **`go vet` catches every bug** — `go vet` checks a subset of common mistakes — pair it with staticcheck for production codebases.
+- **`go generate` runs automatically during a build** — `go generate` must be run explicitly; `go build` never triggers it — wire it into a Makefile or CI step yourself.
+- **GOPATH is still required** — Go modules (`go.mod`) fully replaced GOPATH as of Go 1.16.
+
 <Callout title="gofmt ends formatting debates — there is one canonical style">
 Unlike most languages, Go ships a single canonical formatter and every major editor integrates it by default. There are no tabs-vs-spaces arguments, no line-length debates, no style guide to maintain. When gofmt says the code should look a certain way, that is the end of the discussion. This is not a restriction — it is a gift: code review focuses on logic, not aesthetics.
 </Callout>

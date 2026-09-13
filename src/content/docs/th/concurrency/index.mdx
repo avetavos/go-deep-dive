@@ -18,7 +18,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ในทางปฏิบัติหมายความว่า:
 
-- **Goroutines** คือฟังก์ชันที่ทำงานอิสระ ใช้ทรัพยากรน้อยมาก — stack เริ่มต้นเพียงไม่กี่ KB ที่ขยายตัวได้ตามต้องการ — จึงสามารถมีได้หลายแสนตัวที่รันพร้อมกัน
+- **Goroutines** คือ function ที่ทำงานอิสระ ใช้ทรัพยากรน้อยมาก — stack เริ่มต้นเพียงไม่กี่ KB ที่ขยายตัวได้ตามต้องการ — จึงสามารถมีได้หลายแสนตัวที่รันพร้อมกัน
 - **Channels** คือท่อส่งข้อมูลแบบ typed goroutines ส่งค่าเข้า channel และรับค่าจาก channel อีกตัว ทั้งการส่งข้อมูลและการ synchronize เกิดขึ้นในคำสั่งเดียว
 - **Scheduler** จัดสรร goroutines ลงบน OS threads (GOMAXPROCS threads ตามค่าเริ่มต้น หนึ่งตัวต่อ CPU core) คุณไม่ต้องจัดการ threads โดยตรง
 

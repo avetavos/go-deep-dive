@@ -63,6 +63,27 @@ func main() {
 
 <Playground code={indexCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Implicit interface satisfaction | Decoupled code, no import dependency on the interface | Harder to discover which types implement which interface |
+| Value receiver | Cheap to reason about, callable on non-addressable values | Copies the struct on every call |
+| Pointer receiver | Can mutate, no copy | Needs a nil-check, needs an addressable value |
+| Embedding (composition) | Reuses methods/fields without inheriting | No virtual dispatch — polymorphism still needs an interface |
+
+## Common Misconceptions
+
+- **An interface is like an abstract class.** In Go an interface has only method signatures — no implementation, no state.
+- **Embedding is inheritance.** The embedded type has no knowledge of the outer type; there is no override and no virtual dispatch.
+- **A nil interface is always `== nil`.** An interface holding a nil pointer is not itself nil — `(nil, nil)` is not the same as `(*T, nil)`. See [Interfaces](./interfaces).
+
+> 💡 Real-world example
+>
+> The standard library builds on `io.Reader` and `io.Writer` as its core interfaces — `os.File`, `bytes.Buffer`, `net.Conn`, and an HTTP request body all implement the same two methods, so they compose across the whole ecosystem without knowing about each other.
+>
+> Kubernetes' `runtime.Object` interface (`k8s.io/apimachinery/pkg/runtime`) is satisfied by every Kubernetes API resource — a controller written once against `runtime.Object` works with `Pod`, `Deployment`, and `Service` alike.
+
 <Callout title="The key insight">
 `Rectangle` never says `implements Sizer`. It just has a method with the right name and signature. That is all Go needs. If the method set matches, the interface is satisfied — automatically, at compile time.
 </Callout>

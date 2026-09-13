@@ -22,9 +22,9 @@ type error interface {
 
 type ใดก็ตามที่ implement method เดียว — `Error() string` — จะ satisfy interface นี้และสามารถใช้ได้ทุกที่ที่ต้องการ `error` ค่า `nil` เป็น `error` ที่ถูกต้องและหมายถึง "ไม่มี error เกิดขึ้น" โดยสากล ไม่มีอะไรพิเศษเกี่ยวกับ type `error` ในระดับภาษา เป็นแค่ interface ธรรมดาที่ predeclare ไว้ล่วงหน้าเท่านั้น
 
-## การคืนค่า error จากฟังก์ชัน
+## การคืนค่า error จาก function
 
-convention แบบ idiomatic ของ Go คือการคืนค่า `(T, error)` เป็นสองค่าสุดท้ายจากฟังก์ชันที่อาจล้มเหลวได้ caller รับทั้งคู่เสมอและต้องตรวจสอบ error ก่อนที่จะเชื่อถือผลลัพธ์:
+convention แบบ idiomatic ของ Go คือการคืนค่า `(T, error)` เป็นสองค่าสุดท้ายจาก function ที่อาจล้มเหลวได้ caller รับทั้งคู่เสมอและต้องตรวจสอบ error ก่อนที่จะเชื่อถือผลลัพธ์:
 
 ```go
 result, err := riskyOperation()
@@ -80,7 +80,7 @@ Sentinel เหมาะที่สุดสำหรับเงื่อน�
 
 การตรวจสอบ `if err != nil` อย่างชัดเจนอาจดูซ้ำซากในตอนแรก แต่ออกแบบมาอย่างตั้งใจ Go ถือว่าทุกความล้มเหลวเป็นจุดตัดสินใจ: คุณต้องเลือกว่าจะ propagate error, wrap พร้อม context, retry, fallback ไปยังค่า default หรือ log แล้วดำเนินต่อ ภาษาไม่ได้ตัดสินใจแทนคุณ
 
-วินัยนี้ทำให้โค้ดมองเห็นทุก call ที่อาจเกิด error ได้ที่ callsite เมื่ออ่านฟังก์ชัน Go คุณจะเห็นชัดเจนว่า operation ใดที่อาจล้มเหลวได้และ caller ทำอะไรกับแต่ละกรณี — ไม่มีการ propagate แบบ implicit ไม่มีเส้นทาง exception ที่มองไม่เห็น
+วินัยนี้ทำให้โค้ดมองเห็นทุก call ที่อาจเกิด error ได้ที่ callsite เมื่ออ่าน function ของ Go คุณจะเห็นชัดเจนว่า operation ใดที่อาจล้มเหลวได้และ caller ทำอะไรกับแต่ละกรณี — ไม่มีการ propagate แบบ implicit ไม่มีเส้นทาง exception ที่มองไม่เห็น
 
 export const errorValuesCode = `package main
 
@@ -156,7 +156,7 @@ export const quizErrorValues = [
   {
     q: "การคืนค่า nil เป็น error หมายความว่าอะไร?",
     options: [
-      "ฟังก์ชัน panic แล้ว recover",
+      "function panic แล้ว recover",
       "ไม่มี error — การเรียกสำเร็จ",
       "error ถูกละเว้น",
       "caller ควรลองใหม่"
@@ -164,7 +164,7 @@ export const quizErrorValues = [
     answer: 1
   },
   {
-    q: "ฟังก์ชันใดสร้าง error value จาก string คงที่?",
+    q: "function ใดสร้าง error value จาก string คงที่?",
     options: [
       "fmt.Errorf",
       "errors.New",

@@ -108,6 +108,27 @@ func main() {
 
 <Playground code={typeAssertionsCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Comma-ok assertion `v, ok := i.(T)` | Safe, never panics | Must check `ok` every time |
+| Single-value assertion `v := i.(T)` | Concise | Panics if the dynamic type does not match |
+| Type switch | Handles several types clearly | More verbose than a single assertion |
+| `reflect.TypeOf` | Inspects a type at runtime | High overhead — use only when truly needed |
+
+## Common Misconceptions
+
+- **A type assertion is always safe.** Without the comma-ok form, it panics immediately if the type does not match.
+- **A type switch behaves like an ordinary switch.** A type switch tests the interface's dynamic type, not a value.
+- **A type assertion is the same as a type conversion.** A conversion changes the type representation; an assertion checks whether the interface already holds that concrete type.
+
+> 💡 Real-world example
+>
+> `encoding/json`: `Unmarshal` uses type assertions to handle `[]any` and `map[string]any` when the JSON structure is not known in advance.
+>
+> `net/http`: a `ResponseWriter` wrapper checks whether the underlying writer also implements `http.Flusher` or `http.Hijacker` via a type assertion, to enable streaming or a WebSocket upgrade.
+
 <Callout title="A failed single-value assertion panics">
 `x.(T)` without the comma-ok idiom panics immediately if the dynamic type is not `T`. This is a runtime error, not a compile-time error — the compiler cannot know the dynamic type. Always use the comma-ok form `v, ok := x.(T)` when there is any chance the assertion could fail. Reserve the single-value form for code paths where the type is logically guaranteed — and add a comment explaining why.
 </Callout>

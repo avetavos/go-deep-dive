@@ -12,9 +12,9 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ทำไมต้องใช้ Generics?
 
-ก่อน Go 1.18 การเขียนฟังก์ชันที่ทำงานกับหลาย type ต้องการ code ซ้ำหรือใช้ `interface{}` + type assertion ที่ runtime ซึ่งสูญเสีย type safety Generics แก้ปัญหานี้: เขียนครั้งเดียว compiler สร้าง code เฉพาะ type และตรวจสอบการใช้งานที่ compile time
+ก่อน Go 1.18 การเขียน function ที่ทำงานกับหลาย type ต้องการ code ซ้ำหรือใช้ `interface{}` + type assertion ที่ runtime ซึ่งสูญเสีย type safety Generics แก้ปัญหานี้: เขียนครั้งเดียว compiler สร้าง code เฉพาะ type และตรวจสอบการใช้งานที่ compile time
 
-ตัวอย่างเช่น ฟังก์ชัน `Max` ที่ทำงานได้ทั้ง `int` และ `float64` ก่อนหน้านี้ต้องเขียนสองฟังก์ชันที่เหมือนกัน หรือใช้ `interface{}` parameter ที่ยอมรับ type ผิดอย่างเงียบ ๆ ด้วย generics ฟังก์ชันเดียวครอบคลุมทั้งสอง — และ compiler ปฏิเสธทุก call ที่ใช้ type ที่ไม่รองรับ
+ตัวอย่างเช่น function `Max` ที่ทำงานได้ทั้ง `int` และ `float64` ก่อนหน้านี้ต้องเขียนสอง function ที่เหมือนกัน หรือใช้ `interface{}` parameter ที่ยอมรับ type ผิดอย่างเงียบ ๆ ด้วย generics function เดียวครอบคลุมทั้งสอง — และ compiler ปฏิเสธทุก call ที่ใช้ type ที่ไม่รองรับ
 
 ## Type Parameters
 
@@ -35,7 +35,7 @@ func Max[T Number](a, b T) T {
 
 **constraint** คือ interface ที่จำกัดว่า type ใดสามารถแทน type parameter ได้ constraints จะปรากฏหลังชื่อ type parameter ใน list `[T Constraint]`
 
-- **`any`** — constraint ที่กว้างที่สุด; เทียบเท่ากับ `interface{}` อนุญาต type ใดก็ได้ แต่จำกัด operations ที่ทำได้กับค่าของ type `T` (เฉพาะ operations ที่ valid กับทุก type: การ assign, การส่งไปยังฟังก์ชัน เป็นต้น)
+- **`any`** — constraint ที่กว้างที่สุด; เทียบเท่ากับ `interface{}` อนุญาต type ใดก็ได้ แต่จำกัด operations ที่ทำได้กับค่าของ type `T` (เฉพาะ operations ที่ valid กับทุก type: การ assign, การส่งไปยัง function เป็นต้น)
 - **`comparable`** — type ใดก็ตามที่รองรับ `==` และ `!=` ใช้เมื่อ generic function ต้องเปรียบเทียบค่าเพื่อความเท่าเทียม
 
 เขียน **custom constraints** โดยใช้ interface union syntax ได้:
@@ -67,7 +67,7 @@ playground snippet ด้านล่างใช้ local `Number` interface �
 
 ## Generic Types
 
-**struct** ก็สามารถ parameterize ได้เช่นกันเหมือนกับฟังก์ชัน ประกาศ type parameter หลังชื่อ type:
+**struct** ก็สามารถ parameterize ได้เช่นกันเหมือนกับ function ประกาศ type parameter หลังชื่อ type:
 
 ```go
 type Stack[T any] struct {
@@ -279,7 +279,7 @@ export const quizGenerics = [
       "T เป็นตัวแปรชื่อ Number",
       "T เป็น type parameter ที่ต้องตรงกับ constraint Number",
       "T ต้องเป็น type Number เท่านั้น",
-      "Number เป็นฟังก์ชันที่คืน T"
+      "Number เป็น function ที่คืน T"
     ],
     answer: 1
   },

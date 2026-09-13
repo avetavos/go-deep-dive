@@ -1,6 +1,6 @@
 ---
 title: time
-description: 'time.Time, time.Duration, การฟอร์แมตด้วย reference layout, การ parse และการคำนวณ (Add/Sub) โดยใช้เวลาคงที่เพื่อผลลัพธ์ที่แน่นอน'
+description: 'time.Time, time.Duration, การ format ด้วย reference layout, การ parse และการคำนวณ (Add/Sub) โดยใช้เวลาคงที่เพื่อผลลัพธ์ที่แน่นอน'
 sidebar:
   order: 3
 ---
@@ -33,15 +33,15 @@ t := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
 
 ค่าของ `time.Month` (ตั้งแต่ `time.January` ถึง `time.December`) เป็น typed constant แต่ก็สามารถส่ง integer literal (1–12) ได้เพราะสามารถ assign ให้ `time.Month` ได้
 
-## การฟอร์แมต — reference layout
+## การ format — reference layout
 
-Go ใช้ช่วงเวลาอ้างอิงที่เป็นรูปธรรมแทนรหัสฟอร์แมตแบบนามธรรมอย่าง `YYYY-MM-DD` ช่วงเวลาอ้างอิงคือ:
+Go ใช้ช่วงเวลาอ้างอิงที่เป็นรูปธรรมแทนรหัส format แบบนามธรรมอย่าง `YYYY-MM-DD` ช่วงเวลาอ้างอิงคือ:
 
 ```
 Mon Jan 2 15:04:05 MST 2006
 ```
 
-หากต้องการฟอร์แมตเวลา ให้เขียนช่วงเวลาอ้างอิงในรูปแบบที่ต้องการ:
+หากต้องการ format เวลา ให้เขียนช่วงเวลาอ้างอิงในรูปแบบที่ต้องการ:
 
 ```go
 t.Format("2006-01-02")             // "2024-01-02"
@@ -56,7 +56,7 @@ t.Format(time.RFC3339)             // "2024-01-02T15:04:05Z"
 
 ```go
 parsed, err := time.Parse("2006-01-02", "2024-06-15")
-// parsed คือเที่ยงคืน UTC ของวันที่ 15 มิถุนายน 2024
+// parsed is midnight UTC on June 15, 2024
 ```
 
 string ของ layout ต้องตรงกับ component ของช่วงเวลาอ้างอิงที่ใช้ — ตัวอักษรเดียวกันในตำแหน่งเดียวกัน
@@ -64,7 +64,7 @@ string ของ layout ต้องตรงกับ component ของช่
 ## การคำนวณ — Add และ Sub
 
 ```go
-deadline := t.Add(72 * time.Hour)        // 3 วันต่อมา
+deadline := t.Add(72 * time.Hour)        // 3 days later
 diff     := deadline.Sub(t)              // time.Duration: 72h0m0s
 before   := deadline.Before(t)          // false
 after    := deadline.After(t)           // true
@@ -86,7 +86,7 @@ select {
 case <-timer.C:
     fmt.Println("fired")
 case <-ctx.Done():
-    timer.Stop() // ไม่ต้อง drain ตาม semantic ของ Go 1.23+
+    timer.Stop() // no drain needed on Go 1.23+ semantics
 }
 ```
 
@@ -154,7 +154,7 @@ func main() {
 >
 > **context.WithTimeout**: สร้าง deadline ที่ต้องส่งต่อข้าม function call — เช่นเรียก downstream service แล้วยกเลิกอัตโนมัติเมื่อหมดเวลา
 >
-> **Go HTTP server**: http.TimeoutHandler ใช้ context + time.AfterFunc สำหรับ request timeout — ตัด connection เมื่อ handler ช้าเกินกำหนด
+> **net/http.TimeoutHandler**: สร้าง `context.WithTimeout` จาก `r.Context()` แล้ว select บน `ctx.Done()` เพื่อตัด request ที่ handler ทำงานช้าเกินกำหนด
 
 <Callout title="Reference time ของ Go — Mon Jan 2 15:04:05 MST 2006">
 ช่วงเวลาอ้างอิงไม่ได้ถูกเลือกมาแบบสุ่ม แต่ละ component เป็นตัวเลขที่โดดเด่น: month=1, day=2, hour=15 (บ่าย 3), minute=4, second=5, year=2006 เรียงตามนาฬิกา 12 ชั่วโมง: 1/2/3:4:5 PM '06 ทำให้ layout อธิบายตัวเองได้ — เขียนสิ่งที่ต้องการให้ output เป็นโดยใช้ตัวเลขเหล่านั้นพอดี ข้อผิดพลาดที่พบบ่อยคือใช้ `YYYY` หรือ `DD` แบบภาษาอื่น ซึ่ง Go จะแปลเป็นตัวอักษร Y, M, D และจะปรากฏใน output ตามตัวอักษรนั้นๆ
@@ -162,7 +162,7 @@ func main() {
 
 export const quizTime = [
   {
-    q: "Reference time ของ Go ที่ใช้สำหรับการฟอร์แมตคืออะไร?",
+    q: "Reference time ของ Go ที่ใช้สำหรับการ format คืออะไร?",
     options: [
       "Mon Jan 1 00:00:00 UTC 2000",
       "Mon Jan 2 15:04:05 MST 2006",

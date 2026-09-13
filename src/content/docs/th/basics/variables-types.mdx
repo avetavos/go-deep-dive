@@ -1,6 +1,6 @@
 ---
 title: 'Variables และ Types'
-description: 'var, :=, zero values, ประเภทพื้นฐาน, constants, iota, และการแปลงประเภท'
+description: 'var, :=, zero values, type พื้นฐาน, constants, iota, และการแปลง type'
 sidebar:
   order: 3
 ---
@@ -17,17 +17,17 @@ Go มีสองวิธีในการประกาศตัวแป�
 **`var` declaration** — รูปแบบเต็ม สามารถใช้ได้ทั้งใน package level และใน function:
 
 ```go
-var name string          // ประกาศพร้อม zero value
-var age  int = 30        // ประกาศพร้อมกำหนดค่าและระบุ type
-var pi       = 3.14159   // ประกาศพร้อมกำหนดค่า Go อนุมาน type ให้
+var name string          // declared with zero value
+var age  int = 30        // declared with a value and explicit type
+var pi       = 3.14159   // declared with a value; Go infers the type
 ```
 
 **Short declaration `:=`** — ใช้ได้เฉพาะใน function เหมาะสำหรับใช้งานทั่วไป:
 
 ```go
-name := "gopher"   // Go อนุมาน type เป็น string
-age  := 30         // Go อนุมาน type เป็น int
-pi   := 3.14159    // Go อนุมาน type เป็น float64
+name := "gopher"   // Go infers the type as string
+age  := 30         // Go infers the type as int
+pi   := 3.14159    // Go infers the type as float64
 ```
 
 `:=` ต้องมีตัวแปรใหม่อย่างน้อยหนึ่งตัวทางซ้าย ถ้าทุกตัวมีอยู่แล้วต้องใช้ `=`
@@ -52,12 +52,12 @@ pi   := 3.14159    // Go อนุมาน type เป็น float64
 Go มี numeric types ที่หลากหลายพร้อมขนาดที่ชัดเจน:
 
 ```go
-var i   int     // ขนาดขึ้นกับ platform (32 หรือ 64 bit)
-var i64 int64   // 64-bit signed integer เสมอ
+var i   int     // size depends on platform (32 or 64 bit)
+var i64 int64   // always a 64-bit signed integer
 var u   uint32  // 32-bit unsigned integer
 var f   float64 // double precision floating point
-var b   bool    // true หรือ false
-var s   string  // sequence ของ UTF-8 bytes
+var b   bool    // true or false
+var s   string  // a sequence of UTF-8 bytes
 var r   rune    // Unicode code point (int32)
 var bt  byte    // raw byte (uint8)
 ```
@@ -87,17 +87,17 @@ const (
 )
 ```
 
-## การแปลงประเภท (Type Conversion)
+## การแปลง Type แบบ Explicit
 
 Go ไม่มี implicit type conversion คุณต้องแปลงอย่างชัดเจนด้วย `T(value)`:
 
 ```go
 var x int     = 10
-var y float64 = float64(x) + 0.5   // ต้องแปลง x ก่อน
-var z int     = int(y)              // ตัดทศนิยมออก ไม่ปัดเศษ
+var y float64 = float64(x) + 0.5   // x must be converted first
+var z int     = int(y)              // truncates the decimal, does not round
 
 s := strconv.Itoa(x)    // int → string
-n, _ := strconv.Atoi(s) // string → int (พร้อม error ที่ ignore ด้วย _)
+n, _ := strconv.Atoi(s) // string → int (error ignored with _)
 ```
 
 export const variablesCode = `package main

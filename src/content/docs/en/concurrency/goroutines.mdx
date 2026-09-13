@@ -111,6 +111,42 @@ import _ "net/http/pprof"
 // curl "localhost:6060/debug/pprof/goroutineleak?debug=1"
 ```
 
+## Runtime Behavior
+
+```text
+GMP Model:
+
+G  G  G  G  G  G  G  G    ← goroutines (can be hundreds of thousands)
+ ╲ │ ╱    ╲ │ ╱
+  [P1]      [P2]           ← P (= GOMAXPROCS, default = #CPU)
+   │          │
+  [M1]       [M2]          ← M (OS thread)
+   │          │
+ CPU0        CPU1
+
+When a G blocks on I/O:
+  G ──block──→ waiting queue
+  M releases P → another M picks up P → another G runs
+
+Work stealing:
+  P1's run queue is empty → steal a G from P2's run queue
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| goroutine (2-8 KB stack) | hundreds of thousands can exist | per-goroutine scheduler overhead |
+| dynamic stack growth | no upfront memory cost | stack copy cost on growth |
+| M:N scheduler | I/O doesn't block an OS thread | scheduler complexity, preemption cost |
+| work stealing | high CPU utilization | cache misses when a goroutine moves P |
+
+## Common Misconceptions
+
+- **A goroutine is an OS thread** — a goroutine starts with a 2–8 KB stack; an OS thread starts with 1–8 MB
+- **Creating a goroutine is entirely free** — it starts with a ~2 KB stack allocation plus per-goroutine scheduler bookkeeping
+- **More GOMAXPROCS always means faster** — I/O-bound workloads benefit less than CPU-bound ones
+- **Goroutine leaks are not a real problem** — a goroutine with no way to exit is a memory leak
 
 <Callout title="Gotcha: goroutines started in main may not run if main returns">
 If `main` returns before a goroutine has a chance to execute, that goroutine is silently killed. The Go runtime exits as soon as the `main` goroutine returns — it does not wait for background goroutines. Always use `sync.WaitGroup`, a channel, or another synchronization mechanism to ensure `main` stays alive long enough for goroutines to finish.

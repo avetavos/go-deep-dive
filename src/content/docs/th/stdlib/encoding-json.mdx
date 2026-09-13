@@ -12,14 +12,14 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## JSON ใน Go
 
-Package `encoding/json` แปลงค่า Go เป็น JSON text (marshaling) และแปลง JSON text กลับเป็นค่า Go (unmarshaling) ฟังก์ชันหลักสองตัวคือ:
+Package `encoding/json` แปลงค่า Go เป็น JSON text (marshaling) และแปลง JSON text กลับเป็นค่า Go (unmarshaling) function หลักสองตัวคือ:
 
 ```go
 data, err := json.Marshal(v)       // Go value → []byte (JSON)
 err        = json.Unmarshal(data, &v) // []byte (JSON) → Go value
 ```
 
-`Marshal` รับค่าใดก็ได้และคืน `[]byte` `Unmarshal` เขียนลงในค่าที่ชี้โดย argument ที่สอง — ส่ง pointer เสมอเพื่อให้ฟังก์ชันแก้ไขตัวแปรได้
+`Marshal` รับค่าใดก็ได้และคืน `[]byte` `Unmarshal` เขียนลงในค่าที่ชี้โดย argument ที่สอง — ส่ง pointer เสมอเพื่อให้ function แก้ไขตัวแปรได้
 
 ## Struct tags
 
@@ -248,7 +248,7 @@ dec := jsontext.NewDecoder(r)
 for {
     tok, err := dec.ReadToken()
     if err == io.EOF { break }
-    // ดู tok.Kind(): '{', '}', '"', '0', …
+    // inspect tok.Kind(): '{', '}', '"', '0', …
 }
 ```
 
@@ -269,7 +269,7 @@ for {
 - **json.Marshal/Unmarshal thread-safe** — ใช่ — แต่ json.Decoder/Encoder แต่ละ instance ไม่ thread-safe อย่าแชร์ข้าม goroutine
 - **unexported field ถูก marshal** — ไม่ — unexported field ถูก ignore โดย encoding/json ไม่ว่าจะมี tag หรือไม่
 - **omitempty ทำงานกับ pointer เหมือน value** — omitempty บน *T: nil → omit, non-nil → include แม้ว่า value ข้างใน pointer เป็น zero
-- **interface\{\} field ใน struct marshal เป็น null เสมอ** — marshal ตาม concrete type ที่ store อยู่ใน interface ตอน runtime
+- **field ที่เป็น any ใน struct marshal เป็น null เสมอ** — marshal ตาม concrete type ที่ store อยู่ใน interface ตอน runtime
 
 > 💡 ตัวอย่างจากของจริง
 >
