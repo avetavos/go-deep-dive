@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The error interface
 
@@ -81,6 +83,112 @@ Sentinels work best for conditions that callers need to branch on. Avoid creatin
 The explicit `if err != nil` check may feel repetitive at first. It is intentional. Go treats every failure as a decision point: you must choose to propagate the error, wrap it with context, retry, fall back to a default, or log and continue. The language does not make that choice for you.
 
 This discipline produces code where every error-producing call is visible at the callsite. When you read a Go function, you can see exactly which operations can fail and what the caller does about each one — no implicit propagation, no invisible exception paths.
+
+## The typed-nil interface trap
+
+An `error` value is an interface: a (type, value) pair. It is `nil` only when **both** the type and the value are unset. This becomes a trap the moment a function declares a typed pointer variable and returns it directly instead of a bare `nil`:
+
+```go
+type MyError struct{ msg string }
+
+func (e *MyError) Error() string { return e.msg }
+
+func mightFail(fail bool) error {
+	var e *MyError // nil *MyError
+	if fail {
+		e = &MyError{msg: "boom"}
+	}
+	return e // BUG: always a non-nil error interface, even when e is nil
+}
+```
+
+`mightFail(false)` returns an `error` whose type is `*MyError` and whose value is `nil` — that is a non-nil interface holding a nil pointer, not a nil interface. `err == nil` is **false**:
+
+export const typedNilCode = `package main
+
+import "fmt"
+
+// MyError is a normal custom error type.
+type MyError struct{ msg string }
+
+func (e *MyError) Error() string { return e.msg }
+
+// mightFail always returns the *MyError interface type — even on the
+// success path, where the underlying pointer is nil.
+func mightFail(fail bool) error {
+\tvar e *MyError // nil *MyError
+\tif fail {
+\t\te = &MyError{msg: "boom"}
+\t}
+\treturn e // BUG: always a non-nil error interface
+}
+
+func main() {
+\terr := mightFail(false)
+\tfmt.Println(err == nil)        // false — surprising!
+\tfmt.Printf("%v, %T\\n", err, err)
+
+\t// The fix: return a bare nil, not a nil pointer of a concrete type.
+\tvar clean error
+\tif false {
+\t\tclean = &MyError{msg: "boom"}
+\t}
+\tfmt.Println(clean == nil) // true
+}`;
+
+<Playground code={typedNilCode} />
+
+The fix is to only ever hold a `*MyError` locally and return a bare `error`-typed `nil` on the success path — as `clean` does above. This is the single most common source of "why did `if err != nil` fire when nothing went wrong?" bugs in Go code, hand-written or AI-generated.
+
+## Shadowing err and handling it once
+
+`:=` declares a **new** variable whenever at least one name on the left is new — including inside an `if` statement's init clause. This is a frequent source of silently-lost errors:
+
+```go
+func run() error {
+	var err error
+	if v, err := step(); err != nil { // BUG: := creates a new inner err
+		fmt.Println("inner saw:", v, err)
+	}
+	return err // always nil here, even though step() failed
+}
+```
+
+Running this prints `inner saw: 0 step failed` followed by `run() returned: <nil>` — the outer `err` was never touched, because `if v, err := step(); ...` shadowed it with a block-scoped variable. `go vet` does not catch this particular shadowing (the `shadow` analyzer is a separate, non-default tool); reviewing every `:=` inside an `if`/`for` next to an existing `err` in scope is a manual habit worth keeping.
+
+The related discipline is to **handle every error exactly once**. Pick one of: return it (possibly wrapped), log it, or recover from it — never more than one, and never zero. Logging *and* returning the same error produces duplicate log lines further up the call stack; doing neither silently drops a real failure.
+
+## err == io.EOF is still idiomatic
+
+`errors.Is` is the general-purpose tool for sentinel comparisons because it survives wrapping. `io.EOF` is a deliberate, well-documented exception: the `io.Reader` contract guarantees `io.EOF` is returned as-is, never wrapped, so long-standing code still compares it directly:
+
+```go
+n, err := r.Read(buf)
+if err == io.EOF {
+	// end of stream, not a failure
+}
+```
+
+`errors.Is(err, io.EOF)` also works and is never wrong — prefer it in new code for consistency with every other sentinel check — but do not be surprised to see `== io.EOF` in stdlib-adjacent code; it is not a bug.
+
+## Behaviour interfaces
+
+A **behaviour interface** (also called an opaque error check) lets a caller ask "can this error do X?" without knowing its concrete type — useful when many unrelated error types across packages can all answer the same question:
+
+```go
+// timeout is a behaviour interface: any error that can answer "was this a
+// timeout?" satisfies it, regardless of its concrete type or package.
+type timeout interface {
+	Timeout() bool
+}
+
+func isTimeout(err error) bool {
+	var t timeout
+	return errors.As(err, &t) && t.Timeout()
+}
+```
+
+`errors.As` walks the chain looking for anything that implements the `timeout` interface — not a specific type. This is how `net.Error`'s `Timeout() bool` method is meant to be consumed: many different error types across the standard library and third-party code implement it, and callers check the behaviour, not the type.
 
 export const errorValuesCode = `package main
 

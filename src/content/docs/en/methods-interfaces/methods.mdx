@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is a method?
 
@@ -63,6 +64,131 @@ The **method set** of a type determines which interfaces it satisfies:
 
 This is why an interface requiring a pointer-receiver method can only be satisfied by `*T`, not by `T`.
 
+## Addressability: when method sets bite
+
+Calling a pointer-receiver method on a value auto-takes its address — `c.Inc()` on a variable `c` really means `(&c).Inc()`. But Go can only take that address when `c` is **addressable**: a plain variable, a struct field of an addressable struct, or `*p` for some pointer `p`. Two everyday values are **not** addressable — a map value, and the result of a composite literal used directly.
+
+```go
+type Counter struct{ count int }
+
+func (c *Counter) Inc() { c.count++ }
+
+func main() {
+	m := map[string]Counter{"a": {}}
+	m["a"].Inc() // map values are not addressable
+}
+```
+
+Compiling this with Go 1.26.5 gives:
+
+```text
+./main.go:15:9: cannot call pointer method Inc on Counter
+```
+
+The reason is structural: a map can rehash and move its entries at any time, so Go refuses to hand out a stable address into it. The fix is either to store pointers (`map[string]*Counter`) or to copy out, mutate, and store back.
+
+The same error appears for a composite literal used directly, because a literal has no variable to take the address of:
+
+```go
+Counter{}.Inc()
+```
+
+```text
+./main.go:12:12: cannot call pointer method Inc on Counter
+```
+
+Addressability also decides interface satisfaction. `T`'s method set only has value-receiver methods, so assigning a `T` value to an interface that needs a pointer-receiver method fails at compile time, not at the call:
+
+```go
+type Incer interface{ Inc() }
+
+var i Incer = Counter{}
+```
+
+```text
+./main.go:16:16: cannot use Counter{} (value of struct type Counter) as Incer value in variable declaration: Counter does not implement Incer (method Inc has pointer receiver)
+```
+
+`var i Incer = &Counter{}` compiles, because `*Counter`'s method set includes `Inc`.
+
+## Method values vs method expressions
+
+A **method value** — `c.Inc` — is a function bound to the specific receiver `c` at the moment you take it. A **method expression** — `Counter.Value` — takes the type itself, and the receiver becomes the function's first parameter:
+
+```go
+c := &Counter{}
+inc := c.Inc     // bound to c already — inc() means c.Inc()
+inc()
+
+value := Counter.Value // unbound — receiver is the first argument
+fmt.Println(value(*c))
+```
+
+Method values are handy for passing a bound method as a callback (`http.HandleFunc("/x", h.serveX)`); method expressions are rare, mostly seen in generic code that needs to call a method on a type parameter's underlying type.
+
+## Nil pointer receivers
+
+Calling a method through a nil pointer is legal in Go, as long as the method body never dereferences a nil field before checking for it. This is the standard way to write a recursive nil-safe method on a linked structure:
+
+```go
+type List struct {
+	val  int
+	next *List
+}
+
+func (l *List) Sum() int {
+	if l == nil {
+		return 0
+	}
+	return l.val + l.next.Sum()
+}
+```
+
+`var l *List; l.Sum()` returns `0` without panicking — the method call itself does not dereference `l`, and the body's own nil check handles it.
+
+## Receiver naming
+
+Idiomatic Go receivers are one or two letters derived from the type name — `c Counter`, `r *Rectangle` — never `this` or `self`. Keep the same receiver name for every method on a type; the standard library follows this throughout (`func (b *Buffer) WriteString`, `func (t Time) Add`).
+
+## Methods on a named function type
+
+Because any named type can have methods, a named function type can too. The standard library uses this to turn a plain function into something that satisfies an interface — `http.HandlerFunc` is a `func(http.ResponseWriter, *http.Request)` with a `ServeHTTP` method, which is the only thing `http.Handler` requires:
+
+```go
+type IntOp func(int) int
+
+func (f IntOp) Twice(x int) int {
+	return f(f(x))
+}
+```
+
+`IntOp(double).Twice(3)` calls `double` on its own result — the function itself is the receiver.
+
+## Copying a mutex: the value-receiver trap
+
+`sync.Mutex` must never be copied after first use, because a copy has its own independent lock state. A value receiver copies the whole struct on every call — so a value-receiver method on a struct containing a mutex silently locks a copy, protecting nothing:
+
+```go
+type Safe struct {
+	mu    sync.Mutex
+	count int
+}
+
+func (s Safe) Inc() { // value receiver — copies mu on every call
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.count++
+}
+```
+
+`go vet` catches this exact bug:
+
+```text
+main.go:11:9: Inc passes lock by value: command-line-arguments.Safe contains sync.Mutex
+```
+
+The fix is always a pointer receiver: `func (s *Safe) Inc()`. Any struct holding a `sync.Mutex`, `sync.WaitGroup`, or similar must use pointer receivers on every method, and should never be passed or returned by value.
+
 export const methodsCode = `package main
 
 import "fmt"
@@ -87,15 +213,53 @@ func (t Celsius) String() string {
 \treturn fmt.Sprintf("%.1f\\u00b0C", float64(t))
 }
 
+// List demonstrates a nil pointer receiver: Sum handles a nil *List gracefully.
+type List struct {
+\tval  int
+\tnext *List
+}
+
+func (l *List) Sum() int {
+\tif l == nil {
+\t\treturn 0
+\t}
+\treturn l.val + l.next.Sum()
+}
+
+// IntOp is a named function type with its own method.
+type IntOp func(int) int
+
+func (f IntOp) Twice(x int) int {
+\treturn f(f(x))
+}
+
 func main() {
-\tc := Counter{}
+\tc := &Counter{}
 \tc.Inc()
 \tc.Inc()
 \tc.Inc()
-\tfmt.Println(c.Value())
+\tfmt.Println(c.Value()) // 3
 
 \ttemp := Celsius(36.6)
-\tfmt.Println(temp.String())
+\tfmt.Println(temp.String()) // 36.6°C
+
+\t// Method value: bound to c the moment it is created.
+\tinc := c.Inc
+\tinc()
+\tfmt.Println(c.Value()) // 4
+
+\t// Method expression: receiver becomes an explicit first argument.
+\tvalue := Counter.Value
+\tfmt.Println(value(*c)) // 4
+
+\tvar empty *List
+\tfmt.Println(empty.Sum()) // 0 — nil receiver, handled inside Sum
+
+\tlist := &List{val: 1, next: &List{val: 2}}
+\tfmt.Println(list.Sum()) // 3
+
+\tdouble := IntOp(func(x int) int { return x * 2 })
+\tfmt.Println(double.Twice(3)) // 12
 }`;
 
 <Playground code={methodsCode} />
@@ -107,18 +271,43 @@ func main() {
 | Value receiver | Cheap to reason about, callable on non-addressable values | Copies the struct on every call |
 | Pointer receiver | Can mutate, no copy | Needs a nil-check, receiver must be addressable |
 | Method on a non-struct type | Extends the behavior of any named type in your package | Cannot add a method to a type from another package |
+| Method value | Bundles a receiver with a function, easy to pass as a callback | Keeps the receiver alive for the closure's lifetime |
+| Pointer receiver on a type holding a mutex | The only correct option | Every method — even read-only ones — must take a pointer |
 
 ## Common Misconceptions
 
 - **Value and pointer receivers are interchangeable.** A value receiver works on a copy — it cannot mutate the caller's original value.
 - **You can add a method to a type from another package.** Go does not allow this; wrap the type in a local named type or use embedding instead.
 - **`T` and `*T` have the same method set.** `*T`'s method set is larger — it also includes the pointer-receiver methods, which affects interface satisfaction.
+- **A map value with a pointer-receiver method just works, like a struct variable.** It does not — map values are not addressable, so `m[k].Inc()` is a compile error, not a runtime surprise.
+- **Copying a struct that embeds `sync.Mutex` is harmless if you don't `Lock` right away.** The copy is already broken the moment it exists; `go vet` flags the copy itself, not just the lock call.
 
 > 💡 Real-world example
 >
-> `net/http`: `http.ResponseWriter` is an interface — every `Handler` accepts it instead of a concrete type, which makes handlers easy to test with a mock.
+> `net/http`: `http.ResponseWriter` is an interface — every `Handler` accepts it instead of a concrete type, which makes handlers easy to test with a mock. `http.HandlerFunc` is a named function type with a `ServeHTTP` method, so a plain function can satisfy `http.Handler` with a one-line conversion.
 >
 > `*bytes.Buffer` and `*http.Client` both use a pointer receiver on every method because they hold internal state that methods mutate (buffered bytes, a connection pool) — consistency of receiver kind matters here.
+
+## Reading AI-generated code
+
+When a generated snippet defines methods, check for these before trusting it:
+
+- Does every method on the type use the *same* receiver kind — all value, or all pointer? A mix is a warning sign.
+- If a method mutates a field, is the receiver a pointer? A value-receiver mutation compiles and silently does nothing.
+- Does the type's struct contain a `sync.Mutex`, `sync.WaitGroup`, or similar? Every method must be a pointer receiver, and the type must never be copied or passed by value.
+- Is a pointer-receiver method ever called on a map value (`m[k].Method()`) or a fresh composite literal (`T{}.Method()`)? Both fail to compile — addressability, not a runtime bug.
+- Does an interface variable get assigned a value type (`var i Iface = T{}`) when the required method has a pointer receiver? That's a compile error the generated code may have never actually been run against.
+
+<SpotTheBug code={`type Counter struct{ n int }
+
+func (c *Counter) Inc() { c.n++ }
+
+func main() {
+	m := map[string]Counter{"a": {}}
+	m["a"].Inc()
+}`}>
+`m["a"]` is not addressable — a map value can be moved by a rehash at any time, so Go refuses to take its address for the pointer-receiver call. The real compiler message is `cannot call pointer method Inc on Counter`. Fix it by using `map[string]*Counter`, or by loading the value, mutating it, and storing it back: `c := m["a"]; c.Inc(); m["a"] = c`.
+</SpotTheBug>
 
 <Callout title="Use a pointer receiver when you need to mutate — and be consistent">
 A value receiver always operates on a copy, so mutations are silently discarded. Use a pointer receiver whenever a method must change the receiver's state. Once you choose pointer receivers for any method on a type, use them for all methods on that type to keep the method set coherent and avoid surprising interface-satisfaction gaps.
@@ -133,7 +322,8 @@ export const quizMethods = [
       "A compile error is raised because value receivers cannot access fields",
       "The behavior depends on whether the variable is on the heap or stack"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A value receiver is just a parameter — Go copies the struct into it like any other argument. Mutating the copy never reaches the caller's variable."
   },
   {
     q: "Which type's method set includes both value-receiver and pointer-receiver methods?",
@@ -143,7 +333,30 @@ export const quizMethods = [
       "Both T and *T equally",
       "Neither — method sets are determined at the call site"
     ],
-    answer: 1
+    answer: 1,
+    explain: "*T's method set contains every method declared on T, both value and pointer receivers. T's method set only contains the value-receiver ones."
+  },
+  {
+    q: "```go\ntype Counter struct{ n int }\nfunc (c *Counter) Inc() { c.n++ }\n\nfunc main() {\n    m := map[string]Counter{\"a\": {}}\n    m[\"a\"].Inc()\n}\n```\nDoes this compile?",
+    options: [
+      "Yes, and it increments the stored Counter",
+      "Yes, but the increment is silently lost",
+      "No — cannot call pointer method Inc on Counter",
+      "No — undefined: Counter"
+    ],
+    answer: 2,
+    explain: "Map values are not addressable, so Go cannot form &m[\"a\"] to call the pointer-receiver method. The real compiler error is exactly `cannot call pointer method Inc on Counter`."
+  },
+  {
+    q: "```go\ntype Safe struct {\n    mu    sync.Mutex\n    count int\n}\nfunc (s Safe) Inc() {\n    s.mu.Lock()\n    defer s.mu.Unlock()\n    s.count++\n}\n```\nWhat does `go vet` report?",
+    options: [
+      "Nothing — this compiles and runs correctly under load",
+      "Inc passes lock by value: command-line-arguments.Safe contains sync.Mutex",
+      "cannot call pointer method Lock on sync.Mutex",
+      "s.count++ has no effect"
+    ],
+    answer: 1,
+    explain: "The value receiver copies the whole struct — including the mutex — on every call, so Lock/Unlock operate on an independent copy and protect nothing. go vet's copylocks check reports exactly this message."
   },
   {
     q: "You want to define a method on `type Kelvin float64`. What is the constraint?",
@@ -153,17 +366,19 @@ export const quizMethods = [
       "You can define methods on Kelvin as long as the type is defined in your package",
       "You cannot define methods on a type whose underlying type is a primitive"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Any named type declared in your own package can have methods, regardless of its underlying type. Only types from other packages, plus pointer types and interface types, are off-limits."
   },
   {
-    q: "Your type has five methods. Four use value receivers and one uses a pointer receiver. What should you do?",
+    q: "```go\nc := &Counter{}\ninc := c.Inc\nc = &Counter{}\ninc()\n```\nWhich Counter does `inc()` increment?",
     options: [
-      "Leave it — mixing is fine as long as each method compiles",
-      "Convert all methods to use pointer receivers for consistency",
-      "Convert all methods to use value receivers for consistency",
-      "Split the type into two separate types, one per receiver kind"
+      "The new Counter assigned on the third line",
+      "The original Counter that c pointed to when inc was created",
+      "Both — inc holds a reference to the variable c itself",
+      "Neither — this is a compile error"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A method value like c.Inc captures the receiver's value (here, the pointer) at the moment it is formed — reassigning c afterward does not change what inc is bound to."
   }
 ];
 
