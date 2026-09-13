@@ -208,7 +208,7 @@ for _, f := range funcs {
 fmt.Println(got) // [0 1 2] — each closure captured its own i
 ```
 
-การเปลี่ยนแปลงนี้เดิมถูก gate ด้วยบรรทัด `go` ใน `go.mod` — module ที่ declare `go 1.21` หรือเก่ากว่าควรจะรักษาพฤติกรรม shared-variable แบบเดิมไว้ เพื่อไม่ให้โค้ดเดิมเปลี่ยนความหมายแบบเงียบ ๆ **verify บน 1.26.5 แล้ว: ในทางปฏิบัติเรื่องนี้ไม่จริงอีกต่อไป** การ build โค้ดชิ้นเดียวกันข้างบนภายใน module ที่ declare `go 1.21` และแม้แต่ `go 1.16` ทั้งคู่ยัง print `[0 1 2]` — พฤติกรรมแบบ per-iteration ใช้แบบไม่มีเงื่อนไขบน toolchain นี้ ไม่ว่า module จะ declare language version อะไรก็ตาม อย่าพึ่งพา `go.mod` version เก่าเพื่อ reproduce หรือรักษาพฤติกรรม aliasing แบบก่อน 1.22 บน toolchain สมัยใหม่ — ถ้าต้องอ่านโค้ดเก่าที่พึ่งพาพฤติกรรม shared-variable ให้อ่านมันเป็นข้อเท็จจริงทางประวัติศาสตร์ของภาษา ไม่ใช่สิ่งที่ยังเปิดใช้กลับได้
+การเปลี่ยนแปลงนี้ถูก gate ด้วยบรรทัด `go` ใน `go.mod` เพื่อไม่ให้โค้ดเดิมเปลี่ยนความหมายแบบเงียบ ๆ: module ที่ declare `go 1.21` หรือเก่ากว่าจะยังใช้พฤติกรรม shared-variable แบบเดิม ส่วน `go 1.22` ขึ้นไปจะได้แบบ per-iteration verify บน toolchain Go 1.27.0 แล้วด้วยการ build โค้ดชิ้นเดียวกันข้างบนทั้งสองแบบ: `go 1.21` print `[3 3 3]` ส่วน `go 1.22` print `[0 1 2]` นี่คือเหตุผลที่การแก้โค้ดเก่าทำได้สองทาง คือยก `go` directive ขึ้น หรือคงบรรทัด `i := i` ไว้ และเป็นเหตุผลที่ต้องอ่าน `go.mod` ของ repo ก่อนตัดสินว่า loop-variable capture ในนั้นเป็น bug หรือไม่
 
 ## `%p` กับ `uintptr` ไม่ใช่สิ่งเดียวกัน
 
@@ -365,7 +365,7 @@ export const escapeDiagram = `flowchart LR
 - **pointer ใน Go อันตรายเหมือน C** — Go ไม่มี pointer arithmetic และ GC จัดการ lifetime ให้ — use-after-free เป็นไปไม่ได้ แต่ pointer ที่ยังชี้ไปยัง element เก่าหลัง `append` reallocate backing array ใหม่นั้นยังเกิดได้ (ดูหัวข้อ "`&s[i]` หลัง append อาจกลายเป็นของเก่า" ด้านบน)
 - **pointer เสมอเร็วกว่า value** — pointer อาจทำให้ variable escape to heap → GC ต้องทำงานเพิ่ม → latency สูงขึ้น; `go build -gcflags=-m` แสดงให้เห็นตรง ๆ ว่าเรื่องนี้เกิดขึ้นเมื่อไหร่
 - **nil pointer = ปัญหาเหมือน NullPointerException ใน Java** — Go panic มี stack trace ชัดเจน และตรวจสอบ nil ได้ง่ายด้วย `if p == nil` การเรียก method บน nil pointer receiver ไม่ panic ในตัวมันเองด้วยซ้ำ — panic ก็ต่อเมื่อ dereference field ผ่านมันเท่านั้น
-- **set `go 1.21` ใน `go.mod` restore พฤติกรรม shared loop-variable แบบเดิมบน toolchain ปัจจุบัน** — verify แล้วว่าไม่จริงบน 1.26.5; พฤติกรรม per-iteration (Go 1.22+) ใช้แบบไม่มีเงื่อนไข ไม่ว่า module จะ declare version อะไร
+- **closure ที่ capture loop variable เป็น bug เสมอ** — ขึ้นกับ `go` directive ของ module ถ้า `go 1.22` ขึ้นไป แต่ละ iteration มีตัวแปรของตัวเอง การ capture จึงถูกต้อง แต่ถ้า `go 1.21` หรือเก่ากว่า ทุก iteration แชร์ตัวแปรเดียวกัน จึงเป็น bug คลาสสิก ดู `go.mod` ก่อนตัดสิน
 - **`uintptr` เป็นแค่อีกชื่อของ pointer** — มันคือ integer ธรรมดาในสายตาของ garbage collector; GC ไม่ update ค่า `uintptr` ตอนย้าย memory ซึ่งเป็นเหตุผลที่ raw `uintptr` arithmetic เป็น `unsafe`
 
 > 💡 ตัวอย่างจากของจริง
@@ -456,15 +456,15 @@ export const quizPointers = [
     explain: "s มี len == cap == 3 ดังนั้น append(s, 4) ไม่มีที่ว่างให้โตใน place และ allocate backing array ใหม่ทั้งหมด p ยังชี้ไปยัง array เก่า (ที่ index 1 ยังเป็น 2) ส่วน s[1] = 99 แตะแค่ array ใหม่เท่านั้น verify บน 1.26.5 แล้ว: print 2 [1 99 3 4]"
   },
   {
-    q: "go.mod ของ module ประกาศ `go 1.21` บน toolchain Go 1.26.5 โค้ดนี้ print อะไร?\n\nfuncs := make([]func() int, 0, 3)\nfor i := 0; i < 3; i++ {\n    funcs = append(funcs, func() int { return i })\n}\ngot := make([]int, 0, 3)\nfor _, f := range funcs {\n    got = append(got, f())\n}\nsort.Ints(got)\nfmt.Println(got)",
+    q: "go.mod ของ module ประกาศ `go 1.21` แล้ว build ด้วย toolchain ปัจจุบัน โค้ดนี้ print อะไร?\n\nfuncs := make([]func() int, 0, 3)\nfor i := 0; i < 3; i++ {\n    funcs = append(funcs, func() int { return i })\n}\ngot := make([]int, 0, 3)\nfor _, f := range funcs {\n    got = append(got, f())\n}\nsort.Ints(got)\nfmt.Println(got)",
     options: [
       "[3 3 3] — go 1.21 ใน go.mod restore พฤติกรรม shared loop-variable แบบเดิม",
       "[0 1 2] — พฤติกรรมแบบ per-iteration ใช้เสมอไม่ว่า go.mod จะประกาศ version อะไรบน toolchain นี้",
       "Compile error — closure จับ loop variable ไม่ได้",
       "[0 0 0] — closure จับค่าเริ่มต้นของ loop variable เสมอ"
     ],
-    answer: 1,
-    explain: "เรื่องนี้ verify ตรง ๆ บน 1.26.5 โดย build โปรแกรมเดียวกันเป๊ะภายใต้ go.mod ที่ประกาศ go 1.21 และแม้แต่ go 1.16 — ทั้งคู่ print [0 1 2] เหมือนกับ module go 1.26 เส้นทาง compatibility ก่อน 1.22 ที่ go.mod version นั้นควรจะรักษาไว้ ไม่ restore พฤติกรรมเดิมบน toolchain นี้ อย่าพึ่งพา go directive เก่าเพื่อ reproduce มัน"
+    answer: 0,
+    explain: "ตัวที่ตัดสินคือ go directive ไม่ใช่ toolchain ที่ติดตั้ง verify บน Go 1.27.0 แล้ว: โปรแกรมเดียวกัน print [3 3 3] ภายใต้ go 1.21 และ print [0 1 2] ภายใต้ go 1.22 ดังนั้น closure นี้จะถูกต้องก็ต่อเมื่อ module ประกาศ go 1.22 ขึ้นไป ให้ดู go.mod ก่อนเสมอก่อนตัดสินว่า loop variable ที่ถูก capture เป็น bug หรือไม่"
   }
 ];
 

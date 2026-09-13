@@ -208,7 +208,7 @@ for _, f := range funcs {
 fmt.Println(got) // [0 1 2] — each closure captured its own i
 ```
 
-The change was originally gated by the `go` line in `go.mod` — a module declaring `go 1.21` or earlier was supposed to keep the old, shared-variable behavior so existing code wouldn't silently change meaning. **Verified on 1.26.5: this is no longer true in practice.** Building the exact snippet above inside modules declaring `go 1.21` and even `go 1.16` both still print `[0 1 2]` — the per-iteration behavior applies unconditionally on this toolchain, regardless of the module's declared language version. Do not rely on an old `go.mod` version to reproduce or preserve the pre-1.22 aliasing behavior on a modern toolchain — if you need to understand old code that depended on the shared-variable behavior, read it as a historical fact about the language, not as something you can still opt back into.
+The change is gated by the `go` line in `go.mod`, so existing code does not silently change meaning: a module declaring `go 1.21` or earlier keeps the old shared-variable behavior, and `go 1.22` or later gets the per-iteration one. Verified on a Go 1.27.0 toolchain by building the snippet above under both: `go 1.21` prints `[3 3 3]`, `go 1.22` prints `[0 1 2]`. That is why the fix for old code is either to raise the `go` directive or to keep the `i := i` line — and why you must read a repository's `go.mod` before judging whether a loop-variable capture in it is a bug.
 
 ## `%p` and `uintptr` are not the same thing
 
@@ -365,7 +365,7 @@ export const escapeDiagram = `flowchart LR
 - **Pointers in Go are as dangerous as in C** — Go has no pointer arithmetic and the GC manages lifetime for you — use-after-free is impossible. But a pointer that still points at an old element after `append` reallocates the backing array is still a real bug (see "`&s[i]` after append can go stale" above).
 - **A pointer is always faster than a value** — a pointer can make a variable escape to the heap → more work for the GC → higher latency; `go build -gcflags=-m` shows you exactly when this happens.
 - **A nil pointer is the same problem as a NullPointerException in Java** — Go's panic carries a clear stack trace, and nil is trivial to check for with `if p == nil`. Calling a method on a nil pointer receiver does not even panic by itself — only dereferencing a field through it does.
-- **Setting `go 1.21` in `go.mod` restores the old shared loop-variable behavior on a current toolchain** — verified false on 1.26.5; the per-iteration (Go 1.22+) semantics apply unconditionally regardless of the declared module version.
+- **A closure capturing a loop variable is always a bug** — it depends on the module's `go` directive. Under `go 1.22` or later each iteration has its own variable and the capture is correct; under `go 1.21` or earlier all iterations share one variable and it is the classic bug. Check `go.mod` before you judge.
 - **`uintptr` is just another name for a pointer** — it is a plain integer as far as the garbage collector is concerned; the GC does not update `uintptr` values when it moves memory, which is exactly why raw `uintptr` arithmetic is `unsafe`.
 
 > 💡 Real-world example
@@ -456,15 +456,15 @@ export const quizPointers = [
     explain: "s had len == cap == 3, so append(s, 4) had no room to grow in place and allocated a brand-new backing array. p still points into the OLD array (where index 1 is still 2); s[1] = 99 only touches the NEW array. Verified on 1.26.5: prints 2 [1 99 3 4]."
   },
   {
-    q: "A module's go.mod declares `go 1.21`. On a Go 1.26.5 toolchain, what does this print?\n\nfuncs := make([]func() int, 0, 3)\nfor i := 0; i < 3; i++ {\n    funcs = append(funcs, func() int { return i })\n}\ngot := make([]int, 0, 3)\nfor _, f := range funcs {\n    got = append(got, f())\n}\nsort.Ints(got)\nfmt.Println(got)",
+    q: "A module's go.mod declares `go 1.21`, built with a current toolchain. What does this print?\n\nfuncs := make([]func() int, 0, 3)\nfor i := 0; i < 3; i++ {\n    funcs = append(funcs, func() int { return i })\n}\ngot := make([]int, 0, 3)\nfor _, f := range funcs {\n    got = append(got, f())\n}\nsort.Ints(got)\nfmt.Println(got)",
     options: [
-      "[3 3 3] — go 1.21 in go.mod restores the old shared loop-variable behavior",
-      "[0 1 2] — the per-iteration behavior applies regardless of the declared go.mod version on this toolchain",
+      "[3 3 3] — go 1.21 in go.mod keeps the old shared loop-variable behavior",
+      "[0 1 2] — the per-iteration behavior applies regardless of the declared go.mod version",
       "A compile error — closures cannot capture loop variables",
       "[0 0 0] — closures always capture the loop variable's initial value"
     ],
-    answer: 1,
-    explain: "This was verified directly on 1.26.5 by building the identical program under go.mod files declaring go 1.21 and even go 1.16 — both printed [0 1 2], the same as a go 1.26 module. The pre-1.22 compatibility path that go.mod version was supposed to preserve does not restore the old behavior on this toolchain; do not rely on an old go directive to reproduce it."
+    answer: 0,
+    explain: "The go directive, not the installed toolchain, decides this. Verified on Go 1.27.0: the same program prints [3 3 3] under go 1.21 and [0 1 2] under go 1.22. So the closure is only correct once the module declares go 1.22 or later — always check go.mod before deciding whether a captured loop variable is a bug."
   }
 ];
 

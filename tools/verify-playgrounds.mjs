@@ -6,7 +6,11 @@
 import { readFileSync, mkdirSync, writeFileSync, globSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
-const GO127 = new Set(['genericMethodsCode', 'jsonV2Code']);
+// Snippets are built inside a module declaring the course's target Go version,
+// so the toolchain switches to 1.27 even when the default install is older.
+const GO_DIRECTIVE = '1.27';
+// Snippets needing an opt-in experiment, mapped to the env that enables them.
+const EXPERIMENT = { jsonV2Code: 'GOEXPERIMENT=jsonv2 ' };
 const filter = process.argv[2] ?? '';
 const files = globSync('src/content/docs/en/**/*.mdx').filter((f) => f.includes(filter));
 
@@ -16,16 +20,14 @@ for (const f of files.sort()) {
   const src = readFileSync(f, 'utf8');
   for (const m of src.matchAll(/export const (\w+Code) = `([\s\S]*?)`;\n/g)) {
     n++;
-    if (GO127.has(m[1])) {
-      console.log(`SKIP ${f} ${m[1]} (needs go.dev)`);
-      continue;
-    }
     const code = Function('return `' + m[2] + '`')();
     const dir = `.verify/${f.replace(/[\/.]/g, '_')}_${m[1]}`;
     mkdirSync(dir, { recursive: true });
     writeFileSync(`${dir}/main.go`, code);
+    writeFileSync(`${dir}/go.mod`, `module playground\n\ngo ${GO_DIRECTIVE}\n`);
+    const env = EXPERIMENT[m[1]] ?? '';
     try {
-      const out = execSync(`cd ${dir} && go vet main.go && go run main.go`, {
+      const out = execSync(`cd ${dir} && ${env}go vet . && ${env}go run .`, {
         stdio: 'pipe',
         timeout: 30000,
       });
