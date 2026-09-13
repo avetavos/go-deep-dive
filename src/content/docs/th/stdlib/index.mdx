@@ -26,10 +26,10 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 | Error value, wrapping, panic | `errors` | โมดูล Errors & Generics |
 | การยกเลิก, deadline, request-scoped value | `context` | Concurrency → context |
 | Structured logging | `log/slog` | ไม่ได้สอนเจาะลึกในคอร์สนี้ |
-| HTTP server และ client | `net/http` | ไม่ครอบคลุมในโมดูลนี้ |
+| HTTP server และ client | `net/http` | net/http |
 | Mutex, WaitGroup, Once | `sync` | Concurrency → sync-primitives |
 
-โมดูลนี้ตั้งใจไม่ครอบคลุม `net/http` หรือ `log/slog` เกินกว่าที่กล่าวถึงผ่านๆ — ทั้งสองใหญ่พอที่จะควรมีการอธิบายของตัวเอง และทุกอย่างที่ต้องรู้เพื่ออ่าน docs ของ package ทั้งสอง (interface, struct, error handling, `io.Reader`/`io.Writer`) ถูกสอนไว้ที่นี่และใน Errors & Generics แล้ว
+โมดูลนี้ตั้งใจไม่ครอบคลุม `log/slog` เกินกว่าที่กล่าวถึงผ่านๆ — มันใหญ่พอที่จะควรมีการอธิบายของตัวเอง และทุกอย่างที่ต้องรู้เพื่ออ่าน docs ของมัน (interface, struct, error handling, `io.Reader`/`io.Writer`) ถูกสอนไว้ที่นี่และใน Errors & Generics แล้ว
 
 ## ทำไมต้องเรียน standard library ก่อน?
 

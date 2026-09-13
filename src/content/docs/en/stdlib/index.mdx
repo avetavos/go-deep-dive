@@ -28,10 +28,10 @@ The table below shows what this module covers and which package delivers it.
 | Error values, wrapping, panics | `errors` | Errors & Generics module |
 | Cancellation, deadlines, request-scoped values | `context` | Concurrency → context |
 | Structured logging | `log/slog` | not covered in depth in this course |
-| HTTP servers and clients | `net/http` | not covered in this module |
+| HTTP servers and clients | `net/http` | net/http |
 | Mutexes, WaitGroup, Once | `sync` | Concurrency → sync-primitives |
 
-This module deliberately does not cover `net/http` or `log/slog` beyond passing mentions — both are large enough to deserve their own treatment, and everything you need to read either package's docs (interfaces, structs, error handling, `io.Reader`/`io.Writer`) is covered here and in Errors & Generics.
+This module deliberately does not cover `log/slog` beyond passing mentions — it is large enough to deserve its own treatment, and everything you need to read its docs (interfaces, structs, error handling, `io.Reader`/`io.Writer`) is covered here and in Errors & Generics.
 
 ## Why standard library first?
 

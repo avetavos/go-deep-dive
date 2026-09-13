@@ -69,6 +69,11 @@ export default defineConfig({
           items: [{ autogenerate: { directory: 'testing-tooling' } }],
         },
         {
+          label: 'Runtime Internals',
+          translations: { th: 'กลไกภายใน Runtime' },
+          items: [{ autogenerate: { directory: 'runtime-internals' } }],
+        },
+        {
           label: 'Glossary',
           translations: { th: 'อภิธานศัพท์' },
           link: 'glossary',

@@ -1,0 +1,334 @@
+---
+title: Memory Layout
+description: 'The real layout of a string, slice, map, interface, pointer, func value, and channel; struct padding and field reordering; cache lines, false sharing, and the unsafe.Pointer rules.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Where this picks up
+
+The [Interfaces](/go/en/methods-interfaces/interfaces/) lesson already showed that an interface value is two words — an itab pointer and a data pointer. Every number in this lesson was measured with `unsafe.Sizeof`, `unsafe.Alignof`, and `unsafe.Offsetof` on **darwin/arm64, a 64-bit platform** — every size below assumes a 64-bit `GOARCH` (`amd64`, `arm64`); on a 32-bit platform (`386`, `arm`) every pointer-sized field below is 4 bytes instead of 8, and the totals shrink accordingly.
+
+## The real layout of every "handle" type
+
+The [Types & Data](/go/en/types-data/) module already described slices, maps, and pointers as small "handles" that copy cheaply while sharing what they point to. Here is exactly how many bytes each of those handles actually is:
+
+export const layoutSizesCode = `package main
+
+import (
+\t"fmt"
+\t"unsafe"
+)
+
+type MyInterface interface{ M() }
+type impl struct{}
+
+func (impl) M() {}
+
+func main() {
+\tvar s string
+\tvar sl []int
+\tvar m map[string]int
+\tvar ch chan int
+\tvar fn func()
+\tvar p *int
+\tvar i MyInterface = impl{}
+\tvar a any
+
+\tfmt.Println("string:      Sizeof", unsafe.Sizeof(s), "Alignof", unsafe.Alignof(s))
+\tfmt.Println("[]int:       Sizeof", unsafe.Sizeof(sl), "Alignof", unsafe.Alignof(sl))
+\tfmt.Println("map:         Sizeof", unsafe.Sizeof(m), "Alignof", unsafe.Alignof(m))
+\tfmt.Println("chan:        Sizeof", unsafe.Sizeof(ch), "Alignof", unsafe.Alignof(ch))
+\tfmt.Println("func:        Sizeof", unsafe.Sizeof(fn), "Alignof", unsafe.Alignof(fn))
+\tfmt.Println("*int:        Sizeof", unsafe.Sizeof(p), "Alignof", unsafe.Alignof(p))
+\tfmt.Println("iface(any):  Sizeof", unsafe.Sizeof(a), "Alignof", unsafe.Alignof(a))
+\tfmt.Println("iface(1mth): Sizeof", unsafe.Sizeof(i), "Alignof", unsafe.Alignof(i))
+}`;
+
+<Playground code={layoutSizesCode} />
+
+Real output on Go 1.27, darwin/arm64:
+
+```text
+string:      Sizeof 16 Alignof 8
+[]int:       Sizeof 24 Alignof 8
+map:         Sizeof 8 Alignof 8
+chan:        Sizeof 8 Alignof 8
+func:        Sizeof 8 Alignof 8
+*int:        Sizeof 8 Alignof 8
+iface(any):  Sizeof 16 Alignof 8
+iface(1mth): Sizeof 16 Alignof 8
+```
+
+Reading what those numbers actually mean:
+
+| Type | Bytes (64-bit) | The words |
+|---|---|---|
+| `string` | 16 | a `*byte` (pointer to the underlying bytes) and an `int` length. No capacity — a string can never grow in place. |
+| `[]T` (slice) | 24 | a pointer, an `int` length, and an `int` capacity — the one extra word over a string, and the reason `append` sometimes reallocates and sometimes does not. |
+| `map[K]V` | 8 | a single pointer to a runtime `hmap` struct. Every copy of a map value (assignment, passing to a function) copies that one pointer — every copy shares the same underlying buckets, which is why writes through one copy are visible through another. |
+| `chan T` | 8 | a single pointer to a runtime `hchan` struct, for the same reason a map is one word: the value you hold is a handle to shared state, not the state itself. |
+| `func(...)` | 8 | a single pointer to a closure object (the function's code plus any captured variables) — this is also why passing a `func` value around is cheap regardless of how much it closed over. |
+| `*T` (any pointer) | 8 | exactly one machine word, the address, whatever `T` is. |
+| `any` / any interface value | 16 | two words: an itab (or, for `any` specifically, a `*_type`) pointer, and a data pointer — the exact two-word layout the Interfaces lesson already introduced, confirmed here with a real measurement rather than a diagram. |
+
+The pattern across all seven: **every one of these types is a small, fixed-size handle, no matter how much data it refers to.** A `map[string][]byte` with ten million entries is still 8 bytes to copy. This is also exactly why none of them come with a useful zero-value "empty container" *unless the runtime specifically designed one in* — a nil slice (`len`/`cap` both 0, pointer nil) is usable and empty, a nil map is readable but panics on write, because the handle alone carries no bucket storage to write into.
+
+## Struct padding and field reordering
+
+The compiler must place every field of a struct at an offset that is a multiple of that field's own alignment (an `int64` needs offset ≡ 0 mod 8, an `int32` needs offset ≡ 0 mod 4, and so on) — and it never reorders your fields to save space; it only inserts padding between them if declaration order demands it.
+
+export const paddingCode = `package main
+
+import (
+\t"fmt"
+\t"unsafe"
+)
+
+// Badly ordered: bool (1 byte) forces padding before the next 8-byte field.
+type Bad struct {
+\tA bool  // 1 byte
+\tB int64 // 8 bytes -- needs 8-byte alignment
+\tC bool  // 1 byte
+\tD int32 // 4 bytes -- needs 4-byte alignment
+}
+
+// Same fields, ordered largest-to-smallest: no padding needed until the end.
+type Good struct {
+\tB int64 // 8 bytes
+\tD int32 // 4 bytes
+\tA bool  // 1 byte
+\tC bool  // 1 byte
+}
+
+func main() {
+\tvar bad Bad
+\tvar good Good
+\tfmt.Println("Bad  Sizeof:", unsafe.Sizeof(bad))
+\tfmt.Println("Good Sizeof:", unsafe.Sizeof(good))
+
+\tfmt.Println("Bad.A offset:", unsafe.Offsetof(bad.A))
+\tfmt.Println("Bad.B offset:", unsafe.Offsetof(bad.B))
+\tfmt.Println("Bad.C offset:", unsafe.Offsetof(bad.C))
+\tfmt.Println("Bad.D offset:", unsafe.Offsetof(bad.D))
+
+\tfmt.Println("Good.B offset:", unsafe.Offsetof(good.B))
+\tfmt.Println("Good.D offset:", unsafe.Offsetof(good.D))
+\tfmt.Println("Good.A offset:", unsafe.Offsetof(good.A))
+\tfmt.Println("Good.C offset:", unsafe.Offsetof(good.C))
+}`;
+
+<Playground code={paddingCode} />
+
+Real output on Go 1.27, darwin/arm64:
+
+```text
+Bad  Sizeof: 24
+Good Sizeof: 16
+Bad.A offset: 0
+Bad.B offset: 8
+Bad.C offset: 16
+Bad.D offset: 20
+Good.B offset: 0
+Good.D offset: 8
+Good.A offset: 12
+Good.C offset: 13
+```
+
+Same four fields, same data, **33% smaller** just from ordering: `Bad.A` sits at offset 0 (1 byte), then 7 bytes of padding before `Bad.B` can start at offset 8 (its alignment requires a multiple of 8); `Bad.C` at offset 16 is followed by 3 bytes of padding before `Bad.D` can start at offset 20 (a multiple of 4); and the struct's own overall size gets rounded up to a multiple of its largest field's alignment (8), landing on 24. `Good` orders fields largest-alignment-first, so nothing after `B` and `D` ever needs to wait for an aligned boundary — `A` and `C`, at 1 byte each with no alignment requirement, simply pack next to each other at the end. The rule of thumb this justifies: **when several fields in a struct have no other constraint on their order (no reason one must come before another for readability), order them from largest alignment to smallest** — this never makes a struct bigger and sometimes makes it meaningfully smaller, at zero cost to correctness.
+
+## Cache lines and false sharing
+
+A CPU does not fetch memory one field at a time — it fetches a fixed-size **cache line**, 64 bytes on essentially every current x86-64 and arm64 processor, and keeps a per-core cached copy of it. When two different CPU cores are writing to two *different* variables that happen to sit inside the same 64-byte cache line, the CPU's cache-coherency protocol has to invalidate and refetch that entire line on every write from either core — even though the two goroutines never touch each other's data. This is **false sharing**: contention that looks, in the source, like it should not exist.
+
+Because reproducing this requires a real, sustained benchmark (a Playground's single run cannot show a timing difference reliably), this is a fenced snippet with real captured numbers, not a Playground — run it locally with `go test -bench=. -benchmem`.
+
+```go
+// Unpadded: both counters likely share one 64-byte cache line.
+type UnpaddedCounters struct {
+	A int64
+	B int64
+}
+
+// Padded: pad B onto its own cache line so updates to A and B never
+// invalidate the same cache line in another core.
+type PaddedCounters struct {
+	A    int64
+	_    [56]byte // pad to 64 bytes total (int64 is 8 bytes)
+	B    int64
+	pad2 [56]byte
+}
+
+// BenchmarkUnpadded and BenchmarkPadded each start two goroutines that
+// concurrently increment A and B in a tight loop, then wg.Wait().
+```
+
+Real output, three repeated runs, Go 1.27, darwin/arm64 (Apple M3 Pro):
+
+```text
+BenchmarkUnpadded-11    	933144940	         1.318 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUnpadded-11    	918987140	         1.322 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUnpadded-11    	913888532	         1.318 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPadded-11      	1000000000	         0.2850 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPadded-11      	1000000000	         0.2736 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPadded-11      	1000000000	         0.2653 ns/op	       0 B/op	       0 allocs/op
+```
+
+Padding `B` onto its own cache line made these two goroutines' increments roughly **4.6x faster**, with zero change to what either goroutine actually computes — `A` and `B` are still two completely independent counters, never read or written by more than one goroutine each. The entire cost difference is cache-coherency traffic caused purely by memory layout. This is a niche optimization — reach for it only after a profiler has pointed at exactly this pattern (independent counters or fields, hot, updated from different goroutines/cores) — but recognizing the shape in code (fields deliberately separated by a byte-array padding field, sometimes named `_pad` or similar) is worth being able to do on sight, since it otherwise looks like dead, wasted space.
+
+## `unsafe.Pointer`: recognizing the rules, not writing them
+
+`unsafe.Pointer` is how Go's type system gets deliberately bypassed, and the standard library's own documentation (`go doc unsafe Pointer`) is explicit that "code not using these patterns is likely to be invalid today or to become invalid in the future" — this course does not teach you to write it, only to recognize the handful of shapes that are actually sanctioned so unfamiliar `unsafe` code does not read as automatically suspicious or automatically safe. Three patterns cover nearly everything you will see: **(1)** converting `*T1` to `unsafe.Pointer` to `*T2` to reinterpret one type's bytes as another's (the standard library's own `math.Float64bits` does exactly this to read a `float64`'s bits as a `uint64`); **(2)** converting a `Pointer` to a `uintptr` purely to print or log an address, never converting that `uintptr` back — the documentation is blunt that a `uintptr` "is an integer, not a reference," so the garbage collector will neither update it if the object moves nor keep the object alive because of it; **(3)** the three-step `unsafe.Pointer(uintptr(p) + offset)` idiom to step to a specific field or element and back to `Pointer` **in the same expression**, never storing the intermediate `uintptr` in a variable across a statement boundary (across which a GC-driven stack move — see the Scheduler lesson — could invalidate it). A `go vet` pass flags many violations of these patterns, but its own documentation warns that a clean pass "is not a guarantee that the code is valid."
+
+## Mental Model
+
+```text
+Handle types (always this many bytes on 64-bit, no matter the data size):
+
+string   [ptr|len]                      16 bytes
+[]T      [ptr|len|cap]                  24 bytes
+map      [ptr]                          8 bytes  -> runtime hmap{...}
+chan     [ptr]                          8 bytes  -> runtime hchan{...}
+func     [ptr]                          8 bytes  -> closure{code, captured vars}
+*T       [ptr]                          8 bytes
+any      [itab/type ptr|data ptr]       16 bytes
+
+Struct layout: fields placed in DECLARATION order, padding inserted
+to satisfy each field's alignment -- reordering fields, not the compiler,
+is how you remove that padding.
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Fixed-size handles (slice, map, chan, func, interface) | Cheap to copy and pass regardless of underlying data size | An extra pointer indirection to reach the real data |
+| Largest-alignment-first struct field ordering | Smaller structs, more of them fit in a cache line, for free | A small readability cost if the "natural" field order (matching a spec or protocol) is not alignment-optimal |
+| Cache-line padding to prevent false sharing | Can produce multi-x speedups on hot, independently-updated fields | Wastes real memory (63 bytes of padding per padded field here) and adds real complexity — a niche, profiler-justified tool |
+| `unsafe.Pointer` | Lets performance-critical code reinterpret memory without a copy | Bypasses every safety guarantee the rest of this course relies on; only a handful of patterns are sanctioned |
+
+## Common Misconceptions
+
+- **"A slice, map, and channel are roughly the same 'reference type' size."** A slice is 24 bytes (three words); a map and a channel are each a single 8-byte pointer. All three share the "handle to shared state" shape, but not the same size.
+- **"The compiler reorders struct fields to minimize size, like some other languages' compilers do."** Go's compiler never reorders your fields — declaration order is layout order. Any size reduction from field ordering is something you have to do yourself.
+- **"Padding is always wasted space to eliminate."** Padding for alignment is unavoidable and usually harmless; padding added deliberately to prevent false sharing is *spending* memory on purpose for a measured performance win — the two look identical in a struct definition but mean opposite things.
+- **"Converting a pointer to `uintptr` and back later is fine as long as you don't change the number."** The address alone tells the runtime nothing about whether the object it pointed to is still there, or hasn't moved (see the Scheduler lesson's stack-copying example) — only the same-expression round-trip pattern is sanctioned.
+
+## Reading AI-generated code
+
+AI-generated Go rarely reasons about layout at all — structs get field order matching whatever order felt natural to write, and `unsafe` code, when it appears, is often copied from an unrelated example without checking which of the sanctioned patterns it actually matches. Check for these:
+
+- Does a large, frequently-allocated struct interleave small fields (`bool`, `byte`, small enums) between 8-byte fields (`int64`, pointers, slices, strings, interfaces) for no readability reason, when reordering would shrink it for free?
+- Is a `uintptr` obtained from an `unsafe.Pointer` stored in a variable, struct field, or slice — anywhere it could outlive the single expression that produced it — rather than being consumed immediately?
+- Does a comment near cache-line-padding-shaped fields (an unexplained `_ [N]byte` between two hot fields) exist, or is padding like that present with no explanation at all, leaving a reader to guess whether it is deliberate or leftover cruft?
+- Is `unsafe.Pointer` used to convert between two struct types that do not actually share an equivalent memory layout — different field order, different field types, or different sizes — which pattern (1) explicitly requires?
+
+<SpotTheBug code={`type Flags struct {
+	Debug     bool
+	MaxConns  int64
+	Verbose   bool
+	Timeout   int32
+	ReadOnly  bool
+}
+
+func NewFlags() *Flags {
+	return &Flags{MaxConns: 100, Timeout: 30}
+}`}>
+Nothing here is incorrect Go — it compiles, runs, and behaves exactly as written. The bug is a wasted-bytes one: three `bool` fields (1 byte each) are interleaved with an `int64` (8 bytes) and an `int32` (4 bytes) in declaration order, which is also layout order. Every `bool` before an 8-byte-aligned field forces padding up to the next 8-byte boundary, the same shape as this lesson's `Bad` struct. Reordering by descending alignment removes all of it with zero behavior change:
+
+```go
+type Flags struct {
+	MaxConns int64 // 8 bytes
+	Timeout  int32 // 4 bytes
+	Debug    bool  // 1 byte
+	Verbose  bool  // 1 byte
+	ReadOnly bool  // 1 byte
+}
+```
+
+For one struct this saves a handful of bytes — not worth a code review comment on its own. It becomes worth flagging when the struct is allocated per-request, per-connection, or per-row at scale, where the wasted padding is now multiplied by however many live at once.
+</SpotTheBug>
+
+> 💡 Real-world example
+>
+> Go's own `time.Time` (`time/time.go`, standard library) deliberately orders its three fields — `wall uint64`, `ext int64`, `loc *Location` — largest-alignment-first, and the type's doc comment goes out of its way to warn that `Time` values "should not be compared using `==`" partly because of exactly this kind of internal representation detail: the layout is designed for size and access-pattern efficiency, not for looking like the most natural declaration order a reader might reach for first.
+
+export const quizMemoryLayout = [
+  {
+    q: "On a 64-bit platform, what is unsafe.Sizeof a plain map[string]int value, and why?",
+    options: [
+      "16 bytes -- a pointer plus a length, like a string",
+      "24 bytes -- a pointer, length, and capacity, like a slice",
+      "8 bytes -- a single pointer to a runtime hmap struct; the map's actual data lives elsewhere",
+      "It depends on how many entries are in the map"
+    ],
+    answer: 2,
+    explain: "A map value is one machine word: a pointer to the runtime's hmap struct. Copying a map copies that one pointer, which is why every copy shares the same underlying buckets -- the map's size as a Go value never depends on how many entries it holds."
+  },
+  {
+    q: "Why did reordering the same four struct fields from `bool, int64, bool, int32` to `int64, int32, bool, bool` shrink the struct from 24 to 16 bytes?",
+    options: [
+      "The compiler always reorders fields for you unless told not to",
+      "Removing a field's alignment requirement by moving it changes its size",
+      "Placing large-alignment fields first avoids the padding needed to align a later 8-byte or 4-byte field after small fields, and packs the small fields together at the end with no alignment gaps between them",
+      "Go structs are always a multiple of 16 bytes regardless of field order"
+    ],
+    answer: 2,
+    explain: "Go never reorders fields itself -- declaration order is layout order. Ordering fields from largest alignment to smallest is something the programmer does, and it works because small fields packed at the end need no padding between each other, while an int64 or int32 placed after small fields would have forced padding to reach its required alignment."
+  },
+  {
+    q: "What causes 'false sharing' between two goroutines updating two independent int64 counters?",
+    options: [
+      "The two goroutines are actually racing on the same variable due to a bug",
+      "The two counters happen to sit within the same 64-byte CPU cache line, so writes from either core invalidate the whole line for the other, even though the counters themselves are never shared",
+      "sync/atomic operations are slower than plain increments",
+      "The Go scheduler runs both goroutines on the same OS thread, serializing them"
+    ],
+    answer: 1,
+    explain: "False sharing is a hardware cache-coherency effect, not a correctness bug -- the two variables are genuinely independent in the program's logic, but the CPU treats the whole 64-byte cache line they share as a single unit for coherency purposes, so concurrent writes to either variable contend."
+  },
+  {
+    q: "Per unsafe.Pointer's own documentation, why is converting a Pointer to a uintptr and storing it in a variable across statements dangerous?",
+    options: [
+      "uintptr values are always garbage-collected too early",
+      "A uintptr is just an integer with no pointer semantics -- the garbage collector will not update it if the underlying object moves, nor keep the object alive because of it",
+      "uintptr cannot be printed or logged",
+      "It causes an immediate compile error"
+    ],
+    answer: 1,
+    explain: "The documented sanctioned patterns only cover converting Pointer to uintptr to print it (never converting back), or doing the uintptr-arithmetic-back-to-Pointer round trip within a single expression. Storing an intermediate uintptr across statement boundaries risks the object moving (e.g. during a goroutine stack copy) with nothing updating the stale integer."
+  },
+  {
+    q: "```go\nvar s string\nvar sl []int\nfmt.Println(unsafe.Sizeof(s), unsafe.Sizeof(sl))\n```\nOn a 64-bit platform, what does this print, and why does the slice differ from the string?",
+    options: [
+      "16 16 -- both are just a pointer and a length",
+      "16 24 -- a string is (pointer, length); a slice adds a third word, capacity, that a string does not need since it never grows",
+      "8 8 -- both are single pointers",
+      "24 16 -- slices are smaller because they don't track a separate length"
+    ],
+    answer: 1,
+    explain: "A string is immutable and never reallocates, so it only needs a data pointer and a length. A slice can grow via append, and append needs to know how much spare room exists before it must reallocate -- that's the extra `cap` word a string structurally cannot need."
+  },
+  {
+    q: "A benchmark shows two goroutines incrementing separate counters at 1.3 ns/op unpadded and 0.28 ns/op after adding cache-line padding between the fields. What does this demonstrate?",
+    options: [
+      "The padded version does less work per increment",
+      "sync/atomic was silently added by the padding",
+      "The two counters were sharing a CPU cache line; padding one onto its own line eliminated false-sharing contention between the cores updating each counter, with no change to program logic",
+      "The benchmark is measuring memory allocation, not CPU time"
+    ],
+    answer: 2,
+    explain: "Both versions compute exactly the same thing -- two independent counters, incremented by two goroutines. The ~4.6x speedup comes entirely from removing cache-coherency contention caused by both counters living in the same 64-byte line, which is the defining symptom of false sharing."
+  }
+];
+
+<Quiz client:visible id="runtime-internals/memory-layout" questions={quizMemoryLayout} />
+
+<ProgressTracker client:visible id="runtime-internals/memory-layout" />

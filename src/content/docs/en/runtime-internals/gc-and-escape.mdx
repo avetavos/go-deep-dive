@@ -1,0 +1,510 @@
+---
+title: GC and Escape Analysis
+description: 'Tri-color concurrent mark and sweep, write barriers, GOGC and GOMEMLIMIT, what a GC pause actually is, escape analysis from real -gcflags output, sync.Pool, -benchmem, and runtime/metrics.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Where this picks up
+
+The [Pointers](/go/en/types-data/pointers/) lesson already introduced escape analysis at the level you need to know "a pointer isn't always faster," with one worked example (`newConfig` returning `&c`) and one real `-gcflags=-m` capture. This lesson goes further in two directions: the specific shapes of code that force an escape, read from real compiler output every time, and what actually happens to everything that does escape — the collector that has to track it.
+
+## Escape analysis: the shapes that force the heap
+
+Five patterns account for almost every escape a reviewer needs to recognize on sight. Each one below is a real, isolated, `//go:noinline` program compiled with `go build -gcflags='-m -m'` on Go 1.26.5 — the decision lines only, with inlining diagnostics trimmed for readability (the full output includes many more lines about inlining budgets that do not change the escape verdict).
+
+**1. Returning a pointer to a local variable** — already covered in Pointers, restated here as the baseline:
+
+```go
+func newConfig() *Config {
+	c := Config{Workers: 4}
+	return &c
+}
+```
+```text
+./main.go:7:2: moved to heap: c
+```
+
+**2. Boxing into an interface:**
+
+```go
+func asAny(n int) any {
+	return n
+}
+```
+```text
+./main.go:5:9: n escapes to heap
+```
+
+**3. A closure capturing a variable by reference:**
+
+```go
+func makeCounter() func() int {
+	count := 0
+	return func() int {
+		count++
+		return count
+	}
+}
+```
+```text
+./main.go:5:2: moved to heap: count
+./main.go:6:9: func literal escapes to heap
+```
+
+**4. A slice of pointers:**
+
+```go
+func pointerSlice(n int) []*int {
+	out := make([]*int, n)
+	for i := 0; i < n; i++ {
+		v := i
+		out[i] = &v
+	}
+	return out
+}
+```
+```text
+./main.go:7:3: moved to heap: v
+./main.go:5:13: make([]*int, n) escapes to heap
+```
+
+**5. A size the compiler cannot know at compile time:**
+
+```go
+func makeBuf(n int) []byte {
+	return make([]byte, n) // size not known at compile time -- runtime decides
+}
+```
+```text
+./main.go:5:13: make([]byte, n) escapes to heap
+```
+
+A `make` with a compile-time constant size and small enough to prove non-escaping stays on the stack; the moment the size is a variable (`n`, unknown until runtime), the compiler cannot reserve a fixed amount of stack space for it ahead of time, so it goes to the heap regardless of whether the slice itself ever outlives the function.
+
+None of these five require memorizing compiler internals — they are the concrete version of "does this value's lifetime provably end when the function returns." A value that is returned by pointer, stored in an interface, closed over, pointed to from something that outlives the pointee, or sized dynamically fails that test.
+
+## Measuring allocations directly: `testing.AllocsPerRun`
+
+Reading `-gcflags` output predicts allocations; `testing.AllocsPerRun` measures them, and — unlike a full benchmark — runs fine as a plain program, no `go test` binary required.
+
+export const allocsPerRunCode = `package main
+
+import (
+\t"fmt"
+\t"testing"
+)
+
+type Config struct{ Workers int }
+
+var sinkPtr *Config
+var sinkVal Config
+var sinkAny any
+
+//go:noinline
+func newConfigPtr() *Config {
+\tc := Config{Workers: 4}
+\treturn &c
+}
+
+//go:noinline
+func newConfigVal() Config {
+\treturn Config{Workers: 4}
+}
+
+//go:noinline
+func asAnySmall(n int) any {
+\treturn n
+}
+
+//go:noinline
+func asAnyLarge(n int) any {
+\treturn n
+}
+
+func main() {
+\tavgPtr := testing.AllocsPerRun(1000, func() {
+\t\tsinkPtr = newConfigPtr() // escapes: stored in a package-level var
+\t})
+\tavgVal := testing.AllocsPerRun(1000, func() {
+\t\tsinkVal = newConfigVal() // stays a value -- no pointer ever taken
+\t})
+\tavgBoxSmall := testing.AllocsPerRun(1000, func() {
+\t\tsinkAny = asAnySmall(42) // small int (0-255): Go's staticuint64s table, no alloc
+\t})
+\tavgBoxLarge := testing.AllocsPerRun(1000, func() {
+\t\tsinkAny = asAnyLarge(424242) // outside the small-int table: real heap alloc
+\t})
+\tfmt.Printf("newConfigPtr (escapes, stored):  %.0f allocs/op\\n", avgPtr)
+\tfmt.Printf("newConfigVal (value, no escape): %.0f allocs/op\\n", avgVal)
+\tfmt.Printf("asAny(42) (small int, 0-255):    %.0f allocs/op\\n", avgBoxSmall)
+\tfmt.Printf("asAny(424242) (large int):       %.0f allocs/op\\n", avgBoxLarge)
+}`;
+
+<Playground code={allocsPerRunCode} />
+
+Real output on Go 1.27, darwin/arm64:
+
+```text
+newConfigPtr (escapes, stored):  1 allocs/op
+newConfigVal (value, no escape): 0 allocs/op
+asAny(42) (small int, 0-255):    0 allocs/op
+asAny(424242) (large int):       1 allocs/op
+```
+
+The third line is not a mistake: the runtime keeps a static table of pre-boxed `any` values for small integers (0–255) — `runtime.staticuint64s` — so boxing one of them costs nothing. Box `424242`, outside that table, and the real allocation reappears. This is a genuine runtime detail, not a simplification for teaching: it is exactly why "does this box a small integer constant" is not a reliable signal by itself when reading code for allocations — the *value*, not just the shape, can matter.
+
+## The collector: tri-color concurrent mark and sweep
+
+Go's collector is documented, in its own source (`runtime/mgc.go`, Go 1.26.5), as *"a concurrent mark and sweep that uses a write barrier... non-generational and non-compacting."* Concurrent means most of its work happens while your goroutines keep running, not during one long pause — a deliberate trade against languages whose collectors fully stop the program to collect.
+
+The algorithm classifies every object into one of three colors, exactly as the runtime source describes it:
+
+- **White** — not yet found reachable this cycle (candidates for collection).
+- **Grey** — found reachable, but its own pointers have not been scanned yet.
+- **Black** — found reachable, and every pointer inside it has been scanned.
+
+A GC cycle starts with everything white, moves the roots (globals, goroutine stacks) to grey, and then repeatedly picks a grey object, scans it (turning it black and turning everything it points to grey), until no grey objects remain. Whatever is still white at that point is genuinely unreachable and gets swept.
+
+export const gcColorDiagram = `flowchart LR
+  subgraph Start["Cycle start"]
+    W1["white: everything"]
+  end
+  subgraph Marking["Marking (concurrent with your goroutines)"]
+    G["grey: reachable, not yet scanned"]
+    B["black: reachable, fully scanned"]
+    G -->|scan, shade pointers found| B
+    G -->|newly-found pointers| G
+  end
+  subgraph End["Cycle end"]
+    W2["still white = unreachable -> swept"]
+  end
+  W1 --> G
+  B --> End`;
+
+<Mermaid code={gcColorDiagram} title="Tri-color marking: white shrinks to exactly the reachable set, everything left white is garbage" />
+
+### The write barrier keeps marking safe while your program keeps running
+
+Marking concurrently with a running program creates one real danger: your goroutine could write a pointer from a black (already-scanned) object to a white (not-yet-found) object, then overwrite or lose the only other reference to that white object — the collector would never revisit the black object to find it, and would sweep away something still reachable. The **write barrier** — extra code the compiler inserts around every pointer write while a GC cycle is active — is what prevents this. Per the source comment: *"The write barrier shades both the overwritten pointer and the new pointer value for any pointer writes"* — turning both the old and new target grey immediately, so nothing a live pointer write touches can be missed. The write barrier is only active during the marking phase (`_GCmark`/`_GCmarktermination` in the runtime's phase enum) — outside a GC cycle, an ordinary pointer write costs nothing extra.
+
+### The two stop-the-world pauses
+
+Per `go doc runtime` (the `gctrace` section of `runtime/extern.go`): *"The phases are stop-the-world (STW) sweep termination, concurrent mark and scan, and STW mark termination."* Only the first and third of those three actually stop every goroutine; the middle phase — almost all the wall-clock time of a GC cycle — runs alongside your program. This is the single most common misreading of "GC pause": the multi-millisecond number you see in a trace is mostly *not* a pause at all.
+
+## Reading a real GC pause with `GODEBUG=gctrace=1`
+
+A small linked-list-building program, `GODEBUG=gctrace=1`, Go 1.27, darwin/arm64:
+
+```text
+gc 1 @0.013s 3%: 0.055+0.41+0.39 ms clock, 0.61+0.36/0.74/0+4.3 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 11 P
+```
+
+Reading it against the exact field documentation from `go doc runtime`:
+
+| Segment | Meaning here |
+|---|---|
+| `gc 1` | The first GC cycle this process has run |
+| `@0.013s` | 13ms after the program started |
+| `3%` | 3% of all CPU time since start has gone to GC so far |
+| `0.055+0.41+0.39 ms clock` | The three phases, wall-clock: **0.055ms STW sweep termination**, **0.41ms concurrent mark** (your goroutines kept running), **0.39ms STW mark termination** |
+| `0.61+0.36/0.74/0+4.3 ms cpu` | CPU time (not wall-clock) for the same phases, with the concurrent-mark figure further split into assist/background/idle GC work |
+| `3->4->1 MB` | Heap size at cycle start, at cycle end, and the live heap actually found reachable |
+| `4 MB goal` | The heap size that would trigger the *next* cycle |
+| `0 MB stacks`, `0 MB globals`, `11 P` | Scannable stack size, scannable global size, and `GOMAXPROCS` at the time |
+
+The real "pause" a request handled during this cycle would feel is the two STW numbers added together — roughly **0.45ms** here — not the full 0.86ms total, and definitely not the 13ms timestamp. A goroutine running throughout the concurrent-mark phase is slowed by write-barrier overhead and possibly GC assist work, but it is never stopped by it.
+
+## `GOGC` and `GOMEMLIMIT`
+
+`GOGC` sets the target heap growth ratio: the default, `100`, means *"trigger a collection when the heap has grown to roughly double the size of the live heap after the last collection."* Raising it trades memory for fewer, less frequent collections; `GOGC=off` disables the ratio trigger entirely (collections still happen, just far less often — a forced periodic GC or an explicit `runtime.GC()` call still runs). Real cycle counts building the same 200,000-node linked list, `GODEBUG=gctrace=1`, counting lines that start with `gc `:
+
+```text
+GOGC (default, 100):  15 GC cycles
+GOGC=400:               6 GC cycles
+GOGC=off:               3 GC cycles
+```
+
+`GOMEMLIMIT` is a different knob entirely: a **soft memory ceiling** in bytes, independent of `GOGC`'s ratio. Per `runtime/debug.SetMemoryLimit`'s doc: *"This limit will be respected even if `GOGC=off`."* Verified directly — adding a 20 MiB limit on top of `GOGC=off`:
+
+```text
+GOMEMLIMIT=20MiB GOGC=off: 36 GC cycles
+```
+
+`GOGC=off` alone dropped the cycle count to 3; adding a memory limit on top of that same `GOGC=off` run pushed it back up to 36 — the collector is running far more often specifically to stay under the byte ceiling, exactly as documented, completely ignoring the fact that the ratio trigger is nominally disabled. `GOMEMLIMIT` is the right tool for "never let this process exceed the container's memory limit"; `GOGC` is the right tool for "trade memory for CPU" when there is no hard ceiling to respect.
+
+## `sync.Pool`: reuse without the boxing trap
+
+`sync.Pool` holds a set of temporary objects for reuse instead of letting them get garbage collected and reallocated — genuinely useful for anything expensive to allocate and used briefly and repeatedly (a scratch buffer per request, in the shape `net/http`'s own internals use it). But `sync.Pool.Get`/`Put` operate on `any`, and storing a value into an interface allocates unless the value already fits in the interface's single data word (a pointer does; a multi-word type like a raw `[]byte` header does not). Measured with `testing.AllocsPerRun`, pooling the wrong shape can cost *more* than not pooling at all:
+
+```text
+pooling a raw []byte value (boxed into `any` on every Put): 1 allocs/op
+not pooling at all (bytes.Buffer stays a local value):       1 allocs/op
+pooling *bytes.Buffer (a pointer, fits in the interface):    0 allocs/op
+```
+
+export const syncPoolCode = `package main
+
+import (
+\t"bytes"
+\t"fmt"
+\t"sync"
+\t"testing"
+)
+
+var bufPool = sync.Pool{
+\tNew: func() any {
+\t\treturn new(bytes.Buffer) // pointer type: fits directly in the interface word
+\t},
+}
+
+//go:noinline
+func withoutPool() {
+\tvar buf bytes.Buffer
+\tbuf.WriteString("hello")
+\t_ = buf.String()
+}
+
+//go:noinline
+func withPool() {
+\tbuf := bufPool.Get().(*bytes.Buffer)
+\tbuf.Reset()
+\tbuf.WriteString("hello")
+\t_ = buf.String()
+\tbufPool.Put(buf)
+}
+
+func main() {
+\tavgWithout := testing.AllocsPerRun(1000, withoutPool)
+\tavgWith := testing.AllocsPerRun(1000, withPool)
+\tfmt.Printf("without sync.Pool (bytes.Buffer value): %.0f allocs/op\\n", avgWithout)
+\tfmt.Printf("with sync.Pool (*bytes.Buffer):          %.0f allocs/op\\n", avgWith)
+}`;
+
+<Playground code={syncPoolCode} />
+
+Real output on Go 1.27, darwin/arm64:
+
+```text
+without sync.Pool (bytes.Buffer value): 1 allocs/op
+with sync.Pool (*bytes.Buffer):          0 allocs/op
+```
+
+The pattern that works: pool a pointer to something with real internal state to reuse (`*bytes.Buffer`, a `*MyScratchStruct`), reset it after `Get`, and never assume `Get` returns a zeroed value — the whole point is that it might be handing you something a previous caller used. `sync.Pool` also has a documented lifetime quirk worth knowing when reading code that relies on it: the garbage collector is free to clear the entire pool on any GC cycle, so it is only a *may-reuse* cache, never a guaranteed-reuse one, and code must work correctly (just slower) on a cache miss.
+
+## `-benchmem`: turning escape predictions into numbers
+
+`go test -bench=. -benchmem` reports `B/op` and `allocs/op` per iteration — the benchmark-shaped sibling of `testing.AllocsPerRun`, with real timing alongside it. This requires the `go test` binary, so it is a fenced snippet here, not a Playground — run it locally with `go test -bench=. -benchmem`. Real output for the pointer-vs-value pair from earlier in this lesson:
+
+```text
+goos: darwin
+goarch: arm64
+pkg: bench
+cpu: Apple M3 Pro
+BenchmarkNewConfigPtr-11    	186178467	         6.137 ns/op	       8 B/op	       1 allocs/op
+BenchmarkNewConfigVal-11    	692306694	         1.734 ns/op	       0 B/op	       0 allocs/op
+```
+
+The `-11` suffix is `GOMAXPROCS` at benchmark time, not part of the name. The value version is not just allocation-free — it runs 3.5x faster on this machine, because escaping to the heap also means the object is now something the collector has to track on every subsequent cycle until it becomes unreachable, not just a one-time allocation cost. Reading `-m -m` output predicts the `allocs/op` column; it never predicts the `ns/op` column by itself, since that also depends on cache behavior, GC load, and everything else running at the time.
+
+## `runtime/metrics`: reading the collector's own numbers from inside the program
+
+`runtime/pprof` and `GODEBUG=gctrace` are both external observation; `runtime/metrics` is how a running program reads the same kind of data about itself — the stable, typed successor to the older, harder-to-extend `runtime.ReadMemStats`.
+
+export const runtimeMetricsCode = `package main
+
+import (
+\t"fmt"
+\t"runtime/metrics"
+)
+
+func main() {
+\tsamples := []metrics.Sample{
+\t\t{Name: "/gc/heap/allocs:bytes"},
+\t\t{Name: "/gc/heap/objects:objects"},
+\t\t{Name: "/sched/goroutines:goroutines"},
+\t\t{Name: "/memory/classes/heap/free:bytes"},
+\t}
+\tmetrics.Read(samples)
+\tfor _, s := range samples {
+\t\tswitch s.Value.Kind() {
+\t\tcase metrics.KindUint64:
+\t\t\tfmt.Printf("%-30s %d\\n", s.Name, s.Value.Uint64())
+\t\tcase metrics.KindFloat64:
+\t\t\tfmt.Printf("%-30s %f\\n", s.Name, s.Value.Float64())
+\t\tdefault:
+\t\t\tfmt.Printf("%-30s (unsupported kind)\\n", s.Name)
+\t\t}
+\t}
+}`;
+
+<Playground code={runtimeMetricsCode} />
+
+Real output (exact byte and object counts vary run to run — this is what one real run on Go 1.27 produced):
+
+```text
+/gc/heap/allocs:bytes          122752
+/gc/heap/objects:objects       15
+/sched/goroutines:goroutines   6
+/memory/classes/heap/free:bytes 0
+```
+
+`metrics.All()` lists every metric the running Go version supports, each with a stable name and description — the same mechanism a monitoring library like `expvar` or a Prometheus exporter uses internally, rather than scraping `runtime.MemStats` fields whose meaning and presence have shifted across Go releases.
+
+## Mental Model
+
+```text
+Escape analysis (compile time):          The collector (runtime, ongoing):
+
+does this value's lifetime               tri-color mark:
+end when the function returns?             white -> grey -> black
+        │                                        │
+   yes ─┴─ no                            write barrier keeps this
+    │       │                            safe while goroutines run
+ stack    heap                                   │
+ (free)   (GC-tracked            STW sweep-term → concurrent mark → STW mark-term
+           from here on)          (short)          (most of the time)   (short)
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Concurrent mark and sweep | Goroutines keep running through most of a GC cycle | Write barrier overhead on every pointer write while marking |
+| Escape analysis keeping values on the stack | Zero-cost allocation and zero GC tracking | The compiler's proof is conservative — some genuinely safe cases still escape |
+| Raising `GOGC` | Fewer, less frequent collections | Higher peak memory (a bigger heap before each trigger) |
+| `GOMEMLIMIT` | A hard ceiling regardless of `GOGC` | Collections become the response to memory pressure, which can mean *more* frequent, harder-working GC near the limit |
+| `sync.Pool` (pointer types) | Fewer allocations for expensive, reused objects | Pool contents can vanish on any GC; only ever a may-reuse cache |
+
+## Common Misconceptions
+
+- **"The number in a gctrace line is how long the program paused."** Only the first and third of the three clock numbers are STW; the middle one, almost all the wall-clock time, runs concurrently with your goroutines.
+- **"`GOGC=off` means no more GC, ever."** It disables the heap-growth-ratio trigger specifically; a periodic forced collection and `runtime.GC()` calls still run, and `GOMEMLIMIT` still forces collections if set, regardless of `GOGC`.
+- **"Boxing a small integer into `any` always allocates."** Values 0–255 are served from a static table (`runtime.staticuint64s`) and cost nothing; the allocation reappears the moment the value falls outside that range.
+- **"`sync.Pool` always reduces allocations."** Pooling a value type that does not fit in one interface word (a raw slice, a plain struct larger than a pointer) can cost an allocation on every `Put` from interface boxing — pool a pointer instead.
+- **"Escape analysis output is exhaustive proof a value never escapes."** It is a real compiler decision that changes across Go releases and inlining decisions; treat `-gcflags=-m` output as ground truth for *this build*, not a permanent property of the source text.
+
+## Reading AI-generated code
+
+AI-generated Go defensively returns pointers and boxes values into `any` far more than the code actually needs to, on the theory that both are "safer." Check for these:
+
+- Does a function return `&SomeStruct{...}` when the caller only ever reads a field once and never needs to mutate the original or share it? A returned value, not a pointer, would let the compiler keep it off the heap.
+- Is something stored in a `map[string]any`, an `interface{}` parameter, or passed through `fmt.Sprintf("%v", x)` when a concretely-typed alternative would do the same job without boxing?
+- Is a `sync.Pool` storing a raw slice, array, or plain struct value instead of a pointer to one — quietly paying a boxing allocation on every `Put`?
+- Does a benchmark or performance claim in a comment ("this avoids allocation") lack an actual `-benchmem` or `AllocsPerRun` number backing it up?
+- Is `GOGC` or `GOMEMLIMIT` tuned in a comment or config file with a claimed effect ("this eliminates GC pauses") that confuses disabling the ratio trigger with disabling collection entirely?
+
+<SpotTheBug code={`type Stats struct {
+	Requests int
+	Errors   int
+}
+
+func recordStats(s Stats) map[string]any {
+	return map[string]any{
+		"requests": s.Requests,
+		"errors":   s.Errors,
+	}
+}
+
+func logAll(entries []Stats) {
+	for _, e := range entries {
+		m := recordStats(e)
+		fmt.Println(m)
+	}
+}`}>
+`recordStats` boxes two `int` fields into `any` values inside a freshly allocated `map[string]any`, on every call, for data that is only ever printed. Every `map[string]any` allocates the map's internal buckets, and every non-small-int value assigned into it (here, `s.Requests` and `s.Errors` are only avoiding a box if they happen to land in the 0–255 static table — a request counter will not stay there for long) boxes into a fresh heap allocation. None of that indirection buys anything here: `fmt.Println` would print a concretely-typed struct exactly as well, with zero of these allocations, because `Stats` itself never needs to leave the stack.
+
+```go
+func logAll(entries []Stats) {
+	for _, e := range entries {
+		fmt.Printf("requests=%d errors=%d\n", e.Requests, e.Errors)
+	}
+}
+```
+
+If a genuine need for a dynamically-shaped value exists (serializing to JSON with optional fields, say), reach for `map[string]any` there — the pattern is not wrong in general, only wrong here, where the concrete struct already had everything the caller needed.
+</SpotTheBug>
+
+> 💡 Real-world example
+>
+> `net/http`'s server (`net/http/server.go`, standard library) keeps a `sync.Pool` of `*bufio.Reader` and `*bufio.Writer` values (`newBufioReader`/`putBufioReader` and their writer equivalents) for exactly the reason this lesson describes: connections are opened and closed constantly, and rebuilding a fresh buffered reader/writer per connection would be a real allocation cost multiplied across every request — pooling the pointer types avoids the boxing cost this lesson's `sync.Pool` example demonstrates, and the GC-can-clear-it-anytime semantics are fine because a cache miss just means allocating a fresh one, same as not pooling at all.
+
+export const quizGcEscape = [
+  {
+    q: "Which of these five, verified against real -gcflags='-m -m' output in this lesson, does NOT by itself force a heap allocation?",
+    options: [
+      "Returning a pointer to a local variable",
+      "Passing a value by pointer to a function that only reads it and never stores the pointer anywhere",
+      "Boxing a value into an interface (any)",
+      "make()-ing a slice whose length is a variable, not a compile-time constant"
+    ],
+    answer: 1,
+    explain: "The lesson's five escape shapes are: returning a pointer, boxing into an interface, a closure capturing by reference, a slice of pointers, and a runtime-only size. A pointer that a callee only reads and never stores anywhere it can outlive the call is exactly the case the compiler CAN prove safe to keep on the stack."
+  },
+  {
+    q: "According to runtime/mgc.go's own doc comment, what is the write barrier's job?",
+    options: [
+      "To physically move objects during a compaction pass",
+      "To shade both the overwritten pointer and the new pointer value on every pointer write during marking, preventing a live object from being missed",
+      "To pause all goroutines while a pointer is written",
+      "To zero out freed memory before it is reused"
+    ],
+    answer: 1,
+    explain: "Go's collector is non-compacting, so there is no object-moving pass to protect against. The write barrier exists specifically so a concurrently-running goroutine cannot hide a still-reachable object from the marker by moving its only remaining pointer around."
+  },
+  {
+    q: "In a `gctrace` line like `0.055+0.41+0.39 ms clock`, which portion(s) actually stop every goroutine (STW)?",
+    options: [
+      "All three numbers -- the whole GC cycle is one long pause",
+      "Only the middle number (concurrent mark)",
+      "The first and third numbers (sweep termination and mark termination); the middle number runs concurrently with your program",
+      "None of them -- Go's GC never stops any goroutine"
+    ],
+    answer: 2,
+    explain: "go doc runtime documents these three phases explicitly as STW sweep termination, concurrent mark and scan, and STW mark termination -- only the two STW phases are an actual pause; the concurrent phase, almost all the wall-clock time in most traces, is not."
+  },
+  {
+    q: "A program sets GOGC=off. According to this lesson's measurements and the documented behavior of GOMEMLIMIT, what happens if GOMEMLIMIT=20MiB is also set?",
+    options: [
+      "GOGC=off overrides GOMEMLIMIT completely -- no GC ever runs",
+      "GOMEMLIMIT is ignored whenever GOGC=off is set",
+      "The collector still runs -- more often than with GOGC=off alone -- to keep the heap under the 20 MiB soft limit, exactly as SetMemoryLimit's documentation states it will even when GOGC=off",
+      "The program crashes because the two settings conflict"
+    ],
+    answer: 2,
+    explain: "Measured directly in this lesson: GOGC=off alone dropped a workload to 3 GC cycles, but adding GOMEMLIMIT=20MiB on top of that same GOGC=off setting pushed it to 36 cycles -- the soft memory limit is respected independently of the ratio trigger being disabled."
+  },
+  {
+    q: "Why did pooling a raw []byte value in a sync.Pool cost 1 allocs/op in this lesson's measurement, while pooling a *bytes.Buffer cost 0?",
+    options: [
+      "sync.Pool only supports pointer types; the []byte version was invalid Go",
+      "A []byte header (pointer+len+cap) does not fit in an interface's single data word, so storing it into the any-typed Pool boxes it on every Put; a pointer already fits in that word with no extra allocation",
+      "bytes.Buffer is implemented with less internal state than []byte",
+      "The benchmark measured wall-clock time, not allocations, so the numbers are unrelated to boxing"
+    ],
+    answer: 1,
+    explain: "sync.Pool.Get/Put operate on `any`. A pointer is exactly one word and slots into an interface value with no extra allocation; a three-word slice header does not, so the runtime must heap-allocate a box for it every time -- exactly the interface-boxing mechanism from the Memory Layout topics in this course, applied here as a real performance trap."
+  },
+  {
+    q: "```go\nfunc asAny(n int) any { return n }\n\nfunc main() {\n    a := testing.AllocsPerRun(1000, func() { _ = asAny(42) })\n    b := testing.AllocsPerRun(1000, func() { _ = asAny(424242) })\n    fmt.Println(a, b)\n}\n```\nBased on this lesson's measurements, what does this print?",
+    options: [
+      "1 1 -- boxing any int always allocates",
+      "0 0 -- boxing a discarded value never allocates",
+      "0 1 -- small integers 0-255 come from a static table with no allocation; 424242 falls outside it and allocates",
+      "1 0 -- larger integers are cached more aggressively than small ones"
+    ],
+    answer: 2,
+    explain: "This lesson measured exactly this pair: asAny(42) cost 0 allocs/op (served from runtime's staticuint64s table for values 0-255) while asAny(424242) cost 1 alloc/op (outside that table, boxed for real)."
+  }
+];
+
+<Quiz client:visible id="runtime-internals/gc-and-escape" questions={quizGcEscape} />
+
+<ProgressTracker client:visible id="runtime-internals/gc-and-escape" />

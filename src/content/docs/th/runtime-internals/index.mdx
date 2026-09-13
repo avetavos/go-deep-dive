@@ -1,0 +1,201 @@
+---
+title: 'Runtime Internals: อ่าน Go จากด้านใน'
+description: 'ทำไมต้องเข้าใจ runtime ของ Go — memory model, scheduler, GC และ memory layout — เพื่อให้ตัดสินโค้ดที่ไม่คุ้นเคยได้ ไม่ใช่แค่รันดูผล'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## จุดประสงค์ของโมดูลนี้
+
+ทุกโมดูลก่อนหน้านี้สอนให้คุณ *เขียน* Go: syntax, type, method, concurrency primitive, standard library ไม่มีโมดูลไหนบังคับให้คุณรู้ว่าสิ่งเหล่านั้นทำงานจริงอย่างไร คุณเขียน goroutine ที่ทำงานได้ เขียน `sync.Mutex` ที่ถูกต้อง เขียน struct สิบกว่า field ได้ โดยไม่เคยต้องถามว่า scheduler ทำอะไรกับตัวแรก "ถูกต้อง" สำหรับตัวที่สองหมายความว่าอย่างไรจริง ๆ หรือตัวที่สามถูกจัดวางใน memory อย่างไร
+
+ช่องว่างตรงนี้คือจุดที่โค้ด Go ที่ AI เขียนพังบ่อยที่สุด — และเป็นจุดที่ reviewer ที่ไม่เคยเห็นกลไกด้านล่างจับไม่ได้ snippet ที่ AI generate มาอาจถูก syntax เป๊ะ, ผ่าน `go vet`, แต่ยังทำให้ goroutine leak, race บน flag ที่ share กัน, หรือ allocate ทุกครั้งที่เรียกใน hot loop ไม่มีข้อไหนเป็น syntax error ทั้งสามข้อคือข้อเท็จจริงระดับ runtime
+
+โมดูลนี้มีหน้าที่เดียว: ให้ความรู้ runtime สี่ชิ้นที่ทำให้คุณดู **source ของคนอื่น** — ไม่ต้องรัน ไม่ต้อง profile แค่อ่าน — แล้วตอบสามคำถามนี้ได้อย่างมั่นใจ:
+
+1. **สิ่งนี้ allocate หรือไม่?** (escape analysis, memory layout)
+2. **สิ่งนี้ race ได้ไหม?** (memory model, happens-before)
+3. **สิ่งนี้ leak หรือค้างตลอดไปได้ไหม?** (scheduler, goroutine lifecycle)
+
+## เนื้อหาในโมดูลนี้
+
+| บทเรียน | ตอบคำถามอะไร |
+|--------|----------------------|
+| Memory Model | write ในหนึ่ง goroutine จะรับประกัน visible ต่อ read ใน goroutine อื่นเมื่อไหร่? |
+| Scheduler | goroutine ตัวหนึ่งขึ้นไปทำงานบน CPU core ได้อย่างไร และอะไรทำให้มันค้าง? |
+| GC and Escape Analysis | ค่าตัวนี้อยู่บน stack หรือ heap และ collector ทำอะไรกับสิ่งที่ escape? |
+| Memory Layout | ค่าตัวนี้กิน byte เท่าไหร่จริง ๆ และถูกจัดวางอย่างไร? |
+
+บทเรียน [Goroutines](/go/th/concurrency/goroutines/) และ [Sync Primitives](/go/th/concurrency/sync-primitives/) แนะนำ GMP model, work stealing, async preemption และรูปร่างพื้นฐานของ memory model ไปแล้ว — โมดูลนี้ไปไกลกว่าการแนะนำเข้าสู่กลไกจริง และ link กลับไปแทนที่จะพูดซ้ำ บทเรียน [Pointers](/go/th/types-data/pointers/) แนะนำ escape analysis ในระดับ "ทำไม pointer ไม่ได้เร็วกว่าเสมอไป"; [GC and Escape Analysis](/go/th/runtime-internals/gc-and-escape/) ลงลึกไปที่ collector ทำอะไรกับสิ่งที่ escape บทเรียน [Interfaces](/go/th/methods-interfaces/interfaces/) แสดง interface value สองคำ (two-word) และ itab ไปแล้ว; [Memory Layout](/go/th/runtime-internals/memory-layout/) ใส่ตัวเลข byte ให้กับทุก type ไม่ใช่แค่ interface
+
+## คำถามที่รันดูได้จริง: runtime รู้อะไรเกี่ยวกับโปรแกรมของคุณอยู่แล้วบ้าง?
+
+ก่อนจะเข้ากลไกที่ลึกกว่านี้ package `runtime` เองก็ตอบคำถามทั้งสามข้อในเวอร์ชันง่าย ๆ ได้จากภายในโปรแกรมที่กำลังรันอยู่ — ไม่ต้องใช้ profiler เลย
+
+export const runtimeSurveyCode = `package main
+
+import (
+\t"fmt"
+\t"runtime"
+\t"sync"
+)
+
+func main() {
+\tfmt.Println("Go version:", runtime.Version())
+\tfmt.Println("GOARCH/GOOS:", runtime.GOARCH, runtime.GOOS)
+\tfmt.Println("NumCPU:", runtime.NumCPU())
+\tfmt.Println("GOMAXPROCS:", runtime.GOMAXPROCS(0))
+\tfmt.Println("goroutines before:", runtime.NumGoroutine())
+
+\tvar wg sync.WaitGroup
+\tblock := make(chan struct{})
+\tfor i := 0; i < 3; i++ {
+\t\twg.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg.Done()
+\t\t\t<-block // parked, not spinning on CPU
+\t\t}()
+\t}
+\tfmt.Println("goroutines after launch:", runtime.NumGoroutine())
+\tclose(block)
+\twg.Wait()
+\tfmt.Println("goroutines after Wait:", runtime.NumGoroutine())
+}`;
+
+<Playground code={runtimeSurveyCode} />
+
+Output จริงบน darwin/arm64, 11 logical CPU:
+
+```text
+Go version: go1.27.0
+GOARCH/GOOS: arm64 darwin
+NumCPU: 11
+GOMAXPROCS: 11
+goroutines before: 1
+goroutines after launch: 4
+goroutines after Wait: 1
+```
+
+`runtime.NumGoroutine()` นับได้ 4 หลังจาก launch 3 ตัว (main goroutine บวกอีกสามตัวที่ parked อยู่) แล้วกลับมา 1 หลัง `wg.Wait()` — นี่คือวิธีตรวจ leak ที่ถูกที่สุดที่มี: snapshot จำนวนก่อนกับหลังโค้ดที่ต้องการตรวจรัน แล้ว assert ว่ามันกลับมาที่ baseline คุณจะเจอเทคนิคนี้อีกครั้งในบท Scheduler
+
+## Mental Model
+
+```text
+สิ่งที่คุณเห็นจากโค้ดที่ไม่คุ้นเคย:         สิ่งที่ตัดสินพฤติกรรมจริง ๆ:
+
+  source code                            memory model (happens-before)
+      │  "หน้าตาโค้ดดูถูกไหม?"                │ write นี้ visible ที่อื่นไหม?
+      ▼                                        ▼
+  compile ผ่าน, vet clean       ──────►    scheduler (GMP)
+      │                                        │ goroutine นี้ได้รันอีกไหม?
+      ▼                                        ▼
+  "ดู idiomatic"                            GC + escape analysis
+                                                │ สิ่งนี้ allocate ไหม เมื่อไหร่ถูก free?
+                                                ▼
+                                          memory layout
+                                                │ กี่ byte, align อย่างไร?
+```
+
+การอ่าน Go ให้ดีคือการรันคอลัมน์ขวาในหัวของคุณ ในขณะที่สายตากำลังทำแค่คอลัมน์ซ้าย
+
+## ข้อแลกเปลี่ยน
+
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| รู้ memory model | มองเห็น race ได้โดยไม่ต้องรัน `-race` | ต้องศึกษาจริงจัง — happens-before ไม่ใช่แค่ "เรียงบรรทัดเดียวกัน" |
+| รู้ scheduler | คาดเดาได้ว่า goroutine จะ block หรือ leak เมื่อไหร่ | GMP มีความลึกจริง (local/global queue, netpoller, sysmon) |
+| รู้ escape analysis | คาดเดา allocation จากการอ่านได้ ไม่ต้องรอ benchmark | เหตุผลจริงของ compiler เปลี่ยนไปตาม release |
+| รู้ memory layout | มองเห็น struct padding ที่เปลืองได้ทันที | สำคัญเฉพาะตอนที่ scale ใหญ่ — ปรับ layout ก่อนเวลาอันควรเสีย readability เปล่า ๆ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"compile ผ่านและ `go vet` ผ่านแล้ว แปลว่าโอเค"** — `go vet` และ compiler เช็ก syntax กับชุด mistake ที่รู้จักตายตัว ไม่ได้เช็กว่าโปรแกรม race, leak goroutine, หรือ allocate เกินจำเป็นหรือไม่ ทั้งสามอย่าง compile ผ่านสบาย
+- **"runtime internals มีไว้สำหรับคนเขียน Go compiler เท่านั้น"** — คุณต้องรู้แค่พอจะ *อ่าน* ไม่ต้อง reimplement scheduler ทุกข้อเท็จจริงในโมดูลนี้คือสิ่งที่คุณชี้ได้ใน diff ของคนอื่น
+- **"race detector บอกได้เสมอว่าโค้ด safe หรือไม่"** — มันรายงานเฉพาะ race ที่เกิดขึ้นจริงระหว่างการรันที่ instrument เท่านั้น code path ที่ test ไม่เคยเดินก็ยัง race ใน production ได้ บท Memory Model ครอบคลุมว่า `-race` จับอะไรได้และจับอะไรไม่ได้
+- **"profiling เป็นทางเดียวที่จะรู้ว่าอะไร allocate"** — profiling ยืนยันผล แต่การอ่าน output ของ `-gcflags='-m -m'` หรือรู้จักรูปแบบสี่ห้าอย่างที่บังคับให้ escape ทำให้คาดเดาได้จาก source เลย ซึ่งนั่นคือจุดประสงค์ของโมดูลนี้
+
+<Callout title="โมดูลนี้แลกความกว้างเพื่อทักษะการอ่าน ไม่ใช่ครอบคลุม runtime ทั้งหมด">
+ทั้งสี่บทไม่ได้ทำให้คุณ reimplement Go runtime ได้ — ตั้งใจจำกัดขอบเขตไว้ที่ข้อเท็จจริงที่เปลี่ยนวิธีคุณอ่าน diff: อะไรบังคับให้เกิด heap allocation, data race คืออะไรจริง ๆ, ทำไม goroutine ถึงค้าง, และ struct หนึ่งตัวกิน byte เท่าไหร่จริง ๆ อะไรที่ลึกกว่านั้น (source code ของ runtime, รายละเอียด algorithm ของ GC ที่ไม่เปลี่ยนวิธีอ่านโค้ด) อยู่นอกขอบเขตโดยตั้งใจ
+</Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+ประเด็นทั้งหมดของโมดูลนี้คือ section นี้ ซ้ำสี่ครั้ง — บทละครั้ง นี่คือเวอร์ชัน survey-level ก่อน: snippet ที่ compile ผ่าน, ผ่าน `go vet`, แต่ยังผิดในแบบที่ไม่มีโมดูลไหนก่อนหน้าจับได้
+
+<SpotTheBug code={`func recordHit(counts map[string]int, key string) {
+	go func() {
+		counts[key]++ // no lock, no channel, called from many goroutines
+	}()
+}`}>
+โค้ดนี้ compile ผ่าน ผ่าน `go vet` ไม่มีอะไรในโมดูล Basics, Types หรือ Methods ที่จับได้ แต่ `counts[key]++` จาก goroutine ที่ไม่มีการ synchronize ถูกเรียกพร้อมกันมากกว่าหนึ่งที่คือ **data race** บน `map` ธรรมดาของ Go — ซึ่งไม่ปลอดภัยด้วยซ้ำแม้จะมีแค่ *หนึ่ง* writer กับ reader พร้อมกัน ไม่ต้องพูดถึงสอง writer สอง goroutine สามารถทำให้โครงสร้างภายในของ map เสียหายจริง และ runtime ของ Go ตรวจจับกรณีนี้ได้และ crash ด้วย `fatal error: concurrent map writes` แทนที่จะปล่อยให้ข้อมูลเสียหายเงียบ ๆ — แต่ต้องโชคดีพอที่จะไป trigger การเช็กของ runtime เองก่อน บท Memory Model ในโมดูลนี้อธิบายว่าทำไม "ไม่มี shared mutable state" ต้องถูกบังคับโดยคุณเอง ไม่ใช่อนุมานจากการที่โค้ด compile ผ่าน
+
+```go
+func recordHit(mu *sync.Mutex, counts map[string]int, key string) {
+	mu.Lock()
+	defer mu.Unlock()
+	counts[key]++
+}
+```
+</SpotTheBug>
+
+> 💡 ตัวอย่างจากของจริง
+>
+> doc comment ของ `sync.Map` เอง (`sync/map.go` ใน standard library) อธิบายไว้ชัดเจนว่าเมื่อไหร่ `map` ธรรมดาบวก `Mutex` ดีกว่า และเมื่อไหร่ไม่ดีกว่า — เป็นการตัดสินใจที่จะเข้าใจได้ก็ต่อเมื่อรู้ว่า data race คืออะไรจริง ๆ และต้องเสียอะไรเพื่อป้องกันมัน สี่บทถัดไปสร้างพื้นฐานนั้น
+
+export const quizRuntimeInternalsIndex = [
+  {
+    q: "เป้าหมายหลักของโมดูลนี้คืออะไร?",
+    options: [
+      "สอนให้คุณเขียน garbage collector",
+      "ให้คุณตัดสินได้ จากการอ่าน Go source ที่ไม่คุ้นเคย ว่ามัน allocate, race หรือ leak หรือไม่",
+      "แทนที่ความจำเป็นของ go vet และ race detector",
+      "ครอบคลุม source code ของ Go runtime ทีละบรรทัด"
+    ],
+    answer: 1,
+    explain: "โมดูลนี้จำกัดขอบเขตไว้ที่ทักษะการอ่านโดยเฉพาะ: เมื่อเจอ Go ของคนอื่น คุณตอบ 'สิ่งนี้ allocate/race/leak ไหม' จากการอ่าน source อย่างเดียวได้หรือไม่"
+  },
+  {
+    q: "ทำไม go vet ผ่านสะอาดไม่ได้แปลว่า function ที่ spawn goroutine นั้นปลอดภัย?",
+    options: [
+      "go vet รันเฉพาะไฟล์ที่ลงท้ายด้วย _test.go",
+      "go vet เช็กชุด mistake ที่รู้จักตายตัว มันไม่วิเคราะห์การเข้าถึง shared state แบบ concurrent เช่น map",
+      "go vet ถูกเลิกใช้แล้วหันไปใช้ golangci-lint",
+      "go vet ต้องใช้ flag -race ถึงจะเช็กอะไรเกี่ยวกับ goroutine ได้"
+    ],
+    answer: 1,
+    explain: "analyzer ของ go vet จับ pattern ที่รู้ว่าผิดเฉพาะเจาะจง (เช่น copy sync.Mutex) มันไม่มีทฤษฎีทั่วไปว่า 'ค่านี้ถูกป้องกันหรือยัง' — นั่นคือ bug class ที่บท memory model มีไว้สอนให้คุณจับได้จากการอ่าน"
+  },
+  {
+    q: "```go\nfunc main() {\n    fmt.Println(\"goroutines:\", runtime.NumGoroutine())\n}\n```\nค่าต่ำสุดที่ runtime.NumGoroutine() พิมพ์ได้ในที่นี้คือเท่าไหร่ และทำไมไม่ใช่ศูนย์?",
+    options: [
+      "0 -- ยังไม่มี goroutine ถูก launch",
+      "1 -- main goroutine เองก็นับรวมเสมอ",
+      "2 -- Go รัน background GC goroutine เสมอ",
+      "ขึ้นอยู่กับ GOMAXPROCS"
+    ],
+    answer: 1,
+    explain: "main เองก็รันเป็น goroutine ที่ 1 runtime.NumGoroutine() นับ goroutine ที่ยังมีชีวิตทุกตัวรวมทั้งตัวที่เรียกมันเอง โปรแกรมที่ไม่ launch อะไรเลยก็ยังรายงานอย่างน้อย 1"
+  },
+  {
+    q: "ตามบทเรียนนี้ ข้อใดที่ race detector (`-race`) ไม่รับประกัน?",
+    options: [
+      "ว่ามันจะไม่รายงาน false positive เลย",
+      "ว่า data race ทุกจุดใน code path ที่ execute จริงระหว่าง instrument จะถูกรายงาน",
+      "ว่า race ใน code path ที่การรันนั้นไม่เคยเดินผ่านก็จะถูกรายงานด้วย",
+      "ว่ามันเพิ่ม runtime overhead"
+    ],
+    answer: 2,
+    explain: "race detector สังเกตเฉพาะสิ่งที่ execute จริง branch ที่ race แต่ไม่เคยถูกเดินระหว่างการรันด้วย -race ครั้งนั้นจะไม่มี warning เลย — ไม่มี report ไม่ได้แปลว่าไม่มี race"
+  }
+];
+
+<Quiz client:visible id="runtime-internals/index" questions={quizRuntimeInternalsIndex} />
+
+<ProgressTracker client:visible id="runtime-internals/index" />
