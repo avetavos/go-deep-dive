@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## time.Time and time.Duration
 
@@ -33,6 +35,41 @@ t := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
 
 `time.Month` values (`time.January` through `time.December`) are typed constants; you can also pass integer literals (1–12) because they are assignable to `time.Month`.
 
+## The monotonic clock: Equal vs ==
+
+`time.Now()` reads both the wall clock and, on most platforms, a monotonic clock reading, and stores both inside the `time.Time` value. The monotonic reading only ever moves forward, even if the OS clock is adjusted by NTP or a manual change — which is exactly what `Since` and `Sub` use, so measuring an elapsed duration is safe from clock jumps.
+
+This dual reading is also why `==` and `.Equal()` can disagree on what looks like the same instant:
+
+```go
+a := time.Now()
+b := a               // identical copy — a == b is true
+c := a.Round(0)       // Round(0) strips the monotonic reading
+fmt.Println(a == b, a.Equal(b)) // true true
+fmt.Println(a == c, a.Equal(c)) // false true
+```
+
+`==` compares the entire struct — wall clock, monotonic reading, and location all included — so two `Time` values representing the same instant can compare unequal if one has had its monotonic reading stripped (by `Round`, by a round-trip through `Marshal`/`Unmarshal`, or by `time.Parse`). `Equal` compares only the instant in time and ignores all of that. **Always use `Equal` to compare two `time.Time` values**, never `==`, unless you specifically need to detect a stripped monotonic reading.
+
+## The n-times-time.Second unit bug and time.Sleep(5)
+
+Duration constants (`time.Second`, `time.Millisecond`, …) exist so a plain integer is never mistaken for a duration — but two related mistakes still show up constantly in AI-generated code:
+
+```go
+var n time.Duration = 2
+d := n * time.Second // fine: n is already a Duration
+fmt.Println(d)        // 2s
+```
+
+The bug shows up when `n` is a plain `int` instead of `time.Duration`: `n * time.Second` where `n int` does not even compile ("mismatched types"), which is Go protecting you — but `time.Sleep(n)` compiles fine for any `int`-convertible value, and `time.Sleep(5)` sleeps for **5 nanoseconds**, not 5 seconds, because `Sleep` takes a `Duration` and 5 is a bare nanosecond count once it loses the multiplication:
+
+```go
+time.Sleep(5) // sleeps 5 nanoseconds — almost certainly not what was intended
+time.Sleep(5 * time.Second) // sleeps 5 seconds — the constant makes the unit explicit
+```
+
+Reading a diff, `time.Sleep` (or `context.WithTimeout`, `time.NewTimer`, …) called with a bare integer literal without a `time.Xxx` unit attached is worth a second look every time.
+
 ## Formatting — the reference layout
 
 Go uses a concrete reference time instead of abstract format codes like `YYYY-MM-DD`. The reference moment is:
@@ -50,6 +87,8 @@ t.Format("02 Jan 2006 15:04 MST")  // "02 Jan 2024 15:04 UTC"
 t.Format(time.RFC3339)             // "2024-01-02T15:04:05Z"
 ```
 
+Go 1.20 added named layout constants for the most common shapes, so you no longer have to retype the reference moment for them: `time.DateTime` (`"2006-01-02 15:04:05"`), `time.DateOnly` (`"2006-01-02"`), and `time.TimeOnly` (`"15:04:05"`).
+
 ## Parsing
 
 `time.Parse` is the inverse of `Format` — it takes a layout and a string:
@@ -61,6 +100,15 @@ parsed, err := time.Parse("2006-01-02", "2024-06-15")
 
 The layout string must match the reference time components you used — the same characters in the same positions.
 
+**`time.Parse` always returns a `Time` in UTC** when the layout has no timezone component — it never assumes the machine's local timezone. When the input string represents a *local* time in a specific timezone (a timestamp from a log file written in `Asia/Bangkok`, say), use `time.ParseInLocation(layout, value, loc)` instead, which interprets the string as wall-clock time in `loc` rather than UTC:
+
+```go
+loc, _ := time.LoadLocation("Asia/Bangkok")
+p1, _ := time.Parse("2006-01-02 15:04:05", "2026-09-13 14:30:00")               // UTC
+p2, _ := time.ParseInLocation("2006-01-02 15:04:05", "2026-09-13 14:30:00", loc) // Asia/Bangkok
+// p1 and p2 represent different instants even though the digits are identical
+```
+
 ## Arithmetic — Add and Sub
 
 ```go
@@ -71,6 +119,8 @@ after    := deadline.After(t)           // true
 ```
 
 `Add` takes a `Duration` and returns a `Time`. `Sub` takes two `Time` values and returns the `Duration` between them.
+
+`AddDate(years, months, days)` is calendar arithmetic, not duration arithmetic, and it can overflow a month in a way that surprises AI-generated "add one month" code: `time.Date(2026, 1, 31, ...).AddDate(0, 1, 0)` does not clamp to the last day of February — it normalizes February 31st forward into March, producing March 3rd (2026 is not a leap year). Any code adding months to a date near month-end needs to account for this explicitly.
 
 ## Timers, tickers, and their channels
 
@@ -91,6 +141,23 @@ case <-ctx.Done():
 ```
 
 Still prefer `time.NewTicker` over `time.Tick` in long-lived code so you can `Stop()` it, and `context.WithTimeout` over hand-rolled timers when the deadline belongs to a request.
+
+**Before Go 1.23, `time.Tick` was a guaranteed leak.** It returns only a channel, with no handle to call `Stop()` on, so the ticker behind it could never be freed by the garbage collector — idiomatic pre-1.23 code always used `time.NewTicker` instead, specifically so it had something to `Stop()`. As of Go 1.23, the garbage collector can recover an unreferenced `Ticker` (or `Timer`) even without `Stop()`, and the standard library's own documentation for `time.Tick` now says "there is no longer any reason to prefer NewTicker when Tick will do." `Stop()` still matters when you need to actually halt delivery while other references to the ticker stay alive — it is no longer required just to avoid a leak. Code (or an AI assistant) that still insists "never use `time.Tick`, it always leaks" is repeating pre-1.23 folklore.
+
+## Injecting a clock for tests
+
+Code that calls `time.Now()` directly is hard to test deterministically — the "right" answer changes every time the test runs. The common fix is to accept a clock as a function value instead of calling `time.Now()` inline, so a test can substitute a fixed time:
+
+```go
+func isExpired(now func() time.Time, deadline time.Time) bool {
+    return now().After(deadline)
+}
+
+// production: isExpired(time.Now, deadline)
+// test:       isExpired(func() time.Time { return fixedTime }, deadline)
+```
+
+This is the same dependency-injection idea used for a database connection or an HTTP client — pass the thing that varies as a parameter (or a small interface with a `Now() time.Time` method) instead of reaching for a global.
 
 export const timeCode = `package main
 
@@ -134,6 +201,92 @@ func main() {
 
 <Playground code={timeCode} />
 
+export const timeAdvancedCode = `package main
+
+import (
+\t"fmt"
+\t"time"
+)
+
+func main() {
+\t// 1. monotonic clock: Since/Sub use it even if the wall clock jumps;
+\t// Equal compares the instant, == compares the whole struct (including monotonic reading + location)
+\ta := time.Now()
+\tb := a // identical copy
+\tfmt.Println("a == b:", a == b, "a.Equal(b):", a.Equal(b))
+
+\tc := a.Round(0) // strips the monotonic reading
+\tfmt.Println("a == c (monotonic stripped):", a == c, "a.Equal(c):", a.Equal(c))
+
+\t// 2. the n*time.Second unit bug: n is already a Duration once multiplied,
+\t// but a bare integer like 5 passed to Sleep means 5 nanoseconds, not 5 seconds
+\tvar n time.Duration = 2
+\td := n * time.Second
+\tfmt.Println("2 * time.Second:", d)
+\t// time.Sleep(5) sleeps 5 nanoseconds — a classic unit bug, not "5 seconds"
+\tstart := time.Now()
+\ttime.Sleep(5)
+\tfmt.Println("Sleep(5) slept for less than a millisecond:", time.Since(start) < time.Millisecond)
+
+\t// 3. time.DateTime and friends (Go 1.20)
+\tt := time.Date(2026, 9, 13, 14, 30, 0, 0, time.UTC)
+\tfmt.Println("time.DateTime:", t.Format(time.DateTime))
+\tfmt.Println("time.DateOnly:", t.Format(time.DateOnly))
+\tfmt.Println("time.TimeOnly:", t.Format(time.TimeOnly))
+
+\t// 4. Parse returns UTC; ParseInLocation uses the given location
+\tp1, _ := time.Parse("2006-01-02 15:04:05", "2026-09-13 14:30:00")
+\tfmt.Println("Parse location:", p1.Location())
+\tloc, _ := time.LoadLocation("Asia/Bangkok")
+\tp2, _ := time.ParseInLocation("2006-01-02 15:04:05", "2026-09-13 14:30:00", loc)
+\tfmt.Println("ParseInLocation location:", p2.Location(), "same instant as UTC 07:30:", p2.UTC().Format(time.TimeOnly))
+
+\t// 5. Ticker.Stop and AddDate month overflow
+\tticker := time.NewTicker(time.Hour)
+\tticker.Stop() // stops delivery now; not required for GC since Go 1.23, but still good practice
+
+\tjan31 := time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC)
+\toverflowed := jan31.AddDate(0, 1, 0) // "add one month" overflows into March
+\tfmt.Println("Jan 31 + 1 month:", overflowed.Format(time.DateOnly))
+
+\t// 6. injecting a clock for tests: accept a func() time.Time instead of calling time.Now directly
+\tfixedClock := func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+\tisExpired := func(now func() time.Time, deadline time.Time) bool { return now().After(deadline) }
+\tfmt.Println("isExpired with injected clock:", isExpired(fixedClock, time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC)))
+}`;
+
+<Playground code={timeAdvancedCode} />
+
+Real output from this program on Go 1.26.5 (the boolean comparisons make this deterministic despite calling `time.Now()`):
+
+```text
+a == b: true a.Equal(b): true
+a == c (monotonic stripped): false a.Equal(c): true
+2 * time.Second: 2s
+Sleep(5) slept for less than a millisecond: true
+time.DateTime: 2026-09-13 14:30:00
+time.DateOnly: 2026-09-13
+time.TimeOnly: 14:30:00
+Parse location: UTC
+ParseInLocation location: Asia/Bangkok same instant as UTC 07:30: 07:30:00
+Jan 31 + 1 month: 2026-03-03
+isExpired with injected clock: true
+```
+
+Note that every assertion above is a **relationship** (`==` vs `Equal`, "less than a millisecond", a location name, a fixed calendar date) rather than a wall-clock value — the only way to keep a `time.Now()`-based example's output the same on every run.
+
+## The monotonic vs wall clock reading
+
+export const timeClockDiagram = `flowchart LR
+  Now["time.Now()"] --> T["time.Time value"]
+  T --> Wall["wall clock reading"]
+  T --> Mono["monotonic reading"]
+  Wall -- "affected by NTP / manual changes" --> Format["Format() / == comparison"]
+  Mono -- "always moves forward" --> SinceSub["Since() / Sub()"]
+  T -- "Round(0) strips monotonic" --> T2["Time value: wall clock only"]`;
+
+<Mermaid code={timeClockDiagram} title="Since/Sub read the monotonic clock; Format and == see the wall clock too" />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -147,6 +300,9 @@ func main() {
 - **time.Now() always returns UTC** — it depends on the machine's local timezone; call `time.Now().UTC()` when you need UTC explicitly.
 - **time.Sleep(1 * time.Second) is precise** — the OS scheduler may sleep longer than requested, e.g. 1.05s — it is not hard real-time.
 - **time.Equal is the same as ==** — `time.Equal` compares the instant in time (ignoring timezone); `==` compares the entire memory layout, timezone included.
+- **time.Sleep(5) sleeps 5 seconds** — it sleeps 5 nanoseconds; `Sleep` takes a `time.Duration`, and a bare integer literal is a nanosecond count, not a unit-agnostic "amount of time."
+- **time.Tick always leaks if you don't call Stop()** — true before Go 1.23, when an unreferenced Ticker could never be GC'd; since Go 1.23 the garbage collector recovers an unreferenced Ticker or Timer on its own, so this is now outdated advice (Stop() is still useful to halt ticking while a reference is kept alive, just not required to avoid a leak).
+- **AddDate(0, 1, 0) always lands on the same day next month** — near month-end it can roll over into the following month instead (Jan 31 + 1 month ≠ Feb 31, which does not exist).
 
 > 💡 Real-world example
 >
@@ -160,6 +316,35 @@ func main() {
 The reference moment is not arbitrary. Each component is a distinct number: month=1, day=2, hour=15 (3 PM), minute=4, second=5, year=2006. In 12-hour clock order: 1/2/3:4:5 PM '06. This makes the layout self-documenting — you write what you want the output to look like using those exact digits. A common mistake is using `YYYY` or `DD` from other languages; those are just the letters Y, M, D to Go and will appear literally in the output.
 </Callout>
 
+## Reading AI-generated code
+
+`time` code compiles regardless of whether the units or the timezone are right, so these are worth checking by hand every time:
+
+- Does `time.Sleep`, `context.WithTimeout`, or `time.NewTimer` take a bare integer literal instead of a value multiplied by a `time.Xxx` constant?
+- Does code compare two `time.Time` values with `==` instead of `.Equal()` — especially after one of them went through `Parse`, `Round`, or a database round-trip?
+- Does code call `time.Parse` on a timestamp that is known to represent local time in a specific timezone, when `ParseInLocation` is what is needed?
+- Does an `AddDate(0, n, 0)` (or `AddDate(n, 0, 0)`) run near month-end (or Feb 29) without accounting for calendar overflow?
+- Does a comment or explanation claim `time.Tick`/an unstopped `Ticker` "always leaks" — a true statement before Go 1.23, but no longer the whole story?
+- Does test code call `time.Now()` directly inside the function under test, instead of accepting an injected clock?
+
+<SpotTheBug code={`func retryWithBackoff(attempt int, do func() error) error {
+	for i := 0; i < attempt; i++ {
+		if err := do(); err == nil {
+			return nil
+		}
+		time.Sleep(5) // wait 5 seconds before retrying
+	}
+	return fmt.Errorf("failed after %d attempts", attempt)
+}`}>
+
+The comment says "5 seconds", but `time.Sleep` takes a `time.Duration` — an `int64` count of nanoseconds — and `5` with no unit attached means **5 nanoseconds**, not 5 seconds. The retry loop effectively has no backoff delay at all; it hammers `do()` as fast as the CPU allows. Fix it by multiplying by the named constant:
+
+```go
+time.Sleep(5 * time.Second)
+```
+
+</SpotTheBug>
+
 export const quizTime = [
   {
     q: "What is Go's reference time used for formatting?",
@@ -169,17 +354,19 @@ export const quizTime = [
       "Fri Dec 31 23:59:59 UTC 1999",
       "Thu Jan 1 00:00:00 UTC 1970"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Go's reference moment encodes each layout component as its own distinct digit (1/2 3:4:5 '06 in 12-hour order), which is what makes a layout string self-documenting."
   },
   {
-    q: "Which call returns a new time.Time exactly 24 hours after t?",
+    q: "\`\`\`go\ntime.Sleep(5)\nfmt.Println(\"done\")\n\`\`\`\nHow long does this sleep for?",
     options: [
-      "t.Sub(24 * time.Hour)",
-      "t.Add(24 * time.Hour)",
-      "time.Add(t, 24)",
-      "t.Plus(time.Day)"
+      "5 seconds",
+      "5 milliseconds",
+      "5 nanoseconds",
+      "It does not compile — Sleep requires a unit"
     ],
-    answer: 1
+    answer: 2,
+    explain: "time.Sleep takes a time.Duration, which is just an int64 count of nanoseconds; a bare literal 5 with no time.Xxx multiplier means 5 nanoseconds, not 5 seconds."
   },
   {
     q: "What does t.Sub(other) return?",
@@ -189,17 +376,41 @@ export const quizTime = [
       "A time.Duration",
       "A float64 in hours"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Sub takes two Time values and returns the Duration between them; Add is the inverse, taking a Time and a Duration and returning a Time."
   },
   {
-    q: "Why should you avoid time.Now() in playground / test snippets?",
+    q: "\`\`\`go\na := time.Now()\nb := a.Round(0)\nfmt.Println(a == b, a.Equal(b))\n\`\`\`\nWhat does this print?",
     options: [
-      "time.Now() is not available in Go 1.27+",
-      "It returns the time the binary was compiled",
-      "It produces non-deterministic output that changes on every run",
-      "It always returns midnight UTC"
+      "true true",
+      "false false",
+      "false true",
+      "true false"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Round(0) strips the monotonic clock reading from the copy, so == (which compares the whole struct) now sees a difference, while Equal (which compares only the instant in time) still reports them equal."
+  },
+  {
+    q: "time.Parse(\"2006-01-02 15:04:05\", s) is used on a string known to be local time in Asia/Bangkok. What is wrong?",
+    options: [
+      "Nothing — Parse always detects the correct timezone from context",
+      "Parse interprets the string as UTC, producing a Time that is off by the timezone's offset from the intended instant",
+      "Parse will return an error because no timezone is in the layout",
+      "The layout string needs to be reversed for a Bangkok timestamp"
+    ],
+    answer: 1,
+    explain: "time.Parse assumes UTC when the layout has no timezone component; ParseInLocation(layout, value, loc) is what correctly interprets the string as wall-clock time in a specific location."
+  },
+  {
+    q: "Why accept a `now func() time.Time` parameter instead of calling time.Now() inside a function you want to test?",
+    options: [
+      "time.Now() is deprecated in Go 1.27",
+      "It lets a test substitute a fixed, deterministic time instead of the real current instant",
+      "It makes the function run faster",
+      "func() time.Time is required by the testing package"
+    ],
+    answer: 1,
+    explain: "Injecting the clock as a parameter (or a small interface) means a test can pass a function that returns a fixed time, making time-dependent logic deterministic and repeatable."
   }
 ];
 

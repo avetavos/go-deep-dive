@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Go's built-in testing story
 
@@ -28,14 +30,26 @@ The `go` toolchain that ships with every Go installation also includes:
 
 ## What this module covers
 
-1. **go-test** — Writing `_test.go` files, `func TestXxx(t *testing.T)`, and table-driven tests with `t.Run`.
-2. **benchmarks** — Measuring performance with `func BenchmarkXxx(b *testing.B)` and reading `-benchmem` output.
-3. **modules** — Managing dependencies with `go mod init`, `go.mod`, `go.sum`, and `go get`.
-4. **go-tooling** — The everyday commands: `go run`, `go build`, `go fmt`, `go vet`, and `go doc`.
+1. **go-test** — Writing `_test.go` files, `func TestXxx(t *testing.T)`, table-driven tests with `t.Run`, `t.Parallel`, fuzzing with `*testing.F`, and everything else `*testing.T` gives you.
+2. **benchmarks** — Measuring performance with `func BenchmarkXxx(b *testing.B)`, reading `-benchmem` output, and comparing runs with `benchstat`.
+3. **modules** — Managing dependencies with `go mod init`, `go.mod`, `go.sum`, `go get`, and how version resolution actually works.
+4. **go-tooling** — The everyday commands: `go run`, `go build`, `go fmt`, `go vet`'s bug-catching analyzers, `go doc`, and the wider linting ecosystem.
+
+## The testing package family
+
+export const testingFamily = `flowchart TD
+  T["testing package"] --> A["*testing.T — unit tests, table-driven, t.Parallel"]
+  T --> B["*testing.B — benchmarks, b.Loop, benchstat"]
+  T --> F["*testing.F — fuzzing, mutates inputs to find edge cases"]
+  A --> G["go test ./..."]
+  B --> G
+  F --> G`;
+
+<Mermaid code={testingFamily} title="One package, one command, three ways to exercise your code" />
 
 ## A function worth testing
 
-The best way to appreciate Go's testing tools is to start with a pure function — one with no side effects, no I/O, just input and output. The playground below runs `Fibonacci` from `main`. In the next lesson you will write a proper `_test.go` file for exactly this kind of function.
+The best way to appreciate Go's testing tools is to start with a pure function — one with no side effects, no I/O, just input and output. The playground below runs `Fibonacci` from `main`. In the next lesson you will write a proper `_test.go` file for exactly this kind of function — including a fuzz test, since `Fibonacci` and `IsPrime` both take a single `int` and are exactly the shape `*testing.F` is good at hammering with edge-case inputs.
 
 export const indexCode = `package main
 
@@ -100,6 +114,21 @@ func main() {
 A pure function — one that depends only on its arguments and always returns the same output for the same input — is the ideal starting point for testing. There is no database to mock, no HTTP server to spin up, and no shared state to reset between runs. `Fibonacci` and `IsPrime` both qualify: call them a thousand times with the same input and you get the same result. The next lesson shows how Go's `testing` package makes writing these tests nearly effortless.
 </Callout>
 
+## Reading AI-generated code
+
+Before this module goes into depth, start with the single most common generated-test failure mode: a test that runs, prints `PASS`, and checks nothing.
+
+- Does every `Test*` function actually call `t.Error`/`t.Errorf`/`t.Fatal`/`t.Fatalf` somewhere, or does it just call the function under test and let a `nil` error silently mean success?
+- If the function returns a value, is that value ever compared against an expected result — or only checked for "did not panic"?
+- Does a benchmark or fuzz test's assertion logic actually depend on the input, or would it pass identically no matter what the function under test returned?
+
+<SpotTheBug code={`func TestParseConfig(t *testing.T) {
+	cfg := ParseConfig("timeout=30")
+	fmt.Println(cfg) // just prints — never compares to anything
+}`}>
+This test calls `ParseConfig`, prints the result, and ends — there is no `t.Error`, `t.Errorf`, `t.Fatal`, or comparison against an expected value anywhere. `go test` reports `PASS` for this test unconditionally, whether `ParseConfig` returns a correct struct, an empty one, or silently drops the timeout field entirely. This compiles cleanly and "looks like a test" — which is exactly why it is dangerous: a real bug introduced later will not turn this test red, because nothing in it can ever fail. The fix is a real assertion: `want := Config{Timeout: 30 * time.Second}; if cfg != want { t.Errorf("ParseConfig() = %+v, want %+v", cfg, want) }`.
+</SpotTheBug>
+
 export const quizIndex = [
   {
     q: "Which command runs all tests in the current module and every sub-package?",
@@ -109,17 +138,19 @@ export const quizIndex = [
       "go run test",
       "go check ./..."
     ],
-    answer: 1
+    answer: 1,
+    explain: "Plain go test only runs the package in the current directory; the ./... pattern tells it to walk every package in the module."
   },
   {
-    q: "Which Go standard library package provides *testing.T and *testing.B?",
+    q: "Which Go standard library package provides *testing.T, *testing.B, and *testing.F?",
     options: [
       "testing/unit",
       "test",
       "testing",
       "stdlib/test"
     ],
-    answer: 2
+    answer: 2,
+    explain: "All three types — for unit tests, benchmarks, and fuzzing — live in the single standard-library testing package, all driven by go test."
   },
   {
     q: "What makes a function a good candidate for a first unit test?",
@@ -129,7 +160,19 @@ export const quizIndex = [
       "It uses goroutines",
       "It writes to a file"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A pure function needs no mocks, no setup, and no teardown — call it with the same input and you always get the same output, which is exactly what a test asserts."
+  },
+  {
+    q: "```go\nfunc TestParseConfig(t *testing.T) {\n    cfg := ParseConfig(\"timeout=30\")\n    fmt.Println(cfg)\n}\n```\nWill go test report PASS or FAIL for this test if ParseConfig has a bug that returns a zero-value Config?",
+    options: [
+      "FAIL — go test compares printed output against the function name automatically",
+      "PASS — nothing in this test ever calls t.Error/t.Fatal or compares cfg to an expected value, so it cannot fail no matter what ParseConfig returns",
+      "It depends on whether -v is passed",
+      "FAIL — Println to stdout during a test is itself an error"
+    ],
+    answer: 1,
+    explain: "A test only fails when it explicitly reports a failure through the *testing.T API. Printing a value is not an assertion — this test would report PASS for literally any return value, correct or not."
   },
   {
     q: "Which tool formats Go source code according to the canonical style?",
@@ -139,7 +182,19 @@ export const quizIndex = [
       "go fmt",
       "go style"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go fmt wraps gofmt, the single canonical formatter every Go project uses — there is no configuration and no competing style guide."
+  },
+  {
+    q: "This module's lessons cover testing.T, testing.B, and testing.F. Which lesson teaches fuzzing?",
+    options: [
+      "benchmarks, because *testing.F is passed the same b.N-style loop",
+      "go-test, alongside table-driven tests, t.Parallel, and the rest of *testing.T's features",
+      "modules, because fuzz corpora are versioned like dependencies",
+      "None of them — fuzzing needs a separate module not covered here"
+    ],
+    answer: 1,
+    explain: "Fuzzing is taught in the go-test lesson: *testing.F seeds a corpus and Go's mutation engine generates new inputs, exactly the kind of testing.T-adjacent feature that belongs there rather than in benchmarks or modules."
   }
 ];
 

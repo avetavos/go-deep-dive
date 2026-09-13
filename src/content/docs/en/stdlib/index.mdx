@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Go's batteries-included standard library
 
@@ -22,6 +24,14 @@ The table below shows what this module covers and which package delivers it.
 | Dates, durations, timers | `time` | time |
 | JSON marshaling / unmarshaling | `encoding/json` | encoding/json |
 | Streaming I/O, scanning | `io`, `bufio` | io & bufio |
+| Files, environment, exit codes | `os` | used throughout this module (see io & bufio) — no dedicated lesson |
+| Error values, wrapping, panics | `errors` | Errors & Generics module |
+| Cancellation, deadlines, request-scoped values | `context` | Concurrency → context |
+| Structured logging | `log/slog` | not covered in depth in this course |
+| HTTP servers and clients | `net/http` | not covered in this module |
+| Mutexes, WaitGroup, Once | `sync` | Concurrency → sync-primitives |
+
+This module deliberately does not cover `net/http` or `log/slog` beyond passing mentions — both are large enough to deserve their own treatment, and everything you need to read either package's docs (interfaces, structs, error handling, `io.Reader`/`io.Writer`) is covered here and in Errors & Generics.
 
 ## Why standard library first?
 
@@ -105,7 +115,8 @@ export const quizStdlibIndex = [
       "io",
       "strconv"
     ],
-    answer: 1
+    answer: 1,
+    explain: "fmt.Sprintf lives in the fmt package alongside Println and Printf — it returns the formatted string instead of writing it anywhere."
   },
   {
     q: "Go's standard library is designed so that most everyday programs need:",
@@ -115,7 +126,8 @@ export const quizStdlibIndex = [
       "Few or no third-party dependencies",
       "A separate runtime download"
     ],
-    answer: 2
+    answer: 2,
+    explain: "The standard library covers HTTP, JSON, crypto, file I/O, text processing, and concurrency, so most everyday Go programs need few or no third-party modules for basic tasks."
   },
   {
     q: "Which package would you use to convert the string \"42\" to the integer 42?",
@@ -125,7 +137,8 @@ export const quizStdlibIndex = [
       "strconv",
       "math"
     ],
-    answer: 2
+    answer: 2,
+    explain: "strconv.Atoi (or ParseInt) converts a numeric string to an int; strings only manipulates text and math has no string-parsing functions."
   },
   {
     q: "What does json.Marshal return when it succeeds?",
@@ -135,7 +148,8 @@ export const quizStdlibIndex = [
       "An io.Reader and an error",
       "A map[string]any and an error"
     ],
-    answer: 1
+    answer: 1,
+    explain: "json.Marshal always returns ([]byte, error) — the JSON-encoded bytes and, when it fails, a non-nil error describing what could not be encoded."
   }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## สาม Pattern พื้นฐาน
 
@@ -27,6 +29,43 @@ Pipelines เหมาะสำหรับ stream processing ที่แต่
 ## Fan-out / Fan-in
 
 **Fan-out** เริ่ม goroutines หลายตัวที่อ่านจาก input channel เดียวกัน เพื่อทำงานแบบขนาน **Fan-in** รวม output channels หลายตัวเป็นหนึ่งเพื่อ consumer อ่าน รวมกันทำให้ parallel processing stage ใน pipeline
+
+### merge: fan-in implementation จริง
+
+`merge` ด้านล่างคือ fan-in แบบมาตรฐาน: รับ input channel กี่ตัวก็ได้ แล้ว return channel เดียวที่มีค่าจากทุกตัวรวมกัน
+
+```go
+func merge(cs ...<-chan int) <-chan int {
+	out := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(len(cs))
+	for _, c := range cs {
+		go func(c <-chan int) {
+			defer wg.Done()
+			for v := range c {
+				out <- v
+			}
+		}(c)
+	}
+	// A single dedicated goroutine waits for every input goroutine to finish,
+	// then closes out exactly once.
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
+}
+```
+
+สองรายละเอียดที่ทำให้อันนี้ถูกต้อง ในจุดที่เวอร์ชัน naive พัง: `wg.Add(len(cs))` เกิดขึ้นครั้งเดียว ก่อนที่ goroutine ไหนจะเริ่ม ทำให้ `wg.Wait()` ไม่มีวันเห็น counter เป็นศูนย์ก่อนเวลา และมีแค่ goroutine ปิดที่เฉพาะทางเท่านั้นที่เรียก `close(out)` แค่ครั้งเดียว หลังจากยืนยันว่า input goroutine ทุกตัว return แล้ว section อ่านโค้ดที่ AI เขียนของบท Channels แสดงเวอร์ชันที่พังแบบคลาสสิก — input goroutine ทุกตัวเรียก `close(out)` เอง — พร้อม output จริงคือ `panic: send on closed channel` และ `WARNING: DATA RACE`
+
+export const fanInDiagram = `flowchart LR
+  C1["chan 1"] --> M["merge"]
+  C2["chan 2"] --> M
+  C3["chan 3"] --> M
+  M --> Out["out (closed once, by a dedicated goroutine, after wg.Wait())"]`;
+
+<Mermaid code={fanInDiagram} title="Fan-in: input channel แต่ละตัวมี goroutine ส่งต่อของตัวเอง แต่มีแค่ goroutine เดียวเท่านั้นที่ close output ที่รวมแล้ว" />
 
 ## Worker Pool
 
@@ -129,6 +168,247 @@ func main() {
 
 `wg` ในที่นี้นับ *worker* ไม่ใช่ *job*: `Add(numWorkers)` เรียกครั้งเดียวก่อน worker ทุกตัวเริ่ม และแต่ละ worker เรียก `Done()` แค่ครั้งเดียว — ตอนที่ loop `for j := range jobs` จบลงเพราะ `jobs` ถูก close นี่คือเหตุผลที่ต้องมี goroutine แยกทำ `go func() { wg.Wait(); close(results) }()` เพราะต้องมีใครสักคนรอให้ worker ทุกตัวเสร็จแล้วค่อย close `results` และนั่นเป็น `main` เองไม่ได้ เพราะ `main` กำลังยุ่งอยู่กับการ drain `results` ด้วย `for r := range results` พร้อมกันอยู่ บน Go 1.25+ สามบรรทัด `Add`/`go`/`defer wg.Done()` ของแต่ละ worker เขียนเป็น `wg.Go(func() { ... })` แทนได้ playground ยังใช้รูปแบบคลาสสิกเพราะ runner ในเบราว์เซอร์เกิดก่อน method นี้ เนื่องจาก worker สามตัวแข่งกันเขียนลง `results` ค่าจึงมาถึงตามลำดับที่ scheduler สั่งงานเสร็จแบบสุ่ม — โค้ดจึง sort ก่อน print เพื่อให้ output deterministic
 
+## Pipeline ที่ Cancel ได้
+
+pipeline `generate` → `square` ธรรมดาด้านบนไม่มีทางหยุดก่อนเวลาเลย — ถ้า consumer เดินหนีไป ทั้งสอง stage ก็ยังรันต่อไป (และ leak ตามบท Goroutines) ตลอดไป การให้ทุก stage มี `context.Context` และ `select` บน `ctx.Done()` แก้ปัญหานี้: แต่ละ stage หยุดผลิตทันทีที่ context ถูกยกเลิก แทนที่จะหยุดแค่ตอน input ของมัน close เท่านั้น
+
+```go
+func generate(ctx context.Context, nums ...int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for _, n := range nums {
+			select {
+			case out <- n:
+			case <-ctx.Done():
+				return // stop producing once the consumer gives up
+			}
+		}
+	}()
+	return out
+}
+
+func square(ctx context.Context, in <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for n := range in {
+			select {
+			case out <- n * n:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
+}
+```
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+squares := square(ctx, generate(ctx, 1, 2, 3, 4, 5))
+
+var got []int
+for v := range squares {
+	got = append(got, v)
+	if len(got) == 2 {
+		cancel() // stop the pipeline after exactly 2 values, deterministically
+		break
+	}
+}
+fmt.Println(got) // [1 4] -- always exactly these two, cancel fires at a fixed point
+```
+
+`select` ของแต่ละ stage เองคือสิ่งที่ทำให้ cancellation propagate ขึ้นไปได้: `square` หยุดรับจาก output ของ `generate` ทันทีที่ `ctx` เสร็จสิ้น ซึ่งทำให้ `out <- n` ที่ block อยู่ของ `generate` ก็ unblock ผ่าน case `ctx.Done()` ของตัวเองเช่นกัน แทนที่จะ block ตลอดไปบน channel ที่ไม่มีใครอ่านอีกแล้ว
+
+## Bounded Parallelism
+
+Buffered channel ที่ใช้เป็น counting semaphore ล้วน ๆ — แนะนำไว้ในบท Channels — จำกัดว่า goroutine กี่ตัวรัน critical section ของมันพร้อมกันได้ ไม่ขึ้นกับว่าเปิด goroutine ไว้ทั้งหมดกี่ตัว:
+
+```go
+const n = 6
+const limit = 2 // at most 2 tasks run at once
+
+sem := make(chan struct{}, limit)
+results := make([]int, n) // pre-sized: every goroutine owns a distinct index
+var wg sync.WaitGroup
+
+for i := 0; i < n; i++ {
+	wg.Add(1)
+	go func(i int) {
+		defer wg.Done()
+		sem <- struct{}{}        // acquire a permit
+		defer func() { <-sem }() // release it on the way out
+
+		results[i] = i * i // each goroutine writes a different index -- no overlap, no race
+	}(i)
+}
+wg.Wait()
+fmt.Println(results) // [0 1 4 9 16 25], always in this order despite concurrent writes
+```
+
+### ทำไม Indexed Writes ถึงไม่ใช่ Race
+
+ทั้ง 6 goroutine เขียนลง slice `results` *เดียวกัน* พร้อมกัน โดยไม่มี mutex ล้อมรอบ `results[i] = i * i` เลย — และนี่ถูกต้องที่ปลอด race จริง ไม่ใช่ปลอดโดยบังเอิญ data race ต้องการให้ goroutine สองตัวเข้าถึง *memory location เดียวกัน* โดยอย่างน้อยหนึ่งเป็นการเขียน ที่นี่ `results` ถูก allocate ครั้งเดียวด้วย `make([]int, n)` ก่อนที่ goroutine ไหนจะเริ่ม ดังนั้น backing array และความยาวของมันไม่เปลี่ยนเลย และแต่ละ goroutine เขียนลง index ที่ต่างกัน — `results[i]` สำหรับ `i` ที่แตกต่างกันทุกครั้ง index ที่ต่างกันคือ memory location ที่ต่างกัน ไม่มี overlapping access ให้ race detector เจอเลย นี่คือเหตุผลเดียวกับ pattern `results[id-1] = ...` ของ worker pool ที่ใช้ที่อื่นในคอร์สนี้ และเป็นเหตุผลที่ `go run -race` ไม่รายงานอะไรเลยสำหรับ snippet นี้
+
+method `errgroup.SetLimit` จากบท Sync Primitives แสดงขอบเขตแบบเดียวกันนี้ในรูปแบบ declarative — `g.SetLimit(limit)` แทนที่จะ size channel เอง — และมักเป็นตัวเลือกที่ดีกว่าในโค้ดจริง semaphore channel แบบดิบคุ้มค่าที่จะรู้จักไว้เพราะมันคือสิ่งที่ `SetLimit` ทำข้างในจริง ๆ และเพราะมันไม่ต้องการ external module เลย
+
+## Graceful Shutdown
+
+HTTP server ใน production ต้องหยุดรับ connection ใหม่และทำ request ที่ค้างอยู่ให้เสร็จก่อนที่ process จะ exit — ไม่ใช่ตัด connection กลางคันทันทีที่ deploy ส่ง `SIGTERM` มา `signal.NotifyContext` เปลี่ยน OS signal ให้เป็น `context.Context` และ `http.Server.Shutdown` ทำการหยุดแบบ graceful จริง ๆ:
+
+```go
+func main() {
+	srv := &http.Server{Handler: mux}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+
+	<-ctx.Done() // blocks until SIGINT/SIGTERM, then stop() lets the next signal kill it
+	stop()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Println("forced shutdown:", err)
+	}
+}
+```
+
+`srv.Shutdown` หยุด listener ทันที แล้วรอ (จนถึง deadline ของ context) ให้ handler ที่ค้างอยู่ทุกตัว return เองก่อนที่มันจะ return; `ListenAndServe` unblock ด้วย `http.ErrServerClosed` พอดี ซึ่งเป็นผลลัพธ์ที่คาดไว้ ไม่ใช่ error จาก shutdown ที่ตั้งใจ ไม่ต้อง log เป็น failure เวอร์ชัน deterministic แยกต่างหากของสิ่งนี้ — listen บน port ที่ OS กำหนดให้ แล้ว shutdown ผ่าน `cancel()` ธรรมดาแทนที่จะรอ OS signal จริง — ยืนยันแล้วในเครื่องด้วย `go run -race`:
+
+```text
+server shut down cleanly
+Serve returned: true
+```
+
+(`true` ตรงนี้คือ `errors.Is(err, http.ErrServerClosed)` ยืนยันว่า `Serve` return เพราะการ shutdown ไม่ใช่ error จริง) เวอร์ชันนี้ต้องการ TCP listener จริง จึงรันใน Playground แบบเบราว์เซอร์ของหน้านี้ไม่ได้
+
+สามอันที่ไม่ต้องใช้ network connection จริง — fan-in, cancellable pipeline, และ bounded parallelism — รวมกันอยู่ใน snippet ที่รันได้ด้านล่าง
+
+export const patternsAdvancedCode = `package main
+
+import (
+\t"context"
+\t"fmt"
+\t"sort"
+\t"sync"
+)
+
+// --- Fan-in: merge ---
+
+func merge(cs ...<-chan int) <-chan int {
+\tout := make(chan int)
+\tvar wg sync.WaitGroup
+\twg.Add(len(cs))
+\tfor _, c := range cs {
+\t\tgo func(c <-chan int) {
+\t\t\tdefer wg.Done()
+\t\t\tfor v := range c {
+\t\t\t\tout <- v
+\t\t\t}
+\t\t}(c)
+\t}
+\tgo func() {
+\t\twg.Wait()
+\t\tclose(out)
+\t}()
+\treturn out
+}
+
+func gen(vals ...int) <-chan int {
+\tout := make(chan int, len(vals))
+\tfor _, v := range vals {
+\t\tout <- v
+\t}
+\tclose(out)
+\treturn out
+}
+
+// --- Cancellable pipeline ---
+
+func generate(ctx context.Context, nums ...int) <-chan int {
+\tout := make(chan int)
+\tgo func() {
+\t\tdefer close(out)
+\t\tfor _, n := range nums {
+\t\t\tselect {
+\t\t\tcase out <- n:
+\t\t\tcase <-ctx.Done():
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}()
+\treturn out
+}
+
+func square(ctx context.Context, in <-chan int) <-chan int {
+\tout := make(chan int)
+\tgo func() {
+\t\tdefer close(out)
+\t\tfor n := range in {
+\t\t\tselect {
+\t\t\tcase out <- n * n:
+\t\t\tcase <-ctx.Done():
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}()
+\treturn out
+}
+
+func main() {
+\t// Fan-in
+\tmerged := merge(gen(1, 2, 3), gen(4, 5), gen(6))
+\tvar got []int
+\tfor v := range merged {
+\t\tgot = append(got, v)
+\t}
+\tsort.Ints(got) // merge order is nondeterministic; sort for a stable print
+\tfmt.Println("merged:", got)
+
+\t// Cancellable pipeline
+\tctx, cancel := context.WithCancel(context.Background())
+\tdefer cancel()
+\tsquares := square(ctx, generate(ctx, 1, 2, 3, 4, 5))
+\tvar squared []int
+\tfor v := range squares {
+\t\tsquared = append(squared, v)
+\t\tif len(squared) == 2 {
+\t\t\tcancel() // stop after exactly 2 values, deterministically
+\t\t\tbreak
+\t\t}
+\t}
+\tfmt.Println("squared before cancel:", squared)
+
+\t// Bounded parallelism: indexed writes to a pre-sized slice are not a race
+\tconst n = 6
+\tconst limit = 2
+\tsem := make(chan struct{}, limit)
+\tresults := make([]int, n)
+\tvar wg sync.WaitGroup
+\tfor i := 0; i < n; i++ {
+\t\twg.Add(1)
+\t\tgo func(i int) {
+\t\t\tdefer wg.Done()
+\t\t\tsem <- struct{}{}
+\t\t\tdefer func() { <-sem }()
+\t\t\tresults[i] = i * i
+\t\t}(i)
+\t}
+\twg.Wait()
+\tfmt.Println("bounded results:", results)
+}`;
+
+<Playground code={patternsAdvancedCode} />
 
 ## ข้อแลกเปลี่ยน
 
@@ -149,6 +429,56 @@ func main() {
 >
 > **k8s.io/client-go** ใช้ worker-queue pattern เดียวกันนี้เป็นแกนของ controller framework ใน `util/workqueue/queue.go` — worker หลายตัวดึงงานจาก queue เดียวกันเพื่อจำกัด concurrent reconciliation
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ AI สร้างมารวม pattern เหล่านี้เข้าด้วยกัน ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- ใน fan-in `merge` input goroutine ทุกตัวเรียก `close(out)` เองไหม หรือมีแค่ goroutine เฉพาะทางตัวเดียวเรียกมันครั้งเดียว หลังจาก `wg.Wait()`?
+- ทุก stage ของ pipeline ที่ควร cancel ได้ `select` บน `ctx.Done()` รอบ ๆ channel send ของมันจริงไหม — หรือมันเช็ก `ctx.Err()` แค่ครั้งเดียวตอนต้น พลาด cancellation ที่มาถึงกลาง loop?
+- จำนวน goroutine ที่รันพร้อมกันถูกจำกัดด้วย semaphore, worker pool, หรือ `errgroup.SetLimit` จริงไหม — หรือ "bounded parallelism" ใน comment ไม่ตรงกับ `go` statement ที่ไม่มีขอบเขตในโค้ด?
+- graceful-shutdown handler เรียก `srv.Shutdown(ctx)` พร้อม timeout จริงไหม หรือมันเรียก `os.Exit` ทันทีที่ได้รับ signal ทิ้ง request ที่ค้างอยู่?
+- ถ้า goroutine หลายตัวเขียนลง shared slice ด้วย index index เหล่านั้นการันตีว่าแยกกันจริงไหม (ไม่มี goroutine สองตัวคำนวณ index เดียวกันได้เลย) หรือทั้งสองอาจชนกันแล้วเปลี่ยน indexed write ที่ "ปลอดภัย" ให้กลายเป็น race จริง?
+
+<SpotTheBug code={`func worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for j := range jobs {
+		out <- j * 2
+	}
+	close(out) // called once per worker, but out is shared by all of them
+}
+
+func main() {
+	jobs := make(chan int, 3)
+	out := make(chan int, 3)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go worker(jobs, out, &wg)
+	}
+	jobs <- 1
+	jobs <- 2
+	jobs <- 3
+	close(jobs)
+	wg.Wait()
+	for v := range out {
+		fmt.Println(v)
+	}
+}`}>
+นี่คือบัค shared-channel-close ตัวเดียวกับ fan-in `merge` ของบท Channels แค่ใส่ชุดของ worker pool: `out` ถูก 3 worker ใช้ร่วมกัน แต่แต่ละตัวเรียก `close(out)` ตอนที่ loop `for j := range jobs` ของตัวเองจบ worker ตัวแรกที่เสร็จจะ close `out` สำเร็จ; worker ตัวอื่นที่เสร็จทีหลังและเรียก `close(out)` อีกครั้งจะ panic — output จริงที่จับได้บน Go 1.26.5 (`out` ตรงนี้เป็น buffered ดังนั้น worker มักส่งเสร็จก่อนที่จะแข่งกันตอน close แต่บัคจริงที่เกิดขึ้นต่างกันไปตามการรัน):
+
+```text
+panic: close of closed channel
+
+goroutine 5 [running]:
+main.worker(0xc000020120, 0xc0000201b0, 0xc000012180)
+	/tmp/workerclosebug/main.go:13 +0xb0
+created by main.main in goroutine 1
+	/tmp/workerclosebug/main.go:22 +0x80
+```
+
+`go run -race` ในอีกรอบหนึ่งของโปรแกรมเดียวกันเป๊ะ จับ `WARNING: DATA RACE` ระหว่าง send ของ worker ตัวหนึ่งกับ close ของอีกตัวแทน — สาเหตุเดียวกัน อาการต่างกันไปตาม scheduling วิธีแก้คือแบบเดียวกับที่ใช้ตลอดทั้งบทนี้: ไม่มีใครข้างใน worker close `out` เลย — `go func() { wg.Wait(); close(out) }()` ตัวเดียวหลัง launch worker ทำหน้าที่นี้แค่ครั้งเดียว เหมือนตัวอย่าง worker pool ที่รันได้ด้านบน
+</SpotTheBug>
+
 <Callout title="ข้อควรระวัง: goroutine leak เมื่อไม่มีใคร drain channel">
 ถ้า goroutine บล็อกอยู่บน `out <- result` และ receiver ออกไปโดยไม่ drain channel goroutine นั้นจะ **leak** — ค้างอยู่ใน runtime ตลอดไป เปลืองหน่วยความจำและ goroutine slot วิธีแก้คือตรวจสอบให้แน่ใจว่า: (a) channel มี buffer พอสำหรับ sends ทั้งหมด, (b) receiver drain channel จนกว่า `close`, หรือ (c) sender ก็ select บน `ctx.Done()` ด้วย ใน production รัน `go tool pprof` บน goroutine profile เพื่อตรวจจับ leak
 </Callout>
@@ -162,7 +492,8 @@ export const quizPatterns = [
       "จำนวน worker goroutines คงที่ที่ launch ก่อนส่ง jobs",
       "internal counter ของ sync.WaitGroup"
     ],
-    answer: 2
+    answer: 2,
+    explain: "ขนาด pool คือจำนวน worker goroutine ที่คุณ launch ไว้ตั้งแต่ต้น — jobs channel แค่ป้อนงานให้พวกมัน และ worker ทุกตัวยังคงดึงจากมันต่อไปจนกว่ามันจะ close ไม่ว่าจะมี job รออยู่ข้างหลังกี่ตัวก็ตาม"
   },
   {
     q: "ใน pipeline pattern อะไรทำให้ stages รัน concurrent?",
@@ -172,7 +503,8 @@ export const quizPatterns = [
       "pipeline function ถูกเรียกด้วย go pipeline()",
       "Channels parallelise งานอัตโนมัติเมื่ออ่านจาก"
     ],
-    answer: 1
+    answer: 1,
+    explain: "แต่ละ stage function เปิด goroutine ของตัวเองข้างในและ return channel ทันที — caller ประกอบ stage เข้าด้วยกันโดยป้อน output channel ของ stage หนึ่งเข้าเป็น input ของ stage ถัดไป และทุกตัวรัน concurrent โดยโครงสร้างเลย"
   },
   {
     q: "Fan-out ในบริบท Go concurrency หมายความว่าอะไร?",
@@ -182,7 +514,8 @@ export const quizPatterns = [
       "การ broadcast ค่าเดียวกันไปยัง channels หลายตัวด้วย send เดียว",
       "การใช้ select กับ send cases หลายตัว"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Fan-out หมายถึง goroutine หลายตัวแข่งกันอ่านจาก channel เดียวกัน ทำให้งานกระจายไปให้พวกมันโดยอัตโนมัติ — channel เองการันตีว่าแต่ละค่าไปถึง reader แค่ตัวเดียวเท่านั้น"
   },
   {
     q: "goroutine บล็อกบน `out <- result` และ consumer return แล้ว สิ่งนี้เรียกว่าอะไรและป้องกันอย่างไร?",
@@ -192,7 +525,30 @@ export const quizPatterns = [
       "Goroutine leak — ป้องกันด้วย context cancellation หรือให้ consumer drain channel เสมอ",
       "Stack overflow — ใช้ buffered channel ขนาด 1"
     ],
-    answer: 2
+    answer: 2,
+    explain: "sender ค้างอยู่ตลอดไปโดยไม่มีอะไรมา receive เลย — นั่นคือ leak ไม่ใช่ deadlock ทั้งโปรแกรม (goroutine อื่นอาจยังรันได้ปกติ) การให้ sender มี case ctx.Done() หรือการันตีว่า consumer drain จนถึง close เสมอ คือสองวิธีแก้มาตรฐาน"
+  },
+  {
+    q: "```go\nfunc worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {\n    defer wg.Done()\n    for j := range jobs {\n        out <- j * 2\n    }\n    close(out)\n}\n```\nworker สามตัวใช้ out channel เดียวกัน เกิดอะไรผิดพลาด?",
+    options: [
+      "ไม่มีอะไรผิด — close เป็น idempotent ดังนั้นเรียกซ้ำหลายครั้งไม่เป็นไร",
+      "close(out) ของแต่ละ worker แข่งกับตัวอื่น และตัวที่สองที่รันจะ panic ด้วย \"close of closed channel\"",
+      "worker deadlock กันเองเพราะ out ไม่ได้ buffered",
+      "โปรแกรม compile ไม่ผ่านเพราะ chan<- close ไม่ได้"
+    ],
+    answer: 1,
+    explain: "close ไม่ใช่ idempotent และ out ใช้ร่วมกัน: worker ตัวแรกที่เสร็จ close มันสำเร็จ แล้ว worker ตัวอื่นที่เสร็จทีหลังและเรียก close(out) อีกครั้งจะ panic — เป๊ะกับบัคที่ fan-in merge ในบทนี้ระวังไม่ให้เกิดด้วย dedicated closer goroutine ตัวเดียว"
+  },
+  {
+    q: "```go\nresults := make([]int, 6)\nvar wg sync.WaitGroup\nfor i := 0; i < 6; i++ {\n    wg.Add(1)\n    go func(i int) {\n        defer wg.Done()\n        results[i] = i * i\n    }(i)\n}\nwg.Wait()\n```\nทำไม `go run -race` ไม่รายงาน race เลย ทั้งที่มี 6 goroutine เขียนลง slice เดียวกันพร้อมกัน?",
+    options: [
+      "go run -race ไม่เช็ก slice write เช็กแค่ map write",
+      "แต่ละ goroutine เขียนลง index ที่ต่างกัน — เป็นคนละ memory location ไม่มี overlapping access",
+      "sync.WaitGroup serialize การเขียนลง shared memory ทั้งหมดให้อัตโนมัติ",
+      "Slice ปลอดภัยสำหรับ concurrent write โดยการออกแบบ ต่างจาก map"
+    ],
+    answer: 1,
+    explain: "data race ต้องการให้ goroutine สองตัวแตะ memory location เดียวกันโดยอย่างน้อยหนึ่งเป็นการเขียน results ถูก allocate ครั้งเดียวก่อนที่ goroutine ไหนจะเริ่ม และแต่ละ goroutine เขียน results[i] ของ i ของตัวเองเท่านั้น — location แยกกัน ไม่มีอะไรทับกัน ไม่ต้องมี synchronization เลย"
   }
 ];
 

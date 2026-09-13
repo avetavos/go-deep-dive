@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Interface คืออะไร?
 
@@ -105,6 +107,19 @@ func describe(s Shape) {
 \tfmt.Printf("area=%.2f perimeter=%.2f\\n", s.Area(), s.Perimeter())
 }
 
+// MyErr demonstrates the typed-nil-in-interface trap.
+type MyErr struct{ msg string }
+
+func (e *MyErr) Error() string { return e.msg }
+
+func mayFail(fail bool) error {
+\tvar p *MyErr // nil, but typed *MyErr
+\tif fail {
+\t\tp = &MyErr{msg: "boom"}
+\t}
+\treturn p // always a non-nil error interface, even when p is nil
+}
+
 func main() {
 \tshapes := []Shape{
 \t\tCircle{Radius: 5},
@@ -113,30 +128,27 @@ func main() {
 \tfor _, s := range shapes {
 \t\tdescribe(s)
 \t}
+
+\terr := mayFail(false)
+\tfmt.Println(err == nil) // false — the interface holds a typed nil *MyErr, not a true nil
 }`;
 
 <Playground code={interfacesCode} />
 
 ## Runtime Behavior
 
-```text
-interface value คือ 2 words:
+interface value คือสอง words: pointer ไปยัง **itab** (type + method table) และ pointer ไปยัง **data**
 
-iface
- ├─ *itab  →  ┌──────────────────────┐
- │            │ type: Circle         │
- │            │ methods: [Area,      │
- │            │          Perimeter]  │
- │            └──────────────────────┘
- └─ data   →  Circle{Radius: 5}
+export const ifaceLayoutDiagram = `flowchart LR
+  subgraph Iface["interface value (2 words)"]
+    T["*itab"]
+    D["data"]
+  end
+  T --> ITAB["itab\n type: Circle\n methods: [Area, Perimeter]"]
+  D --> VAL["Circle{Radius: 5}"]
+  ITAB -.dynamic dispatch.-> CALL["itab.fun[0](data) → Circle.Area(data)"]`;
 
-dynamic dispatch:
-  shape.Area()
-    ↓
-  itab.fun[0](data)  ← indirect call
-    ↓
-  Circle.Area(data)
-```
+<Mermaid code={ifaceLayoutDiagram} title="interface value เก็บ pointer ไปยัง type/method table และ pointer ไปยัง data — การเรียก method คือ indirect call ผ่าน itab" />
 
 คุณตรวจสอบว่า type หนึ่งตอบสนอง interface ได้ตั้งแต่ compile time โดยไม่ต้องสร้าง value เลย ด้วย blank assignment:
 
@@ -145,6 +157,83 @@ var _ Shape = (*Circle)(nil)
 ```
 
 บรรทัดนี้ compile ผ่านก็ต่อเมื่อ `*Circle` มีทุก method ที่ `Shape` ต้องการ ไม่มีต้นทุนตอน runtime และจับ method ที่ขาดหรือสะกดผิดได้ทันทีตอนเขียนโค้ด แทนที่จะไปเจอตอนเรียกใช้ครั้งแรก
+
+## Nil pointer ข้างใน interface ไม่ใช่ nil
+
+interface value คือ `(type, data)` มันจะ `== nil` ก็ต่อเมื่อ *ทั้งสอง* words เป็น nil function ที่ประกาศ return type เป็น `*T` แต่ return มันผ่าน `error`-typed return จะ box type descriptor ที่ไม่ nil รอบ ๆ data pointer ที่ nil — ตัว interface เองไม่เคยเป็น nil เลย แม้ pointer ข้างในจะเป็น nil ก็ตาม:
+
+```go
+type MyErr struct{ msg string }
+
+func (e *MyErr) Error() string { return e.msg }
+
+func f(fail bool) error {
+	var p *MyErr // nil, but typed *MyErr
+	if fail {
+		p = &MyErr{msg: "boom"}
+	}
+	return p // always returns a non-nil error interface, even when p is nil
+}
+```
+
+รันบน Go 1.26.5:
+
+```text
+<nil>
+false
+*main.MyErr
+```
+
+`fmt.Println(err)` print `<nil>` — การ print dereference มากพอที่จะแสดงว่า pointer เป็น nil — แต่ `err == nil` เป็น `false` และ `%T` ยืนยันว่า dynamic type คือ `*main.MyErr` ตัวแปร interface พก type descriptor ตั้งแต่วินาทีที่คุณ assign typed `nil` pointer เข้าไป และ type descriptor นั้นอย่างเดียวก็เพียงพอที่จะทำให้ comparison เป็น false ทางแก้คือ return literal `nil` เมื่อไม่มี error เลย ไม่ใช่ typed nil pointer ผ่าน interface-typed return
+
+### Boxing และ allocation
+
+การเก็บ concrete value ไว้ใน interface variable เรียกว่า **boxing** มัน allocate บน heap หรือไม่ขึ้นกับสิ่งที่ compiler พิสูจน์ได้ Compile ตัวอย่าง shapes ด้านบนด้วย `-gcflags=-m`:
+
+```text
+./main.go:11:6: can inline Circle.Area
+./main.go:16:20: devirtualizing s.Area to Circle
+./main.go:16:20: inlining call to Circle.Area
+./main.go:15:16: c does not escape
+./main.go:16:20: ~r0 escapes to heap
+```
+
+เมื่อมี concrete type เดียวเท่านั้นที่ไหลเข้า `s Shape` ใน function นั้น compiler จะ **devirtualize** การเรียก — มันรู้แบบ static ว่า `s.Area` หมายถึง `Circle.Area`, inline มัน, และ `c` เองไม่ escape เลย แต่การเก็บ concrete type สองแบบที่ต่างกันเข้า interface-typed slice เดียวกันทำลายสิ่งนั้น:
+
+```text
+./main.go:19:20: c escapes to heap
+./main.go:19:27: Rect{...} escapes to heap
+```
+
+เมื่อ `[]Shape` เก็บได้ทั้ง `Circle` หรือ `Rect` compiler จะไม่รู้อีกต่อไปว่าต้องเรียก `Area` ตัวไหนโดยไม่ผ่าน itab ตอน runtime ดังนั้นทั้งสอง values จึงถูก box ขึ้น heap นี่คือต้นทุนจริงเบื้องหลัง "interfaces ไม่ฟรี" — ไม่ใช่ตัว interface value เอง (ยังเป็นสอง words บน stack) แต่คือ data ที่ถูก box ที่มันชี้ไปเมื่อ static devirtualization ทำไม่ได้
+
+## Interface comparability panic ได้
+
+interface value สอง values เทียบด้วย `==` ได้ก็ต่อเมื่อ dynamic type ของทั้งคู่ comparable compiler ไม่รู้ dynamic type ล่วงหน้าเมื่อทั้งสองฝั่งเป็น `any` มันจึงยอมให้ `==` เสมอ แล้วเลื่อนการเช็กจริงไปที่ runtime:
+
+```go
+var a, b any
+a = []int{1, 2}
+b = []int{1, 2}
+fmt.Println(a == b)
+```
+
+```text
+panic: runtime error: comparing uncomparable type []int
+```
+
+slice, map, และ function ไม่ comparable — การเก็บมันไว้ใน interface ไม่ได้เปลี่ยนสิ่งนั้น การเทียบ interface value สองตัวที่ dynamic type เป็น struct ที่มี field เป็น slice หรือ map ก็ panic แบบเดียวกัน นี่คือแหล่งของ crash ที่พบบ่อยลึกอยู่ใน test-assertion helper หรือ `map[any]any` key ที่ดูปกติดีจนกระทั่งมี field type slice โผล่มา
+
+## นิยาม interface ที่ consumer ไม่ใช่ที่ producer
+
+Anti-pattern ที่พบบ่อยซึ่งนำเข้ามาจากโค้ด Java/C# คือ producer package ที่นิยาม interface ใหญ่ไว้ข้าง ๆ concrete implementation เดียวของมัน — `type UserServiceInterface interface { ... }` คู่กับ `type UserService struct{ ... }` โดยทุก method ของ `UserService` ถูก copy ขึ้นไปบน interface "เพื่อ testability" นี่คือ **interface pollution**: interface เพิ่ม indirection โดยไม่ decouple อะไรเลย เพราะยังมี implementation เดียวอยู่ดี และทุกครั้งที่ `UserService` เพิ่ม method interface ก็ต้องโตตามไปด้วย
+
+รูปแบบที่ idiomatic ของ Go ตรงข้ามกัน: package ที่*ใช้*dependency คือคนที่นิยาม interface เล็กที่สุดที่มันต้องการ ตรงจุดที่มันใช้ ส่วน producer package export แค่ concrete type นี่คือสิ่งที่ `io.Copy` ทำเป๊ะ ๆ — signature ของมันคือ `func Copy(dst Writer, src Reader) (int64, error)` นิยามใน `io` เอง ไม่ใช่โดย type ทุกตัวที่บังเอิญ copy ได้ caller ที่ส่ง `*os.File`, `*bytes.Buffer`, หรือ `net.Conn` ไม่ต้องให้ types เหล่านั้น "implement" อะไรโดยตั้งใจเลย พวกมันตอบสนอง `io.Reader`/`io.Writer` เพราะมี methods ที่ถูกต้องอยู่แล้ว
+
+สองอาการที่บอกว่า interface ควรย้ายไป consumer หรือหายไปเลย:
+
+- interface มี implementation เดียวในทั้ง codebase และไม่มี test ไหนสลับใส่ fake เลย
+- method set ของ interface เป็นแค่ "ทุก exported method ของ struct ตัวเดียวที่ implement มัน" — copy กลไก ไม่ใช่ contract เล็กที่ตั้งใจออกแบบ
 
 ## ข้อแลกเปลี่ยน
 
@@ -168,6 +257,37 @@ var _ Shape = (*Circle)(nil)
 >
 > **Kubernetes** ใช้ interface `runtime.Object` (`k8s.io/apimachinery/pkg/runtime`) ให้ทุก Kubernetes resource ทำงานกับ generic controller ได้ — decoupling ผ่าน small interface
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ function ที่ generate มา return `error` (หรือ interface type ใด ๆ) ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- ทุก return path ใช้ bare `nil` หรือมี path ที่ return typed pointer variable ที่ตัวมันเองอาจเป็น nil (`var p *MyErr; ...; return p`)? แบบหลังทำให้ `err != nil` เป็น true แม้บน path ที่ "ไม่มี error"
+- `==` ถูกใช้เทียบ `any`-typed หรือ interface-typed values สองตัวหรือเปล่า? ถ้า dynamic type ฝั่งใดฝั่งหนึ่งอาจเป็น slice, map, หรือ func สิ่งนี้ compile ผ่านและ panic ตอน runtime
+- package นิยาม interface ไว้ข้าง ๆ implementation เดียวของมัน โดย methods ของ interface mirror struct แบบกลไกหรือเปล่า? นั่นคือ interface pollution — เช็กว่ามี type หรือ test อื่นที่ต้องการ indirection นี้จริงหรือไม่
+- โค้ด assert หรือเช็ก capability เพิ่มเติม (`Flusher`, `Hijacker`, `WriterTo`) แทนที่จะสมมติ concrete type หรือเปล่า? การข้ามเช็กนั้นทำให้ functionality ที่ wrapped type มีให้หายไปอย่างเงียบ ๆ
+- function parameter ถูก type เป็น concrete struct ทั้งที่มีแค่หนึ่งหรือสอง methods ที่ถูกเรียกบนมันจริง ๆ หรือเปล่า? นั่นคือโอกาสที่พลาดไปในการทำ small, consumer-defined interface — ไม่ใช่ bug แต่เป็น design smell ที่ควร flag
+
+<SpotTheBug code={`type MyErr struct{ msg string }
+
+func (e *MyErr) Error() string { return e.msg }
+
+func validate(input string) error {
+	var problem *MyErr
+	if input == "" {
+		problem = &MyErr{msg: "empty input"}
+	}
+	return problem
+}
+
+func main() {
+	err := validate("ok")
+	if err != nil {
+		panic("validation failed: " + err.Error())
+	}
+}`}>
+`validate` return `problem` ซึ่งเป็นตัวแปร `*MyErr` ผ่าน `error`-typed return — แม้บน success path ที่ `problem` เป็น nil `error` interface ที่ return จึงเก็บ `(type: *MyErr, data: nil)` ซึ่งไม่เคย `== nil` ดังนั้น `err != nil` จึงเป็น true แม้ input จะถูกต้อง `main` จากนั้นเรียก `err.Error()` บน nil `*MyErr` receiver นั้นเพื่ออ่าน `msg` ซึ่ง dereference nil pointer — panic จริงคือ `panic: runtime error: invalid memory address or nil pointer dereference` ไม่ใช่ข้อความที่ส่งเข้า `panic()` ทางแก้คือ return literal `nil` บน success path: `if input == "" { return &MyErr{msg: "empty input"} }; return nil`
+</SpotTheBug>
+
 <Callout title="Interfaces ตอบสนองโดยนัย">
 ทั้ง `Circle` และ `Rect` ไม่เคยกล่าวถึง `Shape` ทั้งคู่ตอบสนองเพราะมี `Area()` และ `Perimeter()` ที่มี signatures ถูกต้อง นั่นหมายความว่าคุณสามารถนิยาม interface *หลัง* types ที่ตอบสนอง interface นั้น — types เหล่านั้นไม่ต้องเปลี่ยนเลย การตอบสนอง interface แบบย้อนหลังเป็นหนึ่งในเครื่องมือ refactoring ที่ทรงพลังที่สุดของ Go
 </Callout>
@@ -181,27 +301,52 @@ export const quizInterfaces = [
       "โดยมี methods ทั้งหมดที่ interface ต้องการ — ไม่ต้องใช้ keyword",
       "โดยเรียก `register(myType, MyInterface)` ที่ init time"
     ],
-    answer: 2
+    answer: 2,
+    explain: "การตอบสนอง interface ของ Go เป็นแบบ structural: type ไม่ต้องประกาศอะไรเลย แค่มี method set ที่ถูกต้อง นี่คือสิ่งที่ทำให้ type ใน package หนึ่งตอบสนอง interface ใน package อื่นได้โดยไม่มีฝ่ายไหน import อีกฝ่าย"
   },
   {
-    q: "คุณนิยาม interface `Printer` ที่มีหนึ่ง method ใน package `ui` struct `Document` ใน package `doc` มี method นั้น ต้องการ import อะไรเพิ่ม?",
+    q: "```go\ntype MyErr struct{ msg string }\nfunc (e *MyErr) Error() string { return e.msg }\n\nfunc f(fail bool) error {\n    var p *MyErr\n    if fail {\n        p = &MyErr{msg: \"boom\"}\n    }\n    return p\n}\n\nerr := f(false)\nfmt.Println(err == nil)\n```\nโค้ดนี้ print อะไร?",
     options: [
-      "`doc` ต้อง import `ui` เพื่อประกาศว่า implement `Printer`",
-      "`ui` ต้อง import `doc` เพื่ออ้างถึง `Document`",
-      "ไม่ต้องการ import เพิ่ม — การตอบสนองเป็นแบบ implicit",
-      "ทั้งสอง packages ต้อง import package `contracts` ที่ใช้ร่วมกัน"
+      "true — p เป็น nil ดังนั้น error ที่ return ก็เป็น nil",
+      "false — interface เก็บ type descriptor ที่ไม่ nil ล้อมรอบ *MyErr ที่ nil",
+      "compile error — *MyErr ไม่ implement error",
+      "runtime panic — nil pointer dereference"
     ],
-    answer: 2
+    answer: 1,
+    explain: "err คือ (type: *MyErr, data: nil) ไม่ใช่ (nil, nil) interface จะ == nil ก็ต่อเมื่อทั้ง type และ data เป็น nil ดังนั้น typed nil pointer นี้ทำให้ comparison เป็น false — กับดักคลาสสิกของโค้ดที่ AI สร้าง"
   },
   {
-    q: "`any` หมายถึงอะไรใน Go 1.18+?",
+    q: "```go\nvar a, b any\na = []int{1, 2}\nb = []int{1, 2}\nfmt.Println(a == b)\n```\nจะเกิดอะไรขึ้นตอนรัน?",
+    options: [
+      "print true — slices มี elements เท่ากัน",
+      "print false — slice header ต่างกัน",
+      "panic: runtime error: comparing uncomparable type []int",
+      "compile error: invalid operation: a == b"
+    ],
+    answer: 2,
+    explain: "compiler ยอมให้ == ระหว่าง any สองตัวเพราะไม่รู้ dynamic type ล่วงหน้า แต่ slice ไม่ comparable การเช็กเกิดตอน runtime และ panic ด้วยข้อความนี้เป๊ะ ๆ เมื่อมันพบว่า dynamic type คือ []int"
+  },
+  {
+    q: "package หนึ่ง export `type UserServiceInterface interface { ... }` ที่ทุก method ของ `UserService` struct ตัวเดียวถูก copy ขึ้นไปบนมัน และไม่มีที่ไหนใน codebase implement มันหรือสลับใส่ fake นี่เรียกว่าอะไร และควรแก้อย่างไร?",
+    options: [
+      "Dependency injection — เป็น pattern ที่ idiomatic ถูกต้องแล้ว เก็บไว้",
+      "Interface pollution — interface ควรย้ายไป (และเล็กลงที่) consumer หรือลบทิ้ง",
+      "Interface embedding — รวมกับ interface อื่นให้มีประโยชน์มากขึ้น",
+      "Duck typing — เปลี่ยนชื่อ methods ให้ตรงกับ stdlib interface"
+    ],
+    answer: 1,
+    explain: "interface ที่มี implementation เดียวและไม่มีจุดสลับ implementation เพิ่ม indirection โดยไม่ decouple อะไรเลย Go แบบ idiomatic นิยาม interface เล็กที่ consumer โดยขนาดตามที่ consumer นั้นเรียกใช้จริง ส่วน producer export แค่ concrete type"
+  },
+  {
+    q: "empty interface `any` (Go 1.18+) เป็น alias ของอะไร?",
     options: [
       "Union type ที่เก็บได้สอง type เท่านั้น",
-      "Alias ของ `interface{}` — interface ที่ไม่มี methods",
+      "`interface{}` — interface ที่ไม่มี methods ตอบสนองได้โดยทุก type",
       "Constraint ที่ใช้เฉพาะใน generic type parameters",
       "Pointer ไปยัง unknown type"
     ],
-    answer: 1
+    answer: 1,
+    explain: "any เป็นแค่ alias เพื่อความอ่านง่ายของ interface{} เพราะมันต้องการ 0 methods ทุก type จึงตอบสนองมันโดยอัตโนมัติ — ซึ่งก็เป็นเหตุผลที่มันสละ type safety และควรใช้อย่างประหยัด"
   },
   {
     q: "function ของคุณต้องการเขียน bytes ควรใช้ parameter type ใดที่ idiomatic ที่สุด?",
@@ -211,7 +356,8 @@ export const quizInterfaces = [
       "`io.Writer` — interface ที่ writer ใดก็ตอบสนองได้",
       "`any` — รับทุกอย่างแล้ว type-assert ภายใน"
     ],
-    answer: 2
+    answer: 2,
+    explain: "การรับ interface เล็ก io.Writer — นิยามอยู่ที่จุดใช้งานของ consumer ใน package io เอง — ทำให้ caller ส่ง *os.File, *bytes.Buffer, network connection หรืออะไรก็ตามที่มี method Write เข้ามาได้ โดย function ไม่ต้อง depend บน concrete type เลย"
   }
 ];
 

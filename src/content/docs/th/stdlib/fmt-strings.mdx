@@ -1,6 +1,6 @@
 ---
 title: fmt, strings และ strconv
-description: 'Format verbs (%v %+v %d %s %q %T), strings package (Contains/Split/Join/ReplaceAll/Builder) และ strconv (Atoi/Itoa/ParseFloat)'
+description: 'Format verb (%v %+v %d %s %q %T), package strings (Contains/Split/Join/ReplaceAll/Builder) และ strconv (Atoi/Itoa/ParseFloat)'
 sidebar:
   order: 2
 ---
@@ -9,27 +9,29 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## fmt — Formatted I/O
+## fmt — formatted I/O
 
-Package `fmt` คือจุดเริ่มต้นของ output เกือบทั้งหมดใน Go มีสาม function หลักที่ครอบคลุมกรณีการใช้งานส่วนใหญ่:
+Package `fmt` คือจุดเริ่มต้นของ output เกือบทั้งหมดใน Go function สามตัวครอบคลุมกรณีใช้งานส่วนใหญ่:
 
-- `fmt.Println(args...)` — พิมพ์แต่ละ argument คั่นด้วยช่องว่าง แล้วขึ้นบรรทัดใหม่
-- `fmt.Printf(format, args...)` — พิมพ์โดยใช้ format string ที่มี verb
-- `fmt.Sprintf(format, args...)` — คืนค่า string ที่ format แล้วแทนที่จะพิมพ์
+- `fmt.Println(args...)` — พิมพ์แต่ละ argument คั่นด้วย space ตามด้วย newline
+- `fmt.Printf(format, args...)` — พิมพ์โดยใช้ format string พร้อม verb
+- `fmt.Sprintf(format, args...)` — คืน string ที่ format แล้วแทนที่จะพิมพ์
 
 ### Format verbs
 
 | Verb | ความหมาย |
 |------|---------|
-| `%v` | การแสดงผลแบบ default |
-| `%+v` | Struct พร้อมชื่อ field |
-| `%#v` | การแสดงผลแบบ Go syntax |
-| `%T` | Type ของค่า |
-| `%d` | เลขฐานสิบ (decimal integer) |
-| `%s` | String (ไม่มีเครื่องหมายคำพูด) |
-| `%q` | String ในเครื่องหมายคำพูดคู่พร้อม Go escaping |
-| `%f` | ทศนิยม (floating-point decimal) |
+| `%v` | การแสดงผล default |
+| `%+v` | struct พร้อมชื่อ field |
+| `%#v` | การแสดงผลแบบ Go-syntax |
+| `%T` | type ของค่า |
+| `%d` | จำนวนเต็มฐาน 10 |
+| `%s` | string (ไม่มีเครื่องหมายคำพูด) |
+| `%q` | string ที่มีเครื่องหมายคำพูดคู่พร้อม Go escaping |
+| `%f` | ทศนิยม |
 
 ```go
 type Person struct { Name string; Age int }
@@ -40,9 +42,60 @@ fmt.Printf("%#v\n", p)   // main.Person{Name:"Alice", Age:30}
 fmt.Printf("%T\n",  p)   // main.Person
 ```
 
-## strings — การจัดการข้อความ
+### %v เรียก String() — และ recurse เข้าไปในมันได้
 
-Package `strings` ให้บริการ function สำหรับการค้นหา แยก รวม และแปลง string ใน Go นั้น string เป็น immutable UTF-8 byte sequence ดังนั้น function เหล่านี้จะคืนค่า string ใหม่แทนที่จะแก้ไข in-place
+เมื่อค่าหนึ่ง implement `fmt.Stringer` (`String() string`) หรือ `error` `%v` (รวมถึง `%s`, `Println` และทุก verb ที่ fallback ไปที่การแสดงผล default) จะเรียก method นั้นแทนที่จะพิมพ์ field ของ struct สะดวกดี — จนกว่า method `String()` เองจะ format receiver ด้วย `%v`:
+
+```go
+type Point struct{ X, Y int }
+
+func (p Point) String() string {
+    return fmt.Sprintf("%v", p) // BUG: %v on a Stringer calls String() again
+}
+```
+
+`go vet` จับรูปแบบนี้ได้ตอน compile — พบบ่อยพอในโค้ดที่ AI เขียนจนมี analyzer ของตัวเองโดยเฉพาะ:
+
+```text
+main.go:8:22: fmt.Sprintf format %v with arg p causes recursive (command-line-arguments.Point).String method call
+```
+
+วิธีแก้คือ format field ข้างในแทน หรือแปลงเป็น type ที่ไม่มี method นี้: `fmt.Sprintf("(%d, %d)", p.X, p.Y)` หรือ `fmt.Sprintf("%v", struct{ X, Y int }(p))`
+
+### Verb สำหรับ width และ padding
+
+ทุก verb รับ width และ สำหรับ float รับ precision ด้วย เขียนไว้ก่อนตัวอักษร verb:
+
+```go
+fmt.Printf("%08b\n", 5)      // 00000101 — zero-padded to 8 digits
+fmt.Printf("[%6.2f]\n", 3.14159) // [  3.14] — width 6, 2 decimal places
+fmt.Printf("%x\n", 255)      // ff — lowercase hex
+```
+
+width ที่เป็นค่าลบจะจัดชิดซ้ายแทนชิดขวา (`%-8s`); syntax ของ width แบบเดียวกันใช้ได้กับ `%d`, `%s`, `%q` และ verb อื่นๆ ทั้งหมด
+
+## %w ใช้ได้เฉพาะใน fmt.Errorf เท่านั้น
+
+`%w` ไม่ใช่ format verb ทั่วไป — มันคือสัญญาณเฉพาะสำหรับ `fmt.Errorf` บอกให้ wrap error ที่ให้มา เพื่อให้ `errors.Is`/`errors.As`/`errors.Unwrap` มองทะลุเข้าไปได้ทีหลัง function อื่นของ `fmt` ทุกตัวถือว่า `%w` เป็น error และ `go vet` จะไม่ยอมให้ compile ผ่าน:
+
+```go
+baseErr := errors.New("disk full")
+wrapped := fmt.Errorf("save failed: %w", baseErr) // OK — Errorf understands %w
+```
+
+```go
+notWrapped := fmt.Sprintf("save failed: %w", baseErr) // go vet error
+```
+
+```text
+main.go:17:42: fmt.Sprintf does not support error-wrapping directive %w
+```
+
+`go vet` (เป็นส่วนหนึ่งของการเช็ก default ของ `go build` มาตั้งแต่ Go 1.10 สำหรับ analyzer บางตัว และรันเสมอโดย `go test`) ปฏิเสธตั้งแต่ตอน compile-check ความผิดพลาดนี้จึงแทบไม่ถึง production — แต่ก็ควรรู้จักไว้เวลาอ่าน diff เพราะโค้ดที่ AI เขียนบางครั้ง copy format string ที่มี `%w` ไปใส่ใน `Sprintf` หรือ `Println` ตามความเคยชิน
+
+## strings — การจัดการ text
+
+Package `strings` มี function สำหรับค้นหา, แยก, รวม และแปลง string Go string เป็น immutable UTF-8 byte sequence; function เหล่านี้คืน string ใหม่แทนที่จะแก้ไขของเดิม
 
 ```go
 s := "hello, world"
@@ -55,21 +108,50 @@ strings.ToUpper(s)                   // "HELLO, WORLD"
 strings.TrimSpace("  hi  ")          // "hi"
 ```
 
+### string เป็น byte; range เดินตาม rune
+
+Go string เป็น byte sequence แบบ immutable ที่มักเก็บ UTF-8 text `len(s)` นับเป็น **byte** และ `s[i]` index เป็น **byte** เดียว — ไม่ใช่ตัวอักษร ในทางกลับกัน `for range` บน string จะ decode UTF-8 และให้ **rune** (Unicode code point, `int32`) ที่แต่ละตำแหน่ง พร้อม byte offset ที่มันเริ่มต้น:
+
+```go
+s := "café" // é is 2 bytes in UTF-8
+fmt.Println(len(s), utf8.RuneCountInString(s)) // 5 4 — byte count vs rune count differ
+for i, r := range s {
+    fmt.Printf("byte %d: rune %q\n", i, r)
+}
+fmt.Println(s[3]) // 195 — a raw UTF-8 continuation byte, not a printable rune
+```
+
+การ index `s[i]` ด้วย offset ทางคณิตศาสตร์ (แทนที่จะวนด้วย `range` หรือแปลงเป็น `[]rune`) ปลอดภัยเฉพาะ string ที่เป็น ASCII ล้วนเท่านั้น input ที่มีตัวอักษรนอก ASCII จะถูก slice เข้าไปกลางตัวอักษร multi-byte เงียบๆ
+
+### TrimPrefix เทียบกับ TrimLeft: กับดัก cutset
+
+`strings.TrimPrefix(s, prefix)` ลบ `prefix` เฉพาะเมื่อ `s` ขึ้นต้นด้วย string นั้นเป๊ะๆ ครั้งเดียว `strings.TrimLeft(s, cutset)` ทำงานต่างไปเลย: มันถือว่า `cutset` เป็น **set ของ byte แต่ละตัว** และตัด byte ที่นำหน้าทุกตัวที่ปรากฏอยู่ใน set นั้น — ไม่ใช่ prefix string:
+
+```go
+strings.TrimPrefix("aardvark", "ar") // "aardvark" — does not start with "ar"
+strings.TrimLeft("aardvark", "ar")   // "dvark"    — strips every leading 'a' or 'r'
+```
+
+โค้ดที่ AI เขียนที่ใช้ `TrimLeft` โดยคาดหวังพฤติกรรมแบบ prefix-string จะได้ผลลัพธ์ที่ดูสมเหตุสมผลแต่ผิด กับ input ใดๆ ที่ตัวอักษรใน cutset ซ้ำกันหรือเรียงลำดับต่างไป — ใช้ `TrimPrefix` (หรือ `CutPrefix`) เมื่อต้องการ "ลบ prefix นี้เป๊ะๆ"
+
 ### strings.Builder — การต่อ string อย่างมีประสิทธิภาพ
 
-เมื่อสร้าง string จากหลายส่วนในลูป ให้ใช้ `strings.Builder` แทน `+=` เพราะ `+=` จะสร้าง string ใหม่ทุกครั้งที่วนซ้ำ ส่วน `Builder` เขียนลงใน buffer ที่ขยายตัวได้และ allocate string สุดท้ายเพียงครั้งเดียว
+เมื่อสร้าง string จากหลายชิ้นใน loop ให้ใช้ `strings.Builder` แทน `+=` operator `+=` จะ allocate string ใหม่ทุกรอบ; `Builder` เขียนลง buffer ที่ขยายได้และ allocate string สุดท้ายแค่ครั้งเดียว
 
 ```go
 var b strings.Builder
+b.Grow(64) // pre-size the buffer when you know roughly how much you'll write
 for i := 0; i < 5; i++ {
     fmt.Fprintf(&b, "item%d ", i)
 }
 result := strings.TrimSpace(b.String()) // "item0 item1 item2 item3 item4"
 ```
 
-### Cut, CutLast และ helper แบบ iterator
+`Builder` ไม่ปลอดภัยที่จะ copy เมื่อมันมีข้อมูลอยู่แล้ว — เหมือน `bytes.Buffer` แต่ `strings.Builder` บังคับใช้กฎนี้อย่างจริงจัง การ copy `Builder` ที่ไม่ใช่ zero value โดยค่าแล้วเขียนลงใน copy จะ panic ตอน runtime ด้วย `strings: illegal use of non-zero Builder copied by value` เพราะ copy นั้นมี pointer ย้อนกลับไปยัง buffer เดิมที่ runtime ตรวจพบว่าย้ายที่แล้ว
 
-helper สามกลุ่มที่มาในรุ่นหลัง ๆ แทนที่การคำนวณ index ไปได้เยอะ:
+### Cut, CutLast และ iterator helper
+
+helper สามตระกูลที่มาในรุ่นล่าสุดและแทนที่การคำนวณ index จำนวนมาก:
 
 ```go
 // Go 1.18: split on the FIRST separator
@@ -85,13 +167,13 @@ for part := range strings.SplitSeq("a,b,c", ",") { fmt.Println(part) }
 for word := range strings.FieldsSeq("  a  b ") { fmt.Println(word) }
 ```
 
-`Lines`, `SplitSeq` และ `FieldsSeq` คืน `iter.Seq[string]` ใช้เมื่อต้องการเดินผ่านชิ้นส่วนเพียงรอบเดียว และใช้ `Split`/`Fields` ต่อไปเมื่อต้องการ slice ที่ index ได้ package `bytes` มีชุดเดียวกัน (`bytes.CutLast` และเพื่อน)
+`Lines`, `SplitSeq` และ `FieldsSeq` คืน `iter.Seq[string]`; ใช้เมื่อต้องการวนแค่รอบเดียว และเก็บ `Split`/`Fields` ไว้เมื่อต้องการ slice ที่ index เข้าไปได้ `bytes` มีชุดเดียวกัน (`bytes.CutLast` และเพื่อนๆ)
 
-ของเล็ก ๆ อีกสองอย่างที่ควรรู้: package `uuid` ใหม่ (Go 1.27) สร้างและ parse UUID ได้โดยไม่ต้องพึ่ง module ภายนอก และ `log/slog.NewMultiHandler` (Go 1.26) กระจาย logger ตัวเดียวออกไปหลาย handler
+อีกสองอย่างเล็กๆ ที่ควรรู้: package `uuid` ใหม่ (Go 1.27) สร้างและ parse UUID โดยไม่ต้องใช้ third-party module และ `log/slog.NewMultiHandler` (Go 1.26) กระจาย logger ตัวเดียวไปหลาย handler
 
-## strconv — การแปลงระหว่าง string และตัวเลข
+## strconv — การแปลง string เป็นตัวเลข
 
-`strconv` แปลงระหว่าง string และ numeric type function ที่พบบ่อยที่สุด:
+`strconv` แปลงระหว่าง string กับ numeric type function ที่พบบ่อยที่สุด:
 
 ```go
 n, err   := strconv.Atoi("42")          // string → int
@@ -100,7 +182,20 @@ f, err   := strconv.ParseFloat("3.14", 64) // string → float64
 b, err   := strconv.ParseBool("true")   // string → bool
 ```
 
-`Atoi` และ `ParseFloat` คืนค่า `(value, error)` เพราะ input อาจไม่ใช่ตัวเลขที่ถูกต้อง ควรตรวจสอบ error ก่อนใช้ค่าเสมอ
+`Atoi` และ `ParseFloat` คืน `(value, error)` เพราะ input อาจไม่ใช่ตัวเลขที่ถูกต้อง ต้องเช็ก error ก่อนใช้ value เสมอ
+
+`ParseInt(s, base, bitSize)` รองรับฐานอื่นๆ (`strconv.ParseInt("2A", 16, 64)` → `42`) และ `strconv.Quote` สร้าง string แบบ Go-syntax ที่มี escape ให้เห็นชัด — มีประโยชน์เวลา log ค่าที่อาจมี control character
+
+### strconv เทียบกับ fmt.Sprint สำหรับตัวเลข
+
+`strconv.Itoa(n)` และ `fmt.Sprint(n)` ให้ string เดียวกันสำหรับ int แต่ต้นทุนไม่เท่ากัน `fmt.Sprint` box argument เป็น `any` แล้วใช้ reflection เพื่อหาว่ามันเป็นจำนวนเต็มก่อนจะ format; `strconv.Itoa` แปลงตรงๆ โดยไม่มี boxing หรือ reflection วัดผลบนเครื่องนี้:
+
+```text
+BenchmarkItoa-11      92186020    12.60 ns/op    8 B/op    1 allocs/op
+BenchmarkSprint-11    35726424    34.59 ns/op    8 B/op    1 allocs/op
+```
+
+จำนวน alloc เท่ากัน แต่ `fmt.Sprint` เสีย CPU time ต่อการเรียกมากกว่าราว 2.7 เท่า — reflection ไม่ฟรีแม้จะไม่ได้ alloc เพิ่ม ใช้ `strconv` ใน hot path ที่รู้ concrete type แน่นอน; ใช้ `fmt.Sprintf` เมื่อต้อง interpolate หลายค่าเข้า template
 
 export const fmtStringsCode = `package main
 
@@ -160,72 +255,242 @@ func main() {
 
 <Playground code={fmtStringsCode} />
 
+export const fmtStringsAdvancedCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+\t"strconv"
+\t"strings"
+\t"testing"
+\t"unicode/utf8"
+)
+
+func main() {
+\t// 1. %w is only meaningful in fmt.Errorf — elsewhere it prints a literal error marker
+\tbaseErr := errors.New("disk full")
+\twrapped := fmt.Errorf("save failed: %w", baseErr)
+\tfmt.Println("Errorf %w:", wrapped, "| Unwrap:", errors.Unwrap(wrapped))
+
+\t// 2. strings are bytes; range walks runes; len() and s[i] are byte-oriented
+\ts := "café" // é is 2 bytes in UTF-8
+\tfmt.Println("len(s):", len(s), "utf8.RuneCountInString(s):", utf8.RuneCountInString(s))
+\tfor i, r := range s {
+\t\tfmt.Printf("  byte offset %d: rune %q (%d)\\n", i, r, r)
+\t}
+\tfmt.Println("s[3]:", s[3], "(a raw byte, not a rune)")
+
+\t// 3. strconv vs fmt.Sprint — allocation count via testing.AllocsPerRun
+\tn := 123456
+\tallocsStrconv := testing.AllocsPerRun(1000, func() { _ = strconv.Itoa(n) })
+\tallocsSprint := testing.AllocsPerRun(1000, func() { _ = fmt.Sprint(n) })
+\tfmt.Printf("allocs/op strconv.Itoa: %.0f  fmt.Sprint: %.0f\\n", allocsStrconv, allocsSprint)
+
+\t// strconv.ParseInt and Quote
+\tv, err := strconv.ParseInt("2A", 16, 64)
+\tfmt.Println("ParseInt base16:", v, err)
+\tfmt.Println("Quote:", strconv.Quote("line\\tbreak\\n"))
+
+\t// 4. TrimPrefix (exact string) vs TrimLeft (cutset of individual bytes)
+\tfmt.Println("TrimPrefix:", strings.TrimPrefix("aardvark", "ar"))
+\tfmt.Println("TrimLeft cutset trap:", strings.TrimLeft("aardvark", "ar"))
+
+\t// EqualFold and Fields
+\tfmt.Println("EqualFold:", strings.EqualFold("Go", "GO"))
+\tfmt.Println("Fields:", strings.Fields("  many   spaces   here "))
+
+\t// 5. width and padding verbs
+\tfmt.Printf("%%08b: %08b\\n", 5)
+\tfmt.Printf("%%6.2f: [%6.2f]\\n", 3.14159)
+\tfmt.Printf("%%x: %x\\n", 255)
+
+\t// 6. strings.Builder — Grow then write, then show the copy panic
+\tvar b strings.Builder
+\tb.Grow(64)
+\tb.WriteString("hello")
+\tfmt.Println("Builder:", b.String(), "Cap:", b.Cap() >= 64)
+
+\tfunc() {
+\t\tdefer func() {
+\t\t\tif r := recover(); r != nil {
+\t\t\t\tfmt.Println("copy panic recovered:", r)
+\t\t\t}
+\t\t}()
+\t\tb2 := b // copying a non-zero Builder by value
+\t\tb2.WriteString(" world")
+\t}()
+}`;
+
+<Playground code={fmtStringsAdvancedCode} />
+
+output จริงจากโปรแกรมนี้บน Go 1.26.5:
+
+```text
+Errorf %w: save failed: disk full | Unwrap: disk full
+len(s): 5 utf8.RuneCountInString(s): 4
+  byte offset 0: rune 'c' (99)
+  byte offset 1: rune 'a' (97)
+  byte offset 2: rune 'f' (102)
+  byte offset 3: rune 'é' (233)
+s[3]: 195 (a raw byte, not a rune)
+allocs/op strconv.Itoa: 1  fmt.Sprint: 1
+ParseInt base16: 42 <nil>
+Quote: "line\tbreak\n"
+TrimPrefix: aardvark
+TrimLeft cutset trap: dvark
+EqualFold: true
+Fields: [many spaces here]
+%08b: 00000101
+%6.2f: [  3.14]
+%x: ff
+Builder: hello Cap: true
+copy panic recovered: strings: illegal use of non-zero Builder copied by value
+```
+
+loop `range` บน `"café"` เดินผ่าน 4 rune ที่ byte offset 0, 1, 2, 3 — `é` ที่กว้าง 4 byte ครอบครอง offset 3 กับ 4 นี่คือเหตุผลที่ `len(s)` เป็น 5 ในขณะที่ `utf8.RuneCountInString(s)` เป็น 4 และ `s[3]` ได้ continuation byte เดี่ยวๆ (195) ไม่ใช่ `'é'`
+
+## เส้นทาง dispatch ของ %v
+
+export const fmtDispatchDiagram = `flowchart LR
+  Value["value passed to %v"] --> Check{"implements Stringer or error?"}
+  Check -- "yes" --> Call["call String() / Error()"]
+  Check -- "no" --> Reflect["reflect: walk struct fields"]
+  Call -- "calls %v on itself" --> Loop["infinite recursion — go vet catches this"]`;
+
+<Mermaid code={fmtDispatchDiagram} title="%v เช็ก Stringer/error ก่อน — String() ที่ format ตัวเองด้วย %v จะ recurse" />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
-| fmt.Sprintf | flexible string formatting | allocate string ใหม่ทุกครั้ง |
-| fmt.Fprintf(w, ...) | write to any io.Writer | ต้องระวัง error return |
-| strings.Builder | efficient string concatenation | ต้อง Reset() ถ้า reuse |
-| %v / %+v / %#v | inspect any value | reflect-based — ช้ากว่า explicit conversion |
+| fmt.Sprintf | format string ได้ยืดหยุ่น | allocate string ใหม่ทุกครั้งที่เรียก |
+| fmt.Fprintf(w, ...) | เขียนไปยัง io.Writer ใดก็ได้ | ต้องเช็ก error ที่คืนมา |
+| strings.Builder | ต่อ string อย่างมีประสิทธิภาพ | ต้องเรียก Reset() ก่อนใช้ซ้ำ |
+| %v / %+v / %#v | ตรวจสอบค่าใดก็ได้ | reflect-based — ช้ากว่าการแปลงตรงๆ |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **fmt.Println เหมาะสำหรับ production logging** — ใช้ structured logger (log/slog, zap) แทนใน production — fmt ไม่รองรับ log level, structured fields, หรือ JSON output
-- **string concatenation ด้วย + เร็วกว่า fmt.Sprintf** — ขึ้นกับจำนวน concatenation — strings.Builder เร็วที่สุดสำหรับหลาย pieces ใน loop
-- **%d กับ %v ต่างกันมาก** — %d explicit สำหรับ integer, %v generic แต่ผลลัพธ์เหมือนกันสำหรับ int; ต่างกันสำหรับ struct
-- **rune กับ byte เหมือนกัน** — byte คือ uint8 (1 byte), rune คือ int32 (1-4 bytes สำหรับ Unicode codepoint)
+- **fmt.Println ใช้ทำ production logging ได้สบายๆ** — ใช้ structured logger (`log/slog`, zap) ใน production แทน; `fmt` ไม่มี log level, structured field หรือ JSON output
+- **การต่อ string ด้วย + เร็วกว่า fmt.Sprintf** — ขึ้นกับจำนวนครั้งที่ต่อ; `strings.Builder` เร็วที่สุดเมื่อต่อหลายชิ้นใน loop
+- **%d กับ %v ต่างกันมาก** — `%d` ระบุชัดเจนสำหรับจำนวนเต็ม `%v` เป็น generic แต่ให้ output เดียวกันสำหรับ int; ต่างกันตอนเป็น struct
+- **rune กับ byte คือสิ่งเดียวกัน** — `byte` คือ `uint8` (1 byte); `rune` คือ `int32` (1-4 byte สำหรับ Unicode code point)
+- **TrimLeft(s, "prefix") ลบ prefix "prefix"** — มันลบ byte ที่นำหน้าที่พบใน cutset ไม่ใช่ prefix string; ใช้ `TrimPrefix` สำหรับสิ่งนั้น
+- **%w ใช้แทน %v สำหรับ error ได้ทุกที่** — `%w` มีความหมายเฉพาะใน `fmt.Errorf` เท่านั้น; function อื่นของ `fmt` ทุกตัวถูก `go vet` ปฏิเสธ
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Kubernetes**: kubectl output ใช้ fmt.Fprintf + tabwriter สำหรับ table formatting ที่ align column อัตโนมัติ
+> **kubectl** format table output ด้วย `fmt.Fprintf` และ `text/tabwriter` ซึ่งจัด column ให้ตรงกันอัตโนมัติ
 >
-> **Go HTTP server**: error response ใช้ fmt.Sprintf สร้าง message แล้วส่งผ่าน http.Error() ซึ่งรับ string
+> **Go HTTP server** สร้าง error message ด้วย `fmt.Sprintf` แล้วส่งให้ `http.Error` ซึ่งรับ plain string
 
-<Callout title="%+v และ %#v คือเพื่อนที่ดีในการ debug">
-เมื่อไม่แน่ใจว่ามีอะไรอยู่ใน struct ให้ใช้ `%+v` ก่อน — เพราะพิมพ์ชื่อ field พร้อมค่าเพื่อให้เห็นทันทีว่า field ไหนเก็บข้อมูลอะไร ใช้ `%#v` เมื่อต้องการ Go literal ที่ copy-paste ได้ (มีประโยชน์สำหรับเขียน test fixture) สำหรับ production logs ควรใช้ structured logging เช่น `log/slog` แทน `fmt.Printf` แต่ในการพัฒนาและทดสอบ `%+v` ช่วยประหยัดเวลาได้มาก
+<Callout title="%+v และ %#v คือเพื่อนคู่ใจตอน debug">
+เมื่อไม่แน่ใจว่าข้างใน struct มีอะไร ให้ใช้ `%+v` ก่อน — มันพิมพ์ชื่อ field คู่กับค่าให้เห็นทันทีว่า field ไหนเก็บข้อมูลอะไร ใช้ `%#v` เมื่อต้องการ Go literal ที่ copy-paste ได้เลย (มีประโยชน์เวลาเขียน test fixture) สำหรับ production log ให้ใช้ structured logging (`log/slog`) แทน `fmt.Printf` แต่ตอน development และ test `%+v` ช่วยประหยัดเวลาได้มาก
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด `fmt`/`strings`/`strconv` compile ผ่านแทบทุกกรณีไม่ว่าจะถูกหรือผิด ทำให้พลาด bug เล็กๆ ได้ง่าย เช็กสิ่งเหล่านี้:
+
+- method `String()` format receiver ด้วย `%v` (หรือ `%s`, หรือ `fmt.Sprint`) แทนที่จะ format field แต่ละตัวหรือไม่ — เป็น recursion ที่ `go vet` จับได้แต่พลาดตอน review ได้ง่าย?
+- `%w` โผล่ใน `fmt` call อื่นที่ไม่ใช่ `Errorf` หรือไม่? มันเป็น error เงียบๆ ที่ `go vet` จับได้เช่นกัน แต่เฉพาะเมื่อรัน?
+- โค้ดเรียก `strings.TrimLeft`/`TrimRight` โดยคาดหวังการลบแบบ prefix/suffix-string หรือไม่? function พวกนี้รับ cutset ของ byte ไม่ใช่ substring — `TrimPrefix`/`TrimSuffix` ต่างหากที่แปลว่า "ลบ string นี้เป๊ะๆ"
+- โค้ด index string ด้วย byte offset (`s[i]`, `s[i:j]`) เมื่อ input อาจมีตัวอักษรนอก ASCII หรือไม่? อาจ slice เข้ากลาง rune แบบ multi-byte ได้
+- ข้าม `strconv` ไปใช้ `fmt.Sprintf`/`fmt.Sprint` สำหรับแปลงตัวเลขเป็น string ธรรมดาใน hot path หรือไม่ ทั้งที่ต้องจ่ายค่า reflection โดยไม่ได้อะไรเพิ่ม?
+- `strings.Builder` (หรือ `bytes.Buffer`) ถูก copy โดยค่าหลังจากเขียนลงไปแล้ว แทนที่จะส่งผ่าน pointer หรือไม่?
+
+<SpotTheBug code={`type Point struct{ X, Y int }
+
+func (p Point) String() string {
+	return fmt.Sprintf("%v", p)
+}
+
+func main() {
+	p := Point{1, 2}
+	fmt.Println(p)
+}`}>
+
+`%v` บนค่าที่ implement `fmt.Stringer` จะเรียก `String()` — แต่ `String()` ในที่นี้ format `p` ด้วย `%v` อีกครั้ง เรียกตัวเองไม่รู้จบ `go vet` จับรูปแบบนี้ได้ตอน build ก่อนโปรแกรมจะรันด้วยซ้ำ:
+
+```text
+main.go:8:22: fmt.Sprintf format %v with arg p causes recursive (command-line-arguments.Point).String method call
+```
+
+แก้ได้โดย format field ข้างในแทนที่จะ format receiver เอง:
+
+```go
+func (p Point) String() string {
+    return fmt.Sprintf("(%d, %d)", p.X, p.Y)
+}
+```
+
+</SpotTheBug>
 
 export const quizFmtStrings = [
   {
-    q: "Format verb ใดที่พิมพ์ struct พร้อมชื่อ field?",
+    q: "Format verb ใดพิมพ์ struct พร้อมชื่อ field?",
     options: [
       "%v",
       "%s",
       "%+v",
       "%T"
     ],
-    answer: 2
+    answer: 2,
+    explain: "%v พิมพ์การแสดงผล default โดยไม่มีชื่อ field; %+v เพิ่มชื่อ field เข้าไป %s ต้องการค่าที่เป็น string และ %T พิมพ์แค่ type"
   },
   {
-    q: "strings.ReplaceAll(\"aabbcc\", \"b\", \"x\") คืนค่าอะไร?",
+    q: "\`\`\`go\ntype P struct{ X int }\nfunc (p P) String() string { return fmt.Sprintf(\"%v\", p) }\nfmt.Println(P{1})\n\`\`\`\nเกิดอะไรขึ้นเมื่อรันโค้ดนี้?",
     options: [
-      "\"aaxbcc\"",
-      "\"aaxxcc\"",
-      "\"aabbxx\"",
-      "\"xxbbcc\""
+      "พิมพ์ {1}",
+      "พิมพ์ P{X:1}",
+      "go vet รายงาน recursive String method call และถ้าฝืนรันจะ recurse จน stack overflow",
+      "พิมพ์ string ว่าง"
     ],
-    answer: 1
+    answer: 2,
+    explain: "%v บน Stringer จะเรียก String() และ String() นี้ format receiver ด้วย %v อีกครั้ง — analyzer ของ go vet เองจับรูปแบบนี้ได้ก่อนที่จะรันโปรแกรมด้วยซ้ำ"
   },
   {
-    q: "ทำไม strings.Builder จึงเป็นที่นิยมกว่า += ในการสร้าง string ในลูป?",
+    q: "\`\`\`go\nfmt.Println(strings.TrimLeft(\"aardvark\", \"ar\"))\n\`\`\`\nโค้ดนี้พิมพ์อะไร และทำไม?",
     options: [
-      "Builder เป็นวิธีเดียวในการต่อ string ใน Go",
+      "\"aardvark\" — \"ar\" ไม่ใช่ prefix ในลำดับนั้น",
+      "\"dvark\" — TrimLeft ตัด byte นำหน้าทุกตัวที่เป็น 'a' หรือ 'r'",
+      "\"rdvark\" — มันลบแค่ byte แรกที่ตรงกัน",
+      "panic เพราะ \"ar\" ไม่ใช่ prefix ที่ถูกต้อง"
+    ],
+    answer: 1,
+    explain: "TrimLeft ถือว่า argument ที่สองเป็น cutset ของ byte แต่ละตัว ไม่ใช่ prefix string จึงตัด 'a' หรือ 'r' ที่นำหน้าทุกตัว — ในที่นี้กิน \"aar\" ไปและเหลือ \"dvark\" ส่วน TrimPrefix จะปล่อย string ไว้เหมือนเดิมเพราะมันไม่ได้ขึ้นต้นด้วย string \"ar\" เป๊ะๆ"
+  },
+  {
+    q: "ทำไม strings.Builder ถึงดีกว่า += สำหรับสร้าง string ใน loop?",
+    options: [
+      "Builder เป็นวิธีเดียวที่ต่อ string ใน Go ได้",
       "Builder หลีกเลี่ยงการ allocate string ใหม่ทุกครั้งที่ต่อ",
-      "Builder มี thread safety ในตัวโดยอัตโนมัติ",
-      "+= จะ panic เมื่อ string ยาวกว่า 1024 bytes"
+      "Builder ให้ thread safety โดยอัตโนมัติ",
+      "+= panic เมื่อ string ยาวเกิน 1024 byte"
     ],
-    answer: 1
+    answer: 1,
+    explain: "+= allocate string ใหม่ทุกรอบเพราะ string เป็น immutable; Builder เขียนลง buffer ภายในที่ขยายได้และสร้าง string สุดท้ายแค่ครั้งเดียว"
   },
   {
-    q: "strconv.Atoi(\"42\") คืนค่า type ใด?",
+    q: "strconv.Atoi(\"42\") คืน type อะไร?",
     options: [
       "string, error",
       "float64, error",
       "int, error",
       "int64, error"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Atoi เป็นตัวย่อของ ParseInt(s, 10, 0) ที่แปลงเป็น int; คืน (int, error) เพื่อให้เช็กได้ว่า input เป็นจำนวนเต็มฐาน 10 ที่ถูกต้องหรือไม่"
+  },
+  {
+    q: "\`fmt.Sprintf(\"result: %w\", err)\` ผิดตรงไหน?",
+    options: [
+      "ไม่ผิด — มัน wrap err เหมือน fmt.Errorf",
+      "%w มีความหมายเฉพาะใน fmt.Errorf; Sprintf ไม่รองรับ และ go vet ปฏิเสธการเรียกนี้",
+      "ควรใช้ %v แทน %w สำหรับ error",
+      "Sprintf รับ error เป็น argument ไม่ได้"
+    ],
+    answer: 1,
+    explain: "%w คือ directive ที่ fmt.Errorf ใช้สร้าง wrapped error; function อื่นของ fmt รวมถึง Sprintf ไม่ได้ implement การ wrap และ go vet จะ flag การเรียกนี้ด้วย \"does not support error-wrapping directive %w\""
   }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Why iterators?
 
@@ -56,6 +58,44 @@ for v := range Count(5) {
 
 Because the sequence is produced on demand, `Count(1_000_000_000)` costs nothing until you iterate — and if you stop after three items, only three are ever produced.
 
+## Reusing an iterator after early exit panics
+
+The `yield == false` rule from the previous section is not a suggestion — an iterator that ignores it and keeps calling `yield` after it has already returned `false` once is a runtime error, not just a logic bug:
+
+```go
+func Count(n int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for i := 0; i < n; i++ {
+			yield(i) // BUG: ignores yield's return value and keeps going
+		}
+	}
+}
+```
+
+Verified on 1.26.5, calling this and breaking out of the `range` loop early panics:
+
+```
+panic: runtime error: range function continued iteration after function for loop body returned false
+```
+
+The Go runtime tracks whether the loop body already asked to stop and enforces it — every hand-written iterator must check `yield`'s return value and return immediately when it is `false`, exactly as `Count` does earlier in this lesson.
+
+## defer inside a range-over-func body
+
+A `defer` written inside the body of a `for ... range someIterator` loop does not run at the end of each iteration — it runs when the **enclosing function** returns, because the loop body is compiled into a closure that the iterator calls repeatedly, and every `defer` inside that closure is scoped to the function containing the `for` loop, not to the closure itself:
+
+```go
+func process() {
+	for v := range Count(3) {
+		defer fmt.Println("deferred for", v) // queues up, doesn't run yet
+		fmt.Println("processing", v)
+	}
+	fmt.Println("loop finished")
+}
+```
+
+Verified on 1.26.5, this prints all three `"processing"` lines and `"loop finished"` **before** any `"deferred for"` line — the three deferred calls accumulate across iterations and only run, in LIFO order, when `process` itself returns. Code that expects `defer` inside a range-over-func loop to behave like `defer` at the end of a single iteration (as if it were an ordinary `for` loop body) will be surprised: use an explicit helper function per iteration, or call cleanup directly instead of `defer`, if you need it to happen every time around the loop.
+
 ## Iterators over your own types
 
 The idiomatic shape is a method named `All`, `Keys`, `Values`, or similar that returns an iterator instead of a slice:
@@ -80,6 +120,24 @@ for i, v := range list.All() {
 
 Callers never touch the backing slice, and you are free to change the representation later — a linked list, a database cursor, a paged HTTP API — without changing the loop.
 
+## Single-pass vs re-iterable sequences
+
+Nothing in `iter.Seq`'s type forces a sequence to support being ranged over more than once — that depends entirely on what the closure does. `List.All()` above is re-iterable: every call produces a fresh closure that reads `l.items` from the start. A sequence backed by something that gets consumed as it's read — a channel, a network connection, a bufio scanner — is single-pass: once drained, ranging over the same `iter.Seq` value again yields nothing at all, silently:
+
+```go
+func FromChannel(ch <-chan int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for v := range ch {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+```
+
+Verified on 1.26.5: ranging over the same `seq := FromChannel(ch)` twice prints the channel's values on the first pass and prints nothing on the second — there is no error, no panic, just an empty loop, because the channel has already been drained. When a function returns an `iter.Seq`, nothing in its type tells you whether it's safe to range over twice; check the doc comment or the source, the same way you would for a function returning a `*bufio.Reader`.
+
 ## The standard library speaks iterators
 
 Since Go 1.23 the `slices` and `maps` packages (and `strings`/`bytes` since Go 1.24) both **produce** and **consume** iterators:
@@ -102,6 +160,32 @@ for part := range strings.SplitSeq(csv, ",")   { /* no []string allocated */ }
 ```
 
 `slices.Collect`, `slices.Sorted`, `slices.SortedFunc`, `maps.Collect`, and `maps.Insert` are the bridges back to concrete data. `strings.SplitSeq` and `strings.FieldsSeq` are the lazy twins of `Split` and `Fields`.
+
+A few more helpers worth knowing by name:
+
+| Function | Produces |
+|----------|----------|
+| `slices.Backward(s)` | `iter.Seq2[int, E]` — index/value pairs, descending indices |
+| `slices.Chunk(s, n)` | `iter.Seq[Slice]` — consecutive sub-slices of up to `n` elements |
+| `maps.Values(m)` | `iter.Seq[V]` — values only, order unspecified |
+| `maps.Keys(m)` | `iter.Seq[K]` — keys only, order unspecified |
+
+## maps.Keys returns an iter.Seq, not a slice
+
+Before Go 1.23, `maps.Keys` (in `golang.org/x/exp/maps`) returned a `[]K`. The standard library version returns `iter.Seq[K]` instead — a function, not a slice — so code written against the old shape breaks at compile time rather than silently misbehaving:
+
+```go
+m := map[string]int{"z": 1, "a": 2}
+sort.Strings(maps.Keys(m)) // BUG: maps.Keys returns iter.Seq[string], not []string
+```
+
+Verified on 1.26.5, this is a compile error:
+
+```
+cannot use maps.Keys(m) (value of func type iter.Seq[string]) as []string value in argument to sort.Strings
+```
+
+The fix already appears earlier in this lesson: `slices.Sorted(maps.Keys(m))` collects the iterator into a sorted `[]string` in one call, replacing the old two-step "collect into a slice, then `sort.Strings`" pattern entirely.
 
 A tiny `filter` for reference — combinators like this compose naturally:
 
@@ -128,6 +212,23 @@ v, ok := next() // 0, true
 ```
 
 `iter.Pull` uses a coroutine under the hood, so it is slower than a plain `range`; reach for it only when the pull shape is genuinely required.
+
+export const pullFlowDiagram = `flowchart LR
+  subgraph Push["push (for ... range seq)"]
+    Producer["iterator drives"] --> Body["loop body runs as yield callback"]
+  end
+  subgraph Pull["pull (iter.Pull)"]
+    Caller["caller drives"] -->|"next()"| Coroutine["iterator's coroutine resumes to the next yield"]
+    Coroutine -->|"value, true"| Caller
+    Caller -->|"stop()"| Coroutine
+    Coroutine -->|"releases resources"| Done["coroutine exits"]
+  end`;
+
+<Mermaid code={pullFlowDiagram} title="Push: the iterator calls you. Pull: you call the iterator, and must call stop() when done" />
+
+## iter.Pull needs stop()
+
+The official contract, from the `iter` package doc: `stop` "must be called when the caller is no longer interested in next values and next has not yet signaled that the sequence is over." In practice, `iter.Pull` runs the original push iterator on a coroutine that suspends itself between values; `stop()` is what tells that coroutine to unwind and release whatever it holds — without it, a `next()` sequence you abandon partway through leaves the coroutine parked indefinitely. It is always valid to call `stop` more than once, and valid to call `next` after `stop` (it keeps returning the zero value and `false`) — which is exactly why `defer stop()` immediately after `iter.Pull` is the idiomatic pattern, the same reflex as `defer resp.Body.Close()` or `defer f.Close()`.
 
 ## Design guidance
 
@@ -205,6 +306,109 @@ func main() {
 \tfmt.Println(slices.Sorted(maps.Keys(m)))
 }`;
 
+## Reading AI-generated code
+
+When a generated snippet writes or consumes an iterator, check for these before trusting it:
+
+- Does a hand-written iterator ignore `yield`'s return value and keep looping after it returns `false`? That's a runtime panic, not a silent bug.
+- Is `sort.Strings`, `sort.Ints`, or similar called directly on the result of `maps.Keys`/`maps.Values`/`slices.Values`? Those return an `iter.Seq`, not a slice — it won't compile.
+- Is `defer` inside a range-over-func loop body assumed to run once per iteration, for cleanup that must happen every time around the loop?
+- Does code range over the same `iter.Seq` value a second time, expecting the same results, when the underlying source (a channel, a scanner, a network read) can only be drained once?
+- Is `iter.Pull` used without `defer stop()` on every return path, including early returns and errors?
+
+<SpotTheBug code={`func Count(n int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for i := 0; i < n; i++ {
+			yield(i)
+		}
+	}
+}
+
+func main() {
+	for v := range Count(5) {
+		if v == 2 {
+			break
+		}
+		fmt.Println(v)
+	}
+}`}>
+`Count`'s iterator calls `yield(i)` but never checks the return value, so it keeps calling `yield` on every remaining `i` even after the loop already broke out. Verified on 1.26.5, this panics: `panic: runtime error: range function continued iteration after function for loop body returned false`. The fix is `if !yield(i) { return }`, exactly as the correct `Count` earlier in this lesson does.
+</SpotTheBug>
+
+export const iteratorsDepthCode = `package main
+
+import (
+\t"fmt"
+\t"iter"
+)
+
+func Count(n int) iter.Seq[int] {
+\treturn func(yield func(int) bool) {
+\t\tfor i := 0; i < n; i++ {
+\t\t\tif !yield(i) {
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}
+}
+
+// process shows that defer inside a range-over-func body queues up for the
+// whole enclosing function, not per iteration -- it runs LIFO when process
+// itself returns.
+func process() {
+\tfor v := range Count(3) {
+\t\tdefer fmt.Println("deferred for", v)
+\t\tfmt.Println("processing", v)
+\t}
+\tfmt.Println("loop finished")
+}
+
+// FromChannel is single-pass: once the channel is drained, ranging over the
+// same Seq again yields nothing.
+func FromChannel(ch <-chan int) iter.Seq[int] {
+\treturn func(yield func(int) bool) {
+\t\tfor v := range ch {
+\t\t\tif !yield(v) {
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}
+}
+
+func main() {
+\tprocess()
+
+\tch := make(chan int, 3)
+\tch <- 1
+\tch <- 2
+\tch <- 3
+\tclose(ch)
+\tseq := FromChannel(ch)
+
+\tfmt.Println("first pass:")
+\tfor v := range seq {
+\t\tfmt.Println(v)
+\t}
+\tfmt.Println("second pass on the same (now-drained) sequence:")
+\tfor v := range seq {
+\t\tfmt.Println(v)
+\t}
+\tfmt.Println("second pass produced nothing -- the channel has no more values")
+
+\t// iter.Pull for manual, one-at-a-time control.
+\tnext, stop := iter.Pull(Count(3))
+\tdefer stop() // required: releases the iterator's underlying coroutine
+\tfor {
+\t\tv, ok := next()
+\t\tif !ok {
+\t\t\tbreak
+\t\t}
+\t\tfmt.Println("pulled", v)
+\t}
+}`;
+
+<Playground code={iteratorsDepthCode} />
+
 <Callout title="Iterators are functions that call yield">
 `iter.Seq[V]` is `func(yield func(V) bool)`. A `for v := range seq` loop becomes the `yield` callback; `break` makes `yield` return `false`, and the iterator must return then. `slices.Collect`, `slices.Sorted`, `maps.Keys`, `strings.Lines`, and `strings.SplitSeq` let you mix lazy sequences with ordinary slices and maps without allocating what you do not use.
 </Callout>
@@ -218,27 +422,52 @@ export const quizIterators = [
       "type Seq[V any] interface{ Next() (V, bool) }",
       "type Seq[V any] []V"
     ],
-    answer: 1
+    answer: 1,
+    explain: "iter.Seq[V] is a function type that takes a yield callback. range-over-func calls that function, and the loop body becomes the yield callback."
   },
   {
-    q: "Inside an iterator, yield returns false. What must the iterator do?",
+    q: "```go\nsort.Strings(maps.Keys(m))\n```\nDoes this compile?",
     options: [
-      "Call yield again with the next element",
-      "Panic",
-      "Return immediately and stop producing",
-      "Close the channel"
+      "Yes, it sorts the map's keys in place",
+      "No — maps.Keys returns iter.Seq[string], not []string",
+      "Yes, but only if m has string values",
+      "No — maps.Keys does not exist"
     ],
-    answer: 2
+    answer: 1,
+    explain: "Since Go 1.23, maps.Keys returns an iter.Seq[K], not a slice. Verified on 1.26.5, this is a compile error: cannot use maps.Keys(m) (value of func type iter.Seq[string]) as []string value in argument to sort.Strings. Use slices.Sorted(maps.Keys(m)) instead."
   },
   {
-    q: "Which call turns an iterator into a sorted slice in one line?",
+    q: "```go\nfunc Count(n int) iter.Seq[int] {\n    return func(yield func(int) bool) {\n        for i := 0; i < n; i++ {\n            yield(i)\n        }\n    }\n}\n\nfor v := range Count(5) {\n    if v == 2 {\n        break\n    }\n}\n```\nWhat happens when this runs?",
     options: [
-      "sort.Slice(seq)",
-      "slices.Sorted(seq)",
-      "slices.Sort(seq)",
-      "maps.Collect(seq)"
+      "It prints 0, 1, 2 and stops cleanly",
+      "It panics: range function continued iteration after function for loop body returned false",
+      "It loops forever",
+      "It compiles but silently does nothing after v == 2"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Count ignores yield's return value, so after the loop breaks (yield returns false), Count keeps calling yield anyway. The Go runtime detects this and panics — verified on 1.26.5. The fix is if !yield(i) { return }."
+  },
+  {
+    q: "```go\nseq := FromChannel(ch) // reads from a channel until it's closed\nfor v := range seq { /* ... */ }\nfor v := range seq { /* ... */ } // ranging again\n```\nWhat happens on the second range?",
+    options: [
+      "It panics: sequence already consumed",
+      "It produces the same values again",
+      "It produces nothing — the channel has already been drained",
+      "It blocks forever"
+    ],
+    answer: 2,
+    explain: "A channel-backed iterator is single-pass: once the channel is drained, the same iter.Seq value yields nothing on a second range — silently, with no error or panic. Verified on 1.26.5. Contrast with a slice-backed iterator like List.All(), which is safely re-iterable."
+  },
+  {
+    q: "Why should defer stop() follow every call to iter.Pull?",
+    options: [
+      "stop() is only cosmetic; next() alone is always safe to leave running",
+      "Without stop(), the iterator's underlying coroutine can be left parked indefinitely if the caller stops calling next() early",
+      "stop() is required only if next() ever returns false",
+      "stop() closes the original iter.Seq so it can be reused"
+    ],
+    answer: 1,
+    explain: "The iter package's own doc says stop \"must be called when the caller is no longer interested in next values\" before the sequence signals it's done. defer stop() guarantees this on every return path, the same reflex as defer f.Close()."
   },
   {
     q: "When is returning a plain slice the better design?",
@@ -248,7 +477,8 @@ export const quizIterators = [
       "When the data comes from a network stream",
       "When the representation must stay hidden"
     ],
-    answer: 1
+    answer: 1,
+    explain: "An iterator adds indirection with no benefit when the data already exists as a small, in-memory slice — just return the slice. Iterators earn their keep for large, unbounded, I/O-backed, or representation-hiding cases."
   }
 ];
 

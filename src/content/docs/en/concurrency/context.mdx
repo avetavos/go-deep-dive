@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## What is context.Context?
 
@@ -35,6 +37,16 @@ ctx2       := context.WithValue(parent, key, value)
 ```
 
 Derived contexts form a tree. Cancelling a parent automatically cancels all its children.
+
+export const contextTreeDiagram = `flowchart TD
+  BG["context.Background()"] --> Req["WithCancel (request ctx)"]
+  Req --> DB["WithTimeout (db call)"]
+  Req --> Val["WithValue (adds reqID)"]
+  Req -.cancel called.-> Cancelled["Req, DB, and Val all cancelled together"]
+  Req --> WOC["WithoutCancel (background audit)"]
+  WOC -.immune to Req's cancel, keeps its values.-> Survives["outlives the request"]`;
+
+<Mermaid code={contextTreeDiagram} title="Cancelling a context cancels every context derived from it, except one created with WithoutCancel" />
 
 ## The cancellation contract
 
@@ -68,6 +80,76 @@ To avoid key collisions with other packages, always use a package-private, unexp
 type contextKey string
 const requestIDKey contextKey = "requestID"
 ```
+
+Prefer a typed getter function over a bare type assertion at every call site — `func requestID(ctx context.Context) (string, bool) { v, ok := ctx.Value(requestIDKey).(string); return v, ok }` — so a missing value is a checked `false` instead of a panic. The comma-ok form matters here for exactly the reason covered in the Reading AI-generated code section below.
+
+## Cause: why was this context cancelled?
+
+`ctx.Err()` only ever returns one of two sentinel values — `context.Canceled` or `context.DeadlineExceeded` — which tells you *that* something happened but never *why*. `context.WithCancelCause` (and `context.WithTimeoutCause` for the deadline case) let you attach a real reason, retrieved later with `context.Cause`:
+
+```go
+ctx, cancel := context.WithCancelCause(parent)
+cancel(errQuotaExceeded) // the "cause"
+
+ctx.Err()           // context.Canceled -- always the generic sentinel
+context.Cause(ctx)  // errQuotaExceeded -- the specific reason
+```
+
+`ctx.Err()` stays a stable sentinel that every caller can compare against; `context.Cause(ctx)` is the richer error for logging or a client response. If `cancel` is called with `nil`, the cause is `context.Canceled` — same as plain `WithCancel`.
+
+## WithoutCancel: detaching from a parent's cancellation
+
+Background work that must outlive the request that started it — a cache refresh, an audit log write — should not inherit the parent's cancellation, but usually should still carry its request-scoped values (a trace ID, for logging). `context.WithoutCancel` (Go 1.21) does exactly that: the returned context never reports `Done`, `Err`, or `Cause` from the parent's cancellation, while `Value` lookups still walk up to the parent normally.
+
+```go
+func handleRequest(ctx context.Context) {
+	go auditLog(context.WithoutCancel(ctx), "request handled")
+	// ...respond to the request; ctx may be cancelled the instant this returns
+}
+```
+
+Reaching for `context.Background()` instead is the common AI-generated mistake here — it detaches from cancellation too, but it also throws away every value the original context carried, including anything a logging or tracing middleware attached upstream.
+
+## AfterFunc: reacting to cancellation without a select
+
+`context.AfterFunc(ctx, f)` (Go 1.21) runs `f` in its own goroutine the moment `ctx` is done — including immediately, in its own goroutine, if `ctx` is already done when you call it. It returns a `stop` function that cancels the association; `stop()` returns `true` only if it prevented `f` from running (if `f` has already started, `stop` returns `false` and does not wait for `f` to finish). This is a lighter-weight alternative to spinning up a small goroutine with a `select` on `ctx.Done()` purely to run a cleanup callback.
+
+## The rules of the road
+
+A short checklist that covers nearly every idiomatic-context violation in generated code:
+
+- `ctx` is always the first parameter, named `ctx`, never bundled into a struct field.
+- Never pass a `nil` context — use `context.TODO()` when it is genuinely unclear which context belongs, and replace it once the real one is threaded through.
+- An HTTP handler gets its context from the request: `r.Context()`, never a fresh `context.Background()`.
+- A `main` that needs to shut down on `SIGINT`/`SIGTERM` uses `signal.NotifyContext(context.Background(), os.Interrupt)` rather than hand-rolling a signal channel.
+- Every `WithCancel`/`WithTimeout`/`WithDeadline` gets a `defer cancel()` right next to its creation, covered already in this lesson's callout.
+
+## errors.Is for context errors
+
+`ctx.Err()` returns the exact sentinel values `context.Canceled` and `context.DeadlineExceeded`, so a plain `==` comparison against them works today. Prefer `errors.Is(err, context.Canceled)` anyway once the error has passed through anything that might wrap it — `fmt.Errorf("fetch: %w", ctx.Err())` — because `==` stops working the moment the sentinel is wrapped, while `errors.Is` unwraps the chain to find it:
+
+```go
+if errors.Is(err, context.Canceled) {
+	// the caller gave up; not worth logging as a failure
+} else if errors.Is(err, context.DeadlineExceeded) {
+	// ran out of time; may be worth retrying with a longer budget
+}
+```
+
+## Checking ctx.Err() in a CPU-bound loop
+
+A `select` on `ctx.Done()` only helps when the loop body actually performs a channel operation. A tight, CPU-bound loop with no channel ops anywhere in it — computing over a large slice, say — never reaches a `select` at all, so it will run to completion even after the caller has cancelled it:
+
+```go
+for i, item := range hugeSlice {
+	if i%1024 == 0 && ctx.Err() != nil { // poll periodically, not every iteration
+		return ctx.Err()
+	}
+	process(item)
+}
+```
+
+Checking every single iteration is usually wasted overhead for a cheap per-item operation; checking on a stride (every 1024th item, or every N milliseconds via `time.Since`) keeps the overhead negligible while still responding to cancellation promptly.
 
 export const contextCode = `package main
 
@@ -116,6 +198,51 @@ func main() {
 
 <Playground code={contextCode} />
 
+The second runnable snippet below covers `WithCancelCause`/`Cause`, `WithoutCancel`, and `AfterFunc` together.
+
+export const contextCauseCode = `package main
+
+import (
+\t"context"
+\t"errors"
+\t"fmt"
+)
+
+var errQuotaExceeded = errors.New("quota exceeded")
+
+type ctxKey string
+
+func main() {
+\t// WithCancelCause / Cause: record *why* a context was cancelled, not just that it was.
+\tctx, cancel := context.WithCancelCause(context.Background())
+\tcancel(errQuotaExceeded)
+\tfmt.Println("Err():", ctx.Err())             // the generic sentinel
+\tfmt.Println("Cause():", context.Cause(ctx))  // the specific reason
+\tfmt.Println("errors.Is Canceled:", errors.Is(ctx.Err(), context.Canceled))
+\tfmt.Println("errors.Is quota:", errors.Is(context.Cause(ctx), errQuotaExceeded))
+
+\t// WithoutCancel: detach from the parent's cancellation but keep its values.
+\tparent := context.WithValue(context.Background(), ctxKey("reqID"), "abc-123")
+\tparentCtx, parentCancel := context.WithCancel(parent)
+\tparentCancel() // parent is already cancelled
+\tbg := context.WithoutCancel(parentCtx)
+\tfmt.Println("parent ctx.Err():", parentCtx.Err()) // context.Canceled
+\tfmt.Println("detached ctx.Err():", bg.Err())       // nil -- immune to the parent's cancellation
+\tfmt.Println("detached still has value:", bg.Value(ctxKey("reqID")))
+
+\t// AfterFunc: run a callback when a context is done, without a manual select.
+\tdone := make(chan struct{})
+\tafterCtx, afterCancel := context.WithCancel(context.Background())
+\tcontext.AfterFunc(afterCtx, func() {
+\t\tfmt.Println("AfterFunc ran because ctx was cancelled")
+\t\tclose(done)
+\t})
+\tafterCancel()
+\t<-done
+}`;
+
+<Playground code={contextCauseCode} />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -131,6 +258,41 @@ func main() {
 - **`cancel()` stops the goroutine immediately** — `cancel()` only sends a signal through a channel; the goroutine must check `ctx.Done()` itself
 - **A context can carry a value of any type safely** — `context.Value()` returns `any`; you need a type assertion, and the result can be nil
 
+## Reading AI-generated code
+
+When a generated snippet uses `context.Context`, check for these before trusting it:
+
+- Does every `ctx.Value(key)` call use a comma-ok type assertion (`v, ok := ctx.Value(key).(T)`) instead of a bare one (`ctx.Value(key).(T)`)? A bare assertion panics the instant the key was never set on that context.
+- Is `ctx` ever stored in a struct field instead of being passed as the first parameter of every function that needs it?
+- Does background work that must survive the request use `context.WithoutCancel(ctx)` — or does it fall back to `context.Background()` and silently lose every value the original context carried?
+- Is there a `case <-ctx.Done()` anywhere a CPU-bound loop with no channel operations is supposed to be cancellable? Without an explicit `ctx.Err()` check inside the loop body, cancellation is invisible to it.
+- Does error handling compare `err == context.Canceled` directly, when the error might have been wrapped with `%w` somewhere upstream? `errors.Is` is required once wrapping is possible.
+
+<SpotTheBug code={`type ctxKey string
+
+func requestID(ctx context.Context) string {
+	return ctx.Value(ctxKey("reqID")).(string) // bare assertion
+}
+
+func main() {
+	ctx := context.Background() // reqID was never attached to this context
+	fmt.Println(requestID(ctx))
+}`}>
+`ctx.Value(ctxKey("reqID"))` returns `nil` (as an `any`) because nothing ever called `context.WithValue` with that key on this context or any of its ancestors. Asserting a `nil` `any` directly to `string` — a concrete, non-interface type — panics rather than returning the zero value:
+
+```text
+panic: interface conversion: interface {} is nil, not string
+
+goroutine 1 [running]:
+main.requestID(...)
+	/tmp/ctxassert/main.go:11
+main.main()
+	/tmp/ctxassert/main.go:16 +0x34
+```
+
+The fix is the comma-ok form: `v, ok := ctx.Value(ctxKey("reqID")).(string); if !ok { return "" }` (or return an error, depending on whether a missing request ID is expected). This is exactly the typed-getter pattern recommended earlier in this lesson's `context.WithValue` section.
+</SpotTheBug>
+
 <Callout title="Always defer cancel() to avoid context leaks">
 Every call to `context.WithCancel`, `context.WithTimeout`, or `context.WithDeadline` must be paired with a call to the returned `cancel` function. Forgetting it keeps the child registered in its parent until the parent itself ends — a memory leak, and `go vet`'s `lostcancel` analyzer flags the most obvious cases at compile time. Call `cancel()` even when the timeout will fire on its own: it releases the underlying timer immediately instead of waiting for it to expire. The idiomatic pattern is always: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`.
 </Callout>
@@ -144,7 +306,8 @@ export const quizContext = [
       "Always defer cancel() immediately after the context is created",
       "Ignore cancel() — the context will be garbage collected automatically"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Deferring cancel() right next to creation guarantees it runs on every exit path, releasing the context's resources (and its timer, for WithTimeout/WithDeadline) as soon as this function is done with it, regardless of how it returns."
   },
   {
     q: "What channel does ctx.Done() return, and when is it closed?",
@@ -154,7 +317,8 @@ export const quizContext = [
       "A chan bool that receives true on timeout and false on cancel",
       "A channel that is closed only when the parent context is cancelled, never on timeout"
     ],
-    answer: 0
+    answer: 0,
+    explain: "Done() is a broadcast signal, not a value carrier -- it is closed (not sent to) exactly once, for any of cancellation, deadline, or timeout, which is why ctx.Err() is the separate call that tells you which one happened."
   },
   {
     q: "What does ctx.Err() return when the context deadline has exceeded?",
@@ -164,7 +328,8 @@ export const quizContext = [
       "context.DeadlineExceeded",
       "io.EOF"
     ],
-    answer: 2
+    answer: 2,
+    explain: "context.Canceled and context.DeadlineExceeded are the only two possible non-nil values from ctx.Err() -- the deadline case gets its own distinct sentinel so callers can tell a timeout apart from an explicit cancel."
   },
   {
     q: "Why should you use an unexported package-private type as a context.WithValue key?",
@@ -174,7 +339,30 @@ export const quizContext = [
       "Because string keys are not allowed by the context package",
       "To satisfy the fmt.Stringer interface requirement"
     ],
-    answer: 1
+    answer: 1,
+    explain: "context.WithValue keys are compared with ==, across the entire value chain shared by every package that touches this context. Two packages both using the plain string \"requestID\" as a key would silently collide; an unexported named type makes that impossible from outside the package."
+  },
+  {
+    q: "```go\nctx, cancel := context.WithCancelCause(context.Background())\ncancel(errQuotaExceeded)\nfmt.Println(ctx.Err())\nfmt.Println(context.Cause(ctx))\n```\nWhat does this print?",
+    options: [
+      "errQuotaExceeded then errQuotaExceeded",
+      "context canceled then errQuotaExceeded",
+      "errQuotaExceeded then context canceled",
+      "nil then errQuotaExceeded"
+    ],
+    answer: 1,
+    explain: "ctx.Err() always returns the generic context.Canceled sentinel regardless of cause. context.Cause(ctx) is the separate call that returns the specific error passed to the CancelCauseFunc -- that split is the whole point of WithCancelCause."
+  },
+  {
+    q: "```go\ntype ctxKey string\n\nfunc requestID(ctx context.Context) string {\n    return ctx.Value(ctxKey(\"reqID\")).(string)\n}\n\nfunc main() {\n    fmt.Println(requestID(context.Background()))\n}\n```\nWhat happens when this runs?",
+    options: [
+      "Prints an empty string",
+      "panic: interface conversion: interface {} is nil, not string",
+      "Compiles but ctx.Value always returns \"\" for an unset key",
+      "Blocks forever waiting for the value to be set"
+    ],
+    answer: 1,
+    explain: "context.Background() never had this key attached, so Value returns a nil any. Asserting a nil any directly to the concrete type string panics instead of yielding \"\" -- the comma-ok form (v, ok := ...) is required to handle a missing key safely."
   }
 ];
 

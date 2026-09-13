@@ -1,14 +1,16 @@
 ---
 title: 'Packages และ Imports'
-description: 'package main, func main, import, identifier ที่ exported vs unexported, และ standard library'
+description: 'package main, func main, ลำดับ initialization, import alias, internal package, และ go.mod'
 sidebar:
-  order: 2
+  order: 5
 ---
 
 import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Package คืออะไร?
 
@@ -75,18 +77,94 @@ Go ควบคุม visibility ด้วยตัวพิมพ์ของ�
 
 กฎนี้ใช้กับ functions, types, variables, constants, และ struct fields ทั้งหมด
 
-## Standard Library
+## ลำดับการ Initialize Program
 
-Go มี standard library ที่ครบครันในตัว package ที่ใช้บ่อย ได้แก่:
+ก่อนที่ `main` จะรัน Go initialize ทั้ง program ตามลำดับที่เข้มงวดและกำหนดไว้ชัดเจน — การเข้าใจลำดับนี้อธิบายได้ว่าทำไม package-level variable ตัวหนึ่งจึงอ้างถึงอีกตัวได้อย่างปลอดภัย และควรวาง setup code ที่ต้องรันก่อนอะไรทั้งหมดไว้ตรงไหน:
 
-- `fmt` — formatted I/O (Println, Printf, Sprintf, Errorf)
-- `strings` — string manipulation (ToUpper, Split, Join, Contains, Replace)
-- `strconv` — แปลงระหว่าง string และ numeric types (Itoa, Atoi, ParseFloat)
-- `errors` — สร้างและ wrap errors
-- `sort` — sort slices และ collections
-- `math` — math functions (Sqrt, Abs, Round)
-- `time` — time และ duration operations
-- `os` — OS interface (file I/O, environment variables)
+1. **Imported package ก่อน** ถ้า package ของคุณ import package อื่น package นั้นจะถูก initialize จนเสร็จสมบูรณ์ — ทั้งตัวแปรและ `init` function ของมันเอง — ก่อนที่ package ของคุณจะเริ่ม initialize เกิดขึ้นแบบ recursive ตาม import graph
+2. **Package-level variable ถัดไป ตามลำดับ dependency** Go หาว่าตัวแปรไหน depend on ตัวแปรไหน (จากการอ่าน initializer expression) แล้ว initialize ให้ทุก dependency พร้อมก่อนตัวแปรที่ต้องใช้มัน — ไม่จำเป็นต้องเป็นลำดับที่เขียนใน file
+3. **`init` function สุดท้าย ตามลำดับที่ปรากฏ** file เดียวประกาศ `func init()` ได้มากกว่าหนึ่งตัว และ package หนึ่งกระจาย `init` function ไปหลาย file ได้ ทุกตัวจะรันตามลำดับที่ compiler เจอ (ลำดับ file แล้วตามด้วยลำดับการประกาศใน file) หลังจาก package-level variable ทุกตัว initialize เสร็จแล้ว
+4. **`main` รันสุดท้ายสุด** และเฉพาะใน `package main` เท่านั้น
+
+<Mermaid code={packagesInitDiagram} title="ลำดับ initialization: imported package ก่อน แล้วตัวแปรของ package นี้ แล้ว init function แล้วค่อยถึง main" />
+
+export const packagesInitDiagram = `flowchart TB
+  subgraph Imported["Each imported package (recursively, dependency order)"]
+    IV["its package-level vars"] --> II["its init() funcs"]
+  end
+  Imported --> V["this package's vars, in dependency order"]
+  V --> I["this package's init() funcs, in file/declaration order"]
+  I --> Main["main()"]`;
+
+```go
+var base = 10
+var derived = base * 2 // base is guaranteed initialized first
+
+func init() {
+    fmt.Println("init #1: derived =", derived)
+}
+
+func init() {
+    fmt.Println("init #2: a file can have more than one init()")
+}
+```
+
+## Import Alias และ Dot Import
+
+Import ตั้งชื่อ local ให้ได้ ซึ่งมีประโยชน์เมื่อ package ที่ import สอง package มีชื่อ default ชนกัน หรือแค่อยากได้ชื่อสั้นลง:
+
+```go
+import (
+    f "fmt"
+)
+
+f.Println("aliased import")
+```
+
+**Dot import** — `import . "strings"` — ดึงทุก exported identifier ของ package นั้นเข้ามาที่ scope ของ file ปัจจุบันตรง ๆ ทำให้เรียก `ToUpper(...)` แทน `strings.ToUpper(...)` ได้ มัน compile และรันได้ปกติ แต่แทบไม่ใช้ใน production code เลย: มันทำให้บอกไม่ได้ว่า identifier มาจาก package ไหนแค่อ่านจากจุดที่เรียกใช้ และเสี่ยงชนกับชื่อที่มีอยู่แล้วใน scope อย่างเงียบ ๆ ที่เดียวที่มันปรากฏใช้จริงคือใน test file บางไฟล์ เพื่อให้ table-driven assertion อ่านคล้ายภาษาอังกฤษปกติมากขึ้น
+
+## `internal/` Package
+
+Package ที่ import path มี directory ชื่อ `internal` อยู่ในนั้นตรง ๆ จะ import ได้เฉพาะจาก code ที่อยู่ใน module ที่ root อยู่ที่ parent ของ directory `internal` นั้นเท่านั้น สิ่งนี้ compiler บังคับใช้จริง ไม่ใช่แค่ convention:
+
+```text
+main.go:5:2: use of internal package internaldemo/internal/secret not allowed
+```
+
+error จริงตัวนี้ปรากฏทันทีที่ code จาก *นอก* module `internaldemo` พยายาม import `internaldemo/internal/secret` — แม้ว่า package นั้นจะเป็น Go package ปกติที่มี exported identifier ทุกอย่างครบก็ตาม code ที่อยู่ใน module tree เดียวกัน import มันได้อย่างอิสระ ผู้เขียน library ใช้ `internal/` เพื่อแชร์ code ระหว่าง package ของตัวเองโดยไม่ให้มันกลายเป็นส่วนหนึ่งของ public API
+
+## Package Name กับ Import Path
+
+ชื่อที่คุณใช้อ้างถึง package ใน code คือ **package name** — identifier หลัง keyword `package` ใน source file ของมัน — ซึ่งไม่ได้ตรงกับ element สุดท้ายของ **import path** เสมอไป `math/rand/v2` คือตัวอย่างที่ชัดที่สุด: import path ของมันลงท้ายด้วย `/v2` (*major version suffix* ส่วนหนึ่งของ convention การ version module ของ Go สำหรับ breaking change) แต่ทุก file ในนั้นยังประกาศ `package rand` ดังนั้นคุณเขียน `rand.IntN(...)` ไม่ใช่ `v2.IntN(...)`:
+
+```go
+import "math/rand/v2"
+
+rand.IntN(100) // the package is called rand, not v2
+```
+
+standard library มีบาง package ที่มี sibling ใหม่กว่าที่ใช้ generics ซึ่งควรรู้ไว้เมื่ออ่าน code ที่มีอายุต่างกัน:
+
+| Package เดิม | ตัวแทนใหม่ | เหตุผล |
+|---|---|---|
+| `math/rand` | `math/rand/v2` | algorithm default ดีกว่า, API สะอาดกว่า (`IntN` แทน `Intn`), ไม่ต้อง seed เพื่อความสุ่มที่ดี |
+| `sort` | `slices` (Go 1.21) | `slices.Sort`, `slices.SortFunc` แบบ generic — ไม่ต้องมี boilerplate ของ `sort.Interface` |
+
+## Circular Import
+
+Import graph ของ Go ต้องไม่มี cycle: ถ้า package `a` import package `b`, package `b` จะ import `a` ไม่ได้ ไม่ว่าตรง ๆ หรือผ่าน chain ของ package อื่น compiler ปฏิเสธทันที:
+
+```text
+package circdemo/a
+        imports circdemo/b from a.go
+        imports circdemo/a from b.go: import cycle not allowed
+```
+
+วิธีแก้มาตรฐานคือแยกส่วนที่ทั้งสอง package ต้องใช้ร่วมกันออกไปเป็น package ระดับล่างตัวที่สาม ที่ทั้งสอง package เดิม import มาใช้ — หรือถ้า dependency มีทิศทางเดียวในเชิง concept ก็ให้ package ระดับสูงกว่านิยาม interface ที่ package ระดับล่างกว่า implement แทน ตัด requirement ที่ package ระดับล่างต้อง import อะไรจาก package ระดับสูงเลย
+
+## `go.mod` ในหนึ่งย่อหน้า
+
+ทุก module มีไฟล์ `go.mod` ที่ root ประกาศ import path ของ module (`module example.com/myapp`), dependency พร้อม version ที่ pin ไว้, และ `go` directive (`go 1.27`) ที่บันทึก version ภาษาต่ำสุดที่ module นั้นต้องการ `go` directive นี้ไม่ใช่แค่ documentation: compiler อ่านมันเพื่อตัดสินใจว่า language semantics แบบไหนจะใช้กับ *code ของ module นั้นเอง* — ที่สำคัญที่สุดคือมันเป็นตัว gate การเปลี่ยน loop-variable แบบต่อรอบของ Go 1.22 ที่พูดถึงในบท Functions ดังนั้น code ใน module ที่ยังประกาศ `go 1.21` จะยังคง behavior แบบ shared-loop-variable ก่อน 1.22 ไว้ แม้จะ build ด้วย Go toolchain ที่ใหม่กว่ามากก็ตาม
 
 export const packagesCode = `package main
 
@@ -124,26 +202,94 @@ func main() {
 
 <Playground code={packagesCode} />
 
+Playground ตัวที่สองสาธิตลำดับ initialization, import alias, dot import, และ package ที่ชื่อไม่ตรงกับ import path ของมัน
+
+export const packagesDepthCode = `package main
+
+import (
+\tf "fmt"
+\t. "strings"
+\t"math/rand/v2"
+)
+
+// Package-level variables initialize first, in dependency order.
+var base = 10
+var derived = base * 2 // depends on base, so base is guaranteed ready first
+
+func init() {
+\tf.Println("init #1: derived =", derived)
+}
+
+func init() {
+\tf.Println("init #2: a file can have more than one init()")
+}
+
+func main() {
+\tf.Println("main: base =", base, "derived =", derived)
+
+\t// f is an import alias for fmt.
+\tf.Println("aliased import works:", ToUpper("dot import too")) // ToUpper comes from the dot-imported strings package
+
+\t// math/rand/v2's import path ends in /v2, but its package name is rand.
+\tf.Println("rand.IntN(1) =", rand.IntN(1))
+}`;
+
+<Playground code={packagesDepthCode} />
+
+## Standard Library
+
+Go มี standard library ที่ครบครันในตัว package ที่ใช้บ่อย ได้แก่:
+
+- `fmt` — formatted I/O (Println, Printf, Sprintf, Errorf)
+- `strings` — string manipulation (ToUpper, Split, Join, Contains, Replace)
+- `strconv` — แปลงระหว่าง string และ numeric types (Itoa, Atoi, ParseFloat)
+- `errors` — สร้างและ wrap errors
+- `sort` — sort slices และ collections
+- `math` — math functions (Sqrt, Abs, Round)
+- `time` — time และ duration operations
+- `os` — OS interface (file I/O, environment variables)
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | uppercase = exported | visibility rule เรียบง่าย ไม่ต้องใช้ keyword `public`/`private` | ต้อง rename identifier ถ้าต้องการเปลี่ยน visibility |
 | unused import = compile error | ไม่มี dead import ใน codebase | ต้องลบ import ที่ไม่ใช้ทุกครั้ง (goimports ช่วยได้) |
-| `init()` function | setup เกิดขึ้นอัตโนมัติ | hidden side effects ยากต่อการ debug และ test |
-| module system (go.mod) | reproducible build, explicit dependency | learning curve สูงกว่า GOPATH เดิม |
+| `init()` function | setup เกิดขึ้นอัตโนมัติ ตามลำดับที่กำหนดไว้ชัดเจน | hidden side effects ยากต่อการ debug และ test |
+| `internal/` package | แชร์ code ระหว่าง package ของตัวเองโดยไม่เปิดเป็น public | ทุกอย่างใต้ `internal/` module อื่น import ไม่ได้ แม้ภายหลังจะอยากให้ import ได้ก็ตาม |
+| module system (go.mod) | reproducible build, explicit dependency, language semantics แยกต่อ module | learning curve สูงกว่า GOPATH เดิม |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
 - **"circular import ใช้ได้ใน test files"** — Go ไม่อนุญาต circular import ไม่ว่าจะเป็น production code หรือ test files
 - **"`import _` ใช้ได้แค่กับ database driver"** — ใช้ได้กับทุก package ที่ต้องการให้ `init()` ทำงาน เช่น register codec, plugin, หรือ HTTP handler
 - **"Go module คือแค่ package manager เหมือน npm"** — Go module จัดการ versioning และ reproducible build ที่ระดับ module ทั้งหมด ไม่ใช่แค่ package เดี่ยว
+- **"ชื่อ package ตรงกับ element สุดท้ายของ import path เสมอ"** — `math/rand/v2` คือ `package rand`; `/v2` คือ version suffix ใน path ไม่ใช่ส่วนหนึ่งของชื่อ
+- **"`internal/` เป็นแค่ naming convention เหมือน underscore นำหน้า"** — compiler บังคับใช้จริง การ import internal package จากนอก module tree เป็น compile error ไม่ใช่แค่ lint warning
 
 > 💡 ตัวอย่างจากของจริง
 >
 > `database/sql` ใช้ blank import ให้ driver เช่น `github.com/lib/pq` register ตัวเองผ่าน `init()` ที่เรียก `sql.Register("postgres", ...)`
 >
 > `net/http/pprof` ก็ใช้กลไกเดียวกัน — `import _ "net/http/pprof"` register handler debug ใต้ `/debug/pprof/` ผ่าน `init()` โดยไม่ต้องเรียกอะไรจาก package นั้นตรง ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+Generated code ที่ประกาศ package, import, หรือ `init` function มักซ่อนปัญหาพวกนี้:
+
+- `init()` function ทำสิ่งที่จะชัดเจน ปลอดภัย หรือ test ง่ายกว่าถ้าเป็น function ธรรมดาที่เรียกจาก `main` แทนหรือเปล่า? ไม่ใช่ `init()` ทุกตัวที่คุ้มค่ากับความ implicit ของมัน
+- initializer ของ package-level variable เรียก function ที่มี side effect (network call, อ่านไฟล์) หรือเปล่า? สิ่งนั้นจะรันก่อน `main` จะเริ่มด้วยซ้ำ โดยไม่มีทางจัดการ error จากมันได้
+- dot import (`import . "pkg"`) ถูกใช้นอก test file หรือเปล่า? มันซ่อนว่า identifier มาจากไหนและเสี่ยงชื่อชนกันแบบเงียบ ๆ
+- import path ที่ลงท้ายด้วย `/v2` (หรือสูงกว่า) ถูกเรียกว่า `v2.Something` ใน code แทนที่จะเป็นชื่อจริงของ package หรือเปล่า?
+- code พยายาม import อะไรที่อยู่ใต้ directory `internal/` จากนอก module นั้นหรือเปล่า? นั่นเป็น compile error ไม่ใช่ runtime surprise — แต่ generated code บางครั้งสมมติว่า internal helper ใช้ซ้ำข้าม project ได้
+
+<SpotTheBug code={`import "math/rand/v2"
+
+func main() {
+	fmt.Println(v2.IntN(100))
+}`}>
+Import path `math/rand/v2` ลงท้ายด้วย `/v2` แต่ชื่อจริงของ package — ที่ประกาศด้วย `package rand` ใน source ของมันเอง — คือ `rand` ไม่ใช่ `v2` compiler error จริงคือ `undefined: v2` วิธีแก้คืออ้างถึงมันด้วยชื่อจริง: `rand.IntN(100)` suffix `/v2` ใน import path เป็น convention การ version module ของ Go สำหรับ breaking change ของ package เชิง logic เดียวกัน มันไม่ใช่ส่วนหนึ่งของ identifier ที่คุณใช้ใน code
+</SpotTheBug>
 
 <Callout title="ตัวพิมพ์ใหญ่ควบคุม Visibility">
 identifier ที่ขึ้นต้นด้วยตัวพิมพ์ใหญ่ (เช่น `fmt.Println`, `strings.ToUpper`) สามารถใช้จาก package อื่นได้ ส่วนที่ขึ้นต้นด้วยตัวพิมพ์เล็กจะเป็น private ภายใน package นั้น compiler จะ enforce กฎนี้ทันที — ไม่ใช่แค่ convention
@@ -158,7 +304,8 @@ export const quizPackages = [
       "package main",
       "package binary"
     ],
-    answer: 2
+    answer: 2,
+    explain: "package main คู่กับ func main() เป็นชุดเดียวที่ Go toolchain จะ build ออกมาเป็น executable แทนที่จะเป็น library"
   },
   {
     q: "identifier ที่ขึ้นต้นด้วยตัวพิมพ์เล็กใน Go หมายความว่าอะไร?",
@@ -168,17 +315,19 @@ export const quizPackages = [
       "เป็น pointer type",
       "เป็น deprecated"
     ],
-    answer: 1
+    answer: 1,
+    explain: "visibility ใน Go ขึ้นกับตัวพิมพ์ของอักษรตัวแรกล้วน ๆ — ตัวพิมพ์เล็กหมายความว่า package อื่นอ้างถึง identifier นั้นไม่ได้เลย"
   },
   {
-    q: "เมื่อไรคุณจะใช้ blank import `import _ \"pkg\"`?",
+    q: "Go initialize program ก่อน main จะรันตามลำดับใด?",
     options: [
-      "เมื่อต้องการ import package แต่ rename เป็นค่าว่าง",
-      "เพื่อปิด linter warning เรื่อง unused package",
-      "เพื่อ import package เพื่อ side effects เท่านั้น เช่น การ register driver",
-      "เพื่อ import ทุก exported identifier เข้า namespace ปัจจุบัน"
+      "main ก่อน แล้วตามด้วย package variable แล้วตามด้วย init function",
+      "init function ก่อน แล้วตามด้วย package variable แล้วตามด้วย imported package",
+      "Imported package initialize จนเสร็จก่อน แล้วตัวแปรของ package นี้ (ตามลำดับ dependency) แล้ว init function ของมัน",
+      "init function ของทุก package รันก่อนหมด แล้วค่อยตามด้วยตัวแปรทุกตัว"
     ],
-    answer: 2
+    answer: 2,
+    explain: "การ initialize เดินตาม import graph จากข้างนอกเข้าข้างใน: imported package ทุกตัวเสร็จก่อน แล้วตัวแปรของ package นี้เองตามลำดับ dependency แล้ว init function ของมัน แล้วค่อยถึง main"
   },
   {
     q: "รูปแบบ idiomatic Go เมื่อ import หลาย package คือรูปแบบใด?",
@@ -188,7 +337,30 @@ export const quizPackages = [
       "รายการคั่นด้วยจุลภาค: import \"fmt\", \"strings\"",
       "ลำดับ import ไม่สำคัญ gofmt จัดการให้"
     ],
-    answer: 1
+    answer: 1,
+    explain: "gofmt เองจะจัดกลุ่มและเรียง import block ที่อยู่ในวงเล็บให้ grouped block เดียวจึงเป็นรูปแบบ idiomatic เมื่อมี import มากกว่าหนึ่งตัว"
+  },
+  {
+    q: "```go\nimport \"math/rand/v2\"\n\nfunc main() {\n    fmt.Println(v2.IntN(100))\n}\n```\nโค้ดนี้ compile ผ่านไหม?",
+    options: [
+      "ผ่าน — v2 คือชื่อ package",
+      "ไม่ผ่าน — undefined: v2",
+      "ผ่าน แต่ panic เสมอตอน runtime",
+      "ไม่ผ่าน — import versioned path ตรง ๆ ไม่ได้"
+    ],
+    answer: 1,
+    explain: "suffix /v2 ใน import path เป็นตัว mark version ไม่ใช่ชื่อ package ตัว package เองประกาศ package rand ดังนั้นเรียกที่ถูกต้องคือ rand.IntN(100)"
+  },
+  {
+    q: "Package นอก module `internaldemo` พยายาม `import \"internaldemo/internal/secret\"` จะเกิดอะไร?",
+    options: [
+      "compile ผ่าน แต่ identifier ข้างในทั้งหมดเป็น unexported",
+      "compile ผ่านถ้า code ที่ import ตั้งค่า GOPRIVATE ด้วย",
+      "compile ไม่ผ่าน: use of internal package ... not allowed",
+      "compile ผ่าน แต่เห็นเฉพาะ function (ไม่เห็นตัวแปร)"
+    ],
+    answer: 2,
+    explain: "visibility ของ internal/ compiler บังคับใช้กับทุก package path ที่มี segment internal อยู่ — code นอก module ที่ root อยู่ที่ parent ของ internal จะ import มันไม่ได้เลย"
   }
 ];
 

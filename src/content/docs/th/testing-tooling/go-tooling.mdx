@@ -1,6 +1,6 @@
 ---
 title: The Go Toolchain
-description: "go run, go build, go fmt, go vet, go fix, go doc — คำสั่งประจำวันที่ทำให้ Go productive, สิ่งที่เปลี่ยนใน Go 1.25–1.27, และปรัชญา no-config ของ gofmt"
+description: "go run, go build, go vet analyzers, staticcheck, golangci-lint v2, govulncheck, build tags, go generate, ldflags, และ cross-compilation"
 sidebar:
   order: 5
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## คำสั่ง go คือมีดพับสวิส
 
@@ -19,8 +21,8 @@ binary `go` รวมทุกเครื่องมือที่นัก�
 
 ```bash
 go run main.go
-go run .                   # รัน package ใน directory ปัจจุบัน
-go run ./cmd/server        # รัน cmd sub-package เฉพาะ
+go run .                   # run the package in the current directory
+go run ./cmd/server        # run a specific cmd sub-package
 ```
 
 ## go build — สร้าง binary
@@ -28,22 +30,17 @@ go run ./cmd/server        # รัน cmd sub-package เฉพาะ
 `go build` compile package และเขียน binary ลง disk โดยไม่มี flag `-o` binary จะตั้งชื่อตาม element สุดท้ายของ package path (`./cmd/server` → `server`); ที่ module root ก็คือ element สุดท้ายของ module (`go build .` ใน `github.com/yourname/myapp` เขียน `myapp`)
 
 ```bash
-go build .                         # build package ปัจจุบัน output: ./myapp
-go build -o bin/server ./cmd/server  # build ไปยัง path เฉพาะ
-
-# Cross-compile สำหรับ Linux/amd64 จาก macOS
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/server ./cmd/server
+go build .                         # build current package, output: ./myapp
+go build -o bin/server ./cmd/server  # build to a specific path
 ```
-
-flag `-ldflags="-s -w"` ลบ symbol table และ DWARF debug info ออก ลดขนาด binary อย่างมีนัยสำคัญ `CGO_ENABLED=0` รับประกัน binary ที่ static อย่างสมบูรณ์ — ไม่มี dynamic libc dependency
 
 ## go fmt — จัดรูปแบบ canonical
 
 `go fmt` รัน `gofmt` กับไฟล์ `.go` ทั้งหมดใน package และเขียนผลลัพธ์กลับลง disk มีวิธีเดียวเท่านั้นในการจัดรูปแบบโค้ด Go
 
 ```bash
-go fmt ./...       # จัดรูปแบบทุก package ใน module
-gofmt -w -l ./     # เทียบเท่า: เขียนการเปลี่ยนแปลง, แสดงไฟล์ที่แก้ไข
+go fmt ./...       # format every package in the module
+gofmt -w -l ./     # equivalent: write changes, list modified files
 ```
 
 ใน CI ตรวจสอบว่าโค้ดถูกจัดรูปแบบแล้ว:
@@ -52,57 +49,277 @@ gofmt -w -l ./     # เทียบเท่า: เขียนการเป
 gofmt -l . | grep -q . && echo "unformatted files found" && exit 1 || echo "all formatted"
 ```
 
-## go vet — static analysis
+## go vet — analyzer ที่จับ bug ที่ AI เขียน
 
-`go vet` รัน static analysers ชุดหนึ่งที่ตรวจจับ bugs ที่ compiler ไม่ตรวจ: format verbs ของ `Printf` ที่ไม่ตรงกัน, unreachable code, การใช้ mutex ที่ผิด และอื่นๆ
+`go vet` ไม่ใช่การตรวจแค่แบบเดียว — มันคือชุด analyzer อิสระหลายตัว แต่ละตัวมีชื่อของตัวเอง ที่คำสั่ง `go` รันรวมกัน `go doc cmd/vet` แสดงรายการทั้งหมด; หกตัวด้านล่างจับ pattern ที่พบบ่อยในโค้ด generated แต่ละตัวยืนยันด้วย bug จริงและข้อความจริงของ go vet:
+
+**`copylocks`** — struct ที่มี `sync.Mutex` (หรือคล้ายกัน) ถูก copy ทำให้สำเนามี lock state เป็นอิสระที่ไม่มีประโยชน์:
+
+```go
+type Safe struct {
+	mu    sync.Mutex
+	count int
+}
+
+s := Safe{}
+s2 := s // copies the mutex
+```
+
+```text
+main.go:12:8: assignment copies lock value to s2: example.com/vetdemo/copylocks.Safe contains sync.Mutex
+```
+
+**`lostcancel`** — cancel function จาก `context.WithCancel` ถูกทิ้งไป ทำให้ context leak จนกว่า parent จะจบ:
+
+```go
+ctx, _ := context.WithCancel(context.Background())
+```
+
+```text
+main.go:6:7: the cancel function returned by context.WithCancel should be called, not discarded, to avoid a context leak
+```
+
+**`unusedresult`** — function ที่ return value สำคัญ (standard library mark ไว้บางตัว เช่น `errors.New` และ `fmt.Errorf`) ถูกเรียกแล้วทิ้งผลลัพธ์:
+
+```go
+errors.New("boom")
+```
+
+```text
+main.go:9:2: result of errors.New call not used
+```
+
+**`httpresponse`** — response จาก `http.Get` ถูกใช้ (ที่นี่คือ `defer resp.Body.Close()`) ก่อนเช็ก error ทำให้ request ที่ fail dereference `*http.Response` ที่เป็น nil:
+
+```go
+resp, err := http.Get("http://example.com")
+defer resp.Body.Close()
+if err != nil {
+	fmt.Println(err)
+	return
+}
+```
+
+```text
+main.go:10:8: using resp before checking for errors
+```
+
+**`waitgroup`** (Go 1.25) — `wg.Add(1)` ถูกเรียกจากข้างใน goroutine ที่มันควรจะ track ซึ่ง race กับ `wg.Wait()` ใน parent — `Add` ต้องเกิดก่อน `go` statement:
+
+```go
+go func() {
+	wg.Add(1)
+	defer wg.Done()
+}()
+wg.Wait()
+```
+
+```text
+main.go:8:9: WaitGroup.Add called from inside new goroutine
+```
+
+**`printf`** — format verb ไม่ตรงกับ type ของ argument:
+
+```go
+fmt.Printf("%d\n", "hello")
+```
+
+```text
+main.go:6:14: fmt.Printf format %d has arg "hello" of wrong type string
+```
 
 ```bash
 go vet ./...
 ```
 
-ตัวอย่าง issues ที่ `go vet` ตรวจพบ:
+`go vet` exit ด้วย non-zero status หากพบปัญหา ทำให้ fail CI pipeline ได้ง่าย มันยังรัน analyzer กลุ่มเล็ก ๆ ที่ตายตัวเหล่านี้อัตโนมัติก่อน `go test` และ `go build` ทุกครั้ง — `hostport` (Go 1.25) แนะนำ `net.JoinHostPort` แทน `fmt.Sprintf("%s:%d", host, port)` ซึ่งพังกับ IPv6 และ `stdversion` (Go 1.27) รายงานการเรียก API ของ standard library ที่ใหม่กว่าบรรทัด `go` ของ module
 
-```go
-fmt.Printf("%d", "hello")   // vet: format %d has arg "hello" of wrong type string
-var mu sync.Mutex
-mu2 := mu                   // vet: assignment copies lock value
+## staticcheck และ golangci-lint v2
+
+`go vet` ระมัดระวังโดยตั้งใจ — มันรายงานเฉพาะปัญหาที่พิสูจน์ได้ว่าน่าจะเป็น bug จริงเกือบแน่นอน `staticcheck` และ `golangci-lint` รัน analyzer มากกว่ามาก รวมถึงหลายตัวที่มีความเสี่ยง false-positive ที่ `go vet` หลีกเลี่ยง
+
+`staticcheck` (`honnef.co/go/tools/cmd/staticcheck`) รันแบบ standalone และรายงานโค้ดของตัวเองที่ขึ้นต้นด้วย `SA` กับ bug `printf` และ `unusedresult` ตัวเดิมด้านบน ยืนยันแล้วจริง (`staticcheck 2026.2.1`):
+
+```text
+main.go:6:13: Printf format %d has arg #1 of wrong type string (SA5009)
+main.go:9:2: New doesn't have side effects and its return value is ignored (SA4017)
 ```
 
-`go vet` exit ด้วย non-zero status หากพบปัญหา ทำให้ fail CI pipeline ได้ง่าย
+`golangci-lint` รวม linter หลายสิบตัว — รวมถึง `go vet` เอง, `staticcheck` และอีกมากมาย — ไว้หลังคำสั่งเดียวและ config file เดียว รูปแบบ config ของ version 2 (ยืนยันแล้วจริงกับ `golangci-lint 2.13.2`) เริ่มจาก:
 
-รุ่นหลัง ๆ เพิ่ม analyzer ที่คุณจะเจอในงานจริง: `waitgroup` (Go 1.25) จับ `wg.Add` ที่วางหลัง `go` statement, `hostport` (Go 1.25) แนะนำ `net.JoinHostPort` แทน `fmt.Sprintf("%s:%d", host, port)` ซึ่งพังกับ IPv6 และ `stdversion` (รันโดย `go test` ตั้งแต่ Go 1.27) รายงานการเรียก API ของ standard library ที่ใหม่กว่าบรรทัด `go` ของ module
+```yaml
+version: "2"
+linters:
+  default: standard
+```
 
+`default: standard` เปิดชุด baseline ที่คัดสรรมาแล้ว (`govet`, `staticcheck`, `unused` และอื่น ๆ) แทนที่จะเปิดทุกตัว — ชุด default ของ golangci-lint v1 หายไปใน v2 และ `default` เป็นตัวเลือกที่ระบุชัดเจนแล้ว การรันกับ bug `copylocks` ด้านบน ยืนยันแล้วจริง ห่อ finding ของ `go vet` ด้วยชื่อ linter ที่รายงานและเพิ่ม issue จริงที่ไม่เกี่ยวข้องในไฟล์เดียวกัน:
+
+```text
+main.go:12:8: copylocks: assignment copies lock value to s2: ...Safe contains sync.Mutex (govet)
+main.go:13:6: copylocks: assignment copies lock value to _: ...Safe contains sync.Mutex (govet)
+main.go:6:2: field mu is unused (unused)
+main.go:7:2: field count is unused (unused)
+```
+
+suffix `(govet)` และ `(unused)` บอกว่า linter ตัวไหนอยู่เบื้องหลังแต่ละบรรทัด มีประโยชน์เมื่อต้องตัดสินใจว่าจะ suppress อะไรและแก้อะไร
+
+## govulncheck
+
+`govulncheck` เทียบ dependency ของคุณ (แม่นยำกว่านั้นคือ function ที่โค้ดคุณเรียกจริง ๆ) กับฐานข้อมูล vulnerability ของ Go
+
+```bash
+govulncheck ./...
+```
+
+ยืนยันแล้วจริงบน module ที่สะอาดไม่มี dependency ภายนอก:
+
+```text
+No vulnerabilities found.
+
+Your code is affected by 0 vulnerabilities.
+This scan also found 0 vulnerabilities in packages you import and 8
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+```
+
+ความแตกต่างในบรรทัดสุดท้ายนั้นคือประเด็นทั้งหมดของเครื่องมือนี้: การมี vulnerable function อยู่ที่ไหนสักแห่งใน dependency tree ไม่เหมือนกับโปรแกรมของคุณเรียกมัน `govulncheck` ทำ call-graph analysis เพื่อแยกสองอย่างนี้ออกจากกัน ซึ่งเป็นเหตุผลที่มันรายงานผลแบบ "ต้องแก้เดี๋ยวนี้" น้อยกว่า tool ที่แค่ "scan `go.sum` เทียบ CVE list" แบบไร้เดียงสามาก
 
 ## go fix — modernizer (Go 1.26+)
 
 `go fix` ถูกสร้างใหม่ใน Go 1.26 บน analysis framework เดียวกับ `go vet` แทน fixer ในอดีตไม่กี่ตัว ตอนนี้มี **modernizer** เป็นสิบ ๆ ตัว: analyzer ที่เขียน idiom แบบเก่าใหม่ให้เป็น standard library ปัจจุบัน
 
 ```bash
-go fix ./...            # apply modernizer ทุกตัวกับ module
-go fix -diff ./...      # ดูตัวอย่างการเขียนใหม่โดยไม่แตะไฟล์
+go fix ./...            # apply every modernizer to the module
+go fix -diff ./...      # preview the rewrite without touching files
 ```
 
 การเขียนใหม่ที่พบบ่อย: `for` loop ที่หาค่าต่ำสุดด้วยมือกลายเป็น `min(...)`; `sort.Slice` กลายเป็น `slices.Sort`; `for i := 0; i < n; i++` กลายเป็น `for i := range n`; สามบรรทัด `wg.Add(1)` / `go` / `defer wg.Done()` กลายเป็น `wg.Go(...)` (`waitgroupgo`); การ copy ตัวแปร loop แบบ `x := x` ถูกลบ Go 1.27 เพิ่ม `atomictypes`, `embedlit`, `slicesbackward` และ `unsafefuncs` ผู้เขียน library ยัง mark wrapper ด้วย `//go:fix inline` ได้ เพื่อให้ `go fix` inline การเรียกในทุกจุดใช้งาน — กลไกเดียวกับที่ standard library ใช้ย้าย caller ออกจาก helper ที่ deprecated
 
-## อะไรอีกที่เปลี่ยนใน toolchain (Go 1.25–1.27)
+## Build tags
 
-- `go mod init` เขียนบรรทัด `go` เป็นเวอร์ชันจริงของ toolchain ที่รันมัน — ไม่ใช่ต่ำกว่าหนึ่ง minor version ยืนยันในเครื่องแล้ว: Go 1.26.5 เขียน `go 1.26.5`; รันด้วย Go 1.27.0 จะเขียน `go 1.27.0` ยกหรือตรึงบรรทัดนี้เองด้วย `go get go@1.27` เมื่อต้องการ floor เฉพาะ
-- `go doc example.com/pkg@v1.2.3` (Go 1.27) แสดง doc ของ module version ที่ระบุ และ `go doc -ex` แสดงรายการ example ที่รันได้
-- `go doc -http` (Go 1.25) เสิร์ฟ documentation ในเบราว์เซอร์ ไม่ต้องใช้ `pkgsite` สำหรับงานในเครื่องอีกแล้ว
-- `go tool pprof -http` (Go 1.26) เปิดมาที่หน้า flame graph; `go tool trace -http=:6060` (Go 1.27) bind เฉพาะ localhost เว้นแต่ระบุ address เต็ม
-- `go version -m -json` (Go 1.24) พิมพ์ build info เป็น JSON; `go build -asan` (Go 1.25) รายงาน memory leak ตอนจบโปรแกรม
+บรรทัด `//go:build` ที่ด้านบนของไฟล์ (ก่อน clause `package` ตามด้วยบรรทัดว่าง) บอก toolchain ให้รวมหรือตัดไฟล์นั้นตาม boolean expression ของ tags ยืนยันแล้วจริงกับสองไฟล์ที่ต่างกันแค่ build tag:
+
+```go
+//go:build dev
+
+package main
+
+func banner() string { return "DEV BUILD" }
+```
+
+```go
+//go:build !dev
+
+package main
+
+func banner() string { return "production" }
+```
+
+```bash
+go run .           # production
+go run -tags dev . # DEV BUILD
+```
+
+การใช้งานที่พบบ่อย: สลับ implementation จริงเป็น fake ตอน test, ตัดไฟล์เฉพาะ platform ออก (Go เอา tag จาก suffix ชื่อไฟล์แบบ `_linux.go` / `_windows.go` ให้อัตโนมัติด้วย) หรือ gate โค้ดที่ต้องการ Go version ใหม่กว่า floor ของ module
+
+## go generate
+
+comment `//go:generate` mark คำสั่งให้รันเมื่อสั่ง — ไม่รันอัตโนมัติเด็ดขาด ยืนยันแล้วจริง:
+
+```go
+//go:generate echo "generation would run here"
+```
+
+```bash
+go generate ./...
+# generation would run here
+```
+
+`go build` และ `go test` ไม่เรียก `go generate` ให้คุณเลย มันต้องเป็นขั้นตอนที่ตั้งใจใน workflow หรือ CI ของคุณ ปกติใช้กับ `String()` method ที่ generate โดย `stringer`, โค้ด protobuf, หรือการ generate mock
+
+## -ldflags -X และ -trimpath
+
+`-ldflags "-X pkg.var=value"` ตั้งค่าตัวแปร `string` ระดับ package ตอน link time — วิธีมาตรฐานในการฝัง version string หรือ commit hash ลง binary โดยไม่ต้อง compile source ใหม่:
+
+```go
+var version = "dev"
+
+func main() { fmt.Println("version:", version) }
+```
+
+ยืนยันแล้วจริง:
+
+```bash
+go build -o app .                                    # version: dev
+go build -ldflags "-X main.version=1.2.3" -o app .    # version: 1.2.3
+```
+
+ตัวแปรต้องเป็น `string` ที่ไม่ initialize ตอน runtime (ไม่ใช่ `const`, ไม่ใช่ค่า default ที่คำนวณ) และ flag ต้องการ path เต็ม (`main.version` หรือ `example.com/mod/pkg.Var` สำหรับ package ที่ไม่ใช่ main)
+
+`-trimpath` ลบ filesystem path ของเครื่อง local ออกจาก binary ที่ compile แล้ว (ไม่งั้นมันจะรั่วเข้าไปใน panic stack trace และ debug info) — ยืนยันแล้วจริงว่า build ผ่านโดยไม่มี error และเป็น practice มาตรฐานสำหรับ binary ที่คุณแจกจ่าย:
+
+```bash
+go build -trimpath -o app .
+```
+
+## Cross-compilation
+
+การตั้ง `GOOS` และ `GOARCH` cross-compile สำหรับ platform อื่นได้เลย — ไม่ต้อง download toolchain แยก เพราะ Go compiler เป็น cross-compiler ตัวเดียวสำหรับทุก target ที่รองรับ ยืนยันแล้วจริง สร้าง binary Linux/arm64 จาก macOS/arm64:
+
+```bash
+GOOS=linux GOARCH=arm64 go build -o app-linux-arm64 .
+file app-linux-arm64
+# app-linux-arm64: ELF 64-bit LSB executable, ARM aarch64 ..., statically linked
+```
+
+```bash
+# Cross-compile a stripped, static Linux/amd64 binary
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/server ./cmd/server
+```
+
+`-ldflags="-s -w"` ลบ symbol table และ DWARF debug info ออก ลดขนาด binary `CGO_ENABLED=0` รับประกัน binary ที่ static อย่างสมบูรณ์ — ไม่มี dynamic libc dependency และจำเป็นสำหรับ cross-compilation target ส่วนใหญ่ เพราะ cgo ต้องการ C cross-toolchain ที่ `go build` เฉย ๆ ไม่มี
+
+## go env
+
+`go env` อ่านและเขียน configuration ถาวรของ toolchain (เก็บนอก module ของคุณ ใน config file ต่อผู้ใช้) ตัวแปรที่สำคัญที่สุดในชีวิตประจำวัน:
+
+| ตัวแปร | หน้าที่ |
+|---|---|
+| `GOPROXY` | `go get`/`go mod download` ดึง module จากไหน (default `https://proxy.golang.org,direct`) |
+| `GOPRIVATE` | glob pattern ของ module path ที่จะดึงตรง ข้าม proxy และ checksum database — สำหรับ repository ภายใน/private |
+| `GOSUMDB` | checksum database ที่ใช้ verify การ download (default `sum.golang.org`); ตั้งเป็น `off` เฉพาะเมื่อคุณเชื่อ `GOPROXY` เต็มที่ |
+| `GOFLAGS` | flag ที่ต่อเข้ากับทุกคำสั่ง `go` โดยปริยาย เช่น `GOFLAGS=-mod=mod` |
+| `GOTOOLCHAIN` | ควบคุมการสลับ toolchain อัตโนมัติ (default `auto`) — ดู directive `toolchain` ในบท Modules |
+
+```bash
+go env GOPROXY GOPRIVATE GOSUMDB
+# https://proxy.golang.org,direct
+#
+# sum.golang.org
+```
+
+`go env -w GOFLAGS=-mod=mod` เขียนค่าถาวร; `go env GOPROXY` เฉย ๆ แค่อ่านค่าปัจจุบัน
+
+## gopls และ goimports
+
+`gopls` คือ official Go language server — Go support ของ editor หลักทุกตัว (VS Code, Neovim, protocol เบื้องหลังของ GoLand) คุยกับ `gopls` สำหรับ autocomplete, go-to-definition, inline diagnostics และ refactoring มันรัน check สไตล์ `go vet` ต่อเนื่องขณะคุณพิมพ์ นี่คือเหตุผลที่ bug หลายตัวในบทนี้เห็นเป็นเส้นหยักสีแดงก่อนที่คุณจะรันคำสั่งใด ๆ ด้วยซ้ำ `goimports` คือ `gofmt` บวกการจัดการ import อัตโนมัติ: มันเพิ่ม import ที่ขาดและลบที่ไม่ใช้ editor ส่วนใหญ่รันมันแทน `gofmt` เฉย ๆ ตอน save
+
+## Profile-guided optimization (PGO)
+
+ตั้งแต่ Go 1.21 การวาง CPU profile ชื่อ `default.pgo` ไว้ใน directory ของ package main ทำให้ `go build` ใช้มันอัตโนมัติ: compiler inline มากขึ้นตาม hot path ที่ profile ระบุ ปกติเพิ่ม throughput ไม่กี่ percent โดยไม่ต้องแก้ source เลย generate profile จาก production workload ตัวแทน (`-cpuprofile` กลไกเดียวกับบท Benchmarks) commit `default.pgo` คู่กับ source แล้ว `go build` จะหยิบมันมาใช้โดยไม่ต้องใส่ flag เพิ่ม
 
 ## go doc — เรียกดู documentation
 
 `go doc` แสดง documentation สำหรับ package, type, function, หรือ method ใดก็ได้ — โดยไม่ต้องออกจาก terminal
 
 ```bash
-go doc fmt                    # ภาพรวม package
-go doc fmt.Println            # function เฉพาะ
-go doc net/http.Request       # type ใน sub-package
-go doc -all net/http          # ทุก exported symbol ใน package
-go doc -ex strings.Cut        # พิมพ์ example ที่รันได้ (Go 1.27)
-go doc golang.org/x/text@v0.28.0  # module version ที่ระบุ (Go 1.27)
+go doc fmt                    # package overview
+go doc fmt.Println            # specific function
+go doc net/http.Request       # type in a sub-package
+go doc -all net/http          # every exported symbol in the package
+go doc -ex strings.Cut        # print the runnable examples (Go 1.27)
+go doc golang.org/x/text@v0.28.0  # a specific module version (Go 1.27)
 ```
 
 สำหรับมุมมองแบบ browser รัน `go doc -http` (Go 1.25+) หรือเรียกดูที่ `pkg.go.dev`
@@ -112,31 +329,84 @@ go doc golang.org/x/text@v0.28.0  # module version ที่ระบุ (Go 1.2
 ```bash
 test -z "$(gofmt -l .)" && \
 go vet ./... && \
+govulncheck ./... && \
 go test -race -coverprofile=coverage.out -covermode=atomic ./... && \
 go build ./...
 ```
 
-pipeline สี่คำสั่งนี้ตรวจจับ formatting drift, static bugs, data races, และ compilation errors ก่อนที่ code จะถูก merge
+pipeline นี้ตรวจจับ formatting drift, static bugs (รวมถึง `go vet` analyzer หกตัวด้านบน), known vulnerability, data races และ compilation errors ก่อนที่ code จะถูก merge
+
+## Quality-gate pipeline
+
+export const toolingPipeline = `flowchart TD
+  A["source code"] --> B["gofmt -l (formatting check)"]
+  B --> C["go vet (copylocks, lostcancel, printf, ...)"]
+  C --> D["staticcheck / golangci-lint (broader analysis)"]
+  D --> E["govulncheck (known CVEs actually called)"]
+  E --> F["go test -race (behavior + data races)"]
+  F --> G["go build (compiles to a binary)"]`;
+
+<Mermaid code={toolingPipeline} title="quality gate ทั่วไปของ Go เช็กที่แคบและเร็วที่สุดก่อน" />
 
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
-|------|---------|------|
-| `go vet` | ตรวจหา common mistakes ก่อน runtime | ไม่ครอบคลุม semantic bug ทั้งหมด — ต้องใช้ staticcheck เพิ่ม |
+|---|---|---|
+| `go vet` | ตรวจหา common mistakes ก่อน runtime, built-in, ไม่ต้อง config | ระมัดระวังโดยตั้งใจ — ใช้ staticcheck เพิ่มเพื่อความครอบคลุมมากขึ้น |
+| `golangci-lint` | linter หลายสิบตัวหลังคำสั่งเดียวและ config file เดียว | ต้องมี config file เพื่อปรับ (`default: standard` ของ v2 เป็นจุดเริ่มต้นที่สมเหตุสมผล); ช้ากว่า `go vet` เดี่ยว ๆ |
+| `govulncheck` | รู้ call-graph — flag เฉพาะสิ่งที่คุณเรียกจริง ไม่ใช่แค่สิ่งที่อยู่ใน go.sum | ทันสมัยเท่าที่ vulnerability database มี — CVE ใหม่ต้องใช้เวลากว่าจะปรากฏ |
 | `go build -race` | ตรวจหา race condition ใน binary | binary ช้าลง 2-10x — ไม่เหมาะ production build |
+| PGO (`default.pgo`) | throughput เพิ่มขึ้นไม่กี่ percent โดยไม่ต้องแก้ source | profile อาจล้าสมัยเมื่อ codebase เปลี่ยน — ต้อง regenerate เป็นระยะ |
 | `gofmt` (ผ่าน `go fmt`) | ไม่มีถกเถียงเรื่อง formatting, consistent ทั้ง ecosystem | ไม่มี config — ต้องยอมรับ canonical style |
-| `go doc` | documentation ใน terminal ไม่ต้องออก browser | ไม่มี search full-text — ต้องรู้ชื่อ package/function แล้ว |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
 - **`go fmt` เป็นแค่ style เท่านั้น** — gofmt เป็น de facto standard — project ส่วนใหญ่บังคับ gofmt ใน CI
-- **`go vet` ตรวจสอบครบทุก bug** — `go vet` ตรวจ subset ของ common mistakes — ใช้ staticcheck เพิ่มสำหรับ production codebase
+- **`go vet` ตรวจสอบครบทุก bug** — `go vet` ตรวจ subset ของ common mistakes ที่มันพิสูจน์ได้ด้วยความมั่นใจสูง — ใช้ staticcheck หรือ golangci-lint เพิ่มเพื่อความครอบคลุมมากขึ้น
 - **`go generate` ทำงานอัตโนมัติตอน build** — `go generate` ต้องรันเอง ไม่ได้รันตอน `go build` — ต้อง explicit ใน Makefile หรือ CI
 - **GOPATH ยังจำเป็น** — Go modules (`go.mod`) แทน GOPATH อย่างสมบูรณ์ตั้งแต่ Go 1.16
+- **`govulncheck` รายงาน dependency ที่มี vulnerability แปลว่าต้อง patch ทันที** — มันแยกรายงาน vulnerability ใน module ที่ *require* กับ module ที่ call-graph ของโค้ดคุณเข้าถึงจริง — เฉพาะอย่างหลังคือความเสี่ยงที่ active
+- **`-ldflags -X` ตั้งค่าตัวแปรอะไรก็ได้ รวมถึง constant** — มันตั้งได้เฉพาะตัวแปร `string` ที่ไม่ initialize เท่านั้น; `const`, type ที่ไม่ใช่ string, หรือตัวแปรที่มี initializer แบบคำนวณ ล้วนไม่ได้รับผลกระทบแบบเงียบ ๆ
 
 <Callout title="gofmt จบการถกเถียงเรื่อง formatting — มี canonical style เพียงแบบเดียว">
 ต่างจากภาษาส่วนใหญ่ Go มาพร้อม formatter canonical เพียงตัวเดียวและ editor หลักทุกตัวเชื่อมต่อกับ formatter นั้นโดยค่าเริ่มต้น ไม่มีการโต้เถียงเรื่อง tabs กับ spaces ไม่มีการถกเถียงเรื่องความยาวบรรทัด ไม่มี style guide ที่ต้องดูแล เมื่อ gofmt บอกว่า code ควรมีลักษณะแบบใด นั่นคือจุดสิ้นสุดของการสนทนา นี่ไม่ใช่ข้อจำกัด — แต่คือของขวัญ: code review มุ่งเน้นที่ logic ไม่ใช่ aesthetics
 </Callout>
+
+<details>
+<summary>สิ่งที่เปลี่ยนใน toolchain, Go 1.25–1.27</summary>
+
+- `go mod init` เขียนบรรทัด `go` เป็นเวอร์ชันจริงของ toolchain ที่รันมัน — ไม่ใช่ต่ำกว่าหนึ่ง minor version ยืนยันในเครื่องแล้ว: Go 1.26.5 เขียน `go 1.26.5`; รันด้วย Go 1.27.0 จะเขียน `go 1.27.0` ยกหรือตรึงบรรทัดนี้เองด้วย `go get go@1.27` เมื่อต้องการ floor เฉพาะ
+- `go doc example.com/pkg@v1.2.3` (Go 1.27) แสดง doc ของ module version ที่ระบุ และ `go doc -ex` แสดงรายการ example ที่รันได้
+- `go doc -http` (Go 1.25) เสิร์ฟ documentation ในเบราว์เซอร์ ไม่ต้องใช้ `pkgsite` สำหรับงานในเครื่องอีกแล้ว
+- `go tool pprof -http` (Go 1.26) เปิดมาที่หน้า flame graph; `go tool trace -http=:6060` (Go 1.27) bind เฉพาะ localhost เว้นแต่ระบุ address เต็ม
+- `go version -m -json` (Go 1.24) พิมพ์ build info เป็น JSON; `go build -asan` (Go 1.25) รายงาน memory leak ตอนจบโปรแกรม
+- `go fix` (Go 1.26) ถูกสร้างใหม่บน analysis framework ของ `go vet` พร้อม modernizer หลายสิบตัว; Go 1.27 เพิ่ม `atomictypes`, `embedlit`, `slicesbackward` และ `unsafefuncs`
+- analyzer `waitgroup` และ `hostport` ของ `go vet` (Go 1.25) และ `stdversion` ที่ `go test` รันด้วยแล้ว (Go 1.27)
+
+</details>
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด generated compile ผ่าน ดังนั้นความเงียบของ compiler ไม่พิสูจน์อะไรเลย รัน pipeline ด้านบนก่อนเชื่อมัน และเช็กเรื่องพวกนี้เป็นพิเศษ:
+
+- struct ที่มี `sync.Mutex`, `sync.WaitGroup` หรือคล้ายกัน ถูก copy บ้างไหม — assign, ส่งแบบ value, return แบบ value, หรือวนใน slice element? `copylocks` ของ `go vet` จับสิ่งนี้ได้ แต่เฉพาะถ้าคุณรันมันจริง
+- `wg.Add(1)` ถูกเรียกจากข้างใน goroutine ที่มันควร track แทนที่จะเรียกก่อน `go` statement หรือเปล่า? นี่คือ race จริงที่ `waitgroup` จับได้ — และ pattern ที่โค้ด generated สร้างขึ้นบ่อยมากเพราะมันอ่านเรียงจากซ้ายไปขวาแบบธรรมชาติ
+- การเรียก `context.WithCancel`/`WithTimeout`/`WithDeadline` แต่ละครั้ง function `cancel` ที่ return มาถูกเรียก (ปกติผ่าน `defer`) หรือถูกทิ้งด้วย `_`?
+- `http.Response` (หรือ `.Body` ของมัน) ถูกอ่านหรือปิดก่อนเช็ก `error` ที่มาคู่กันหรือเปล่า?
+- config file อ้างว่า `version: "2"` สำหรับ `golangci-lint` แต่มี option เฉพาะ v1 หรือกลับกัน — config ที่ no-op แบบเงียบ ๆ แทนที่จะ fail หรือเปล่า?
+- `govulncheck` ถูกรันจริงหรือเปล่า หรือ CI config ที่ generate มามีแค่ `go vet` แล้วสมมติว่าเพียงพอแล้ว?
+
+<SpotTheBug code={`func fetchAndLog(url string) {
+	resp, err := http.Get(url)
+	defer resp.Body.Close()
+	if err != nil {
+		log.Println("fetch failed:", err)
+		return
+	}
+	log.Println("status:", resp.StatusCode)
+}`}>
+`defer resp.Body.Close()` รันก่อนเช็ก `err != nil` แต่เมื่อ `http.Get` fail `resp` จะเป็น `nil` — ดังนั้น `resp.Body` จึง panic ด้วย nil pointer dereference บน error path ที่โค้ดนี้พยายามจะจัดการอย่างสวยงามเป๊ะ ๆ analyzer `httpresponse` ของ `go vet` จับสิ่งนี้ได้ตรง ๆ: `using resp before checking for errors` วิธีแก้คือเช็ก error ก่อน แล้วค่อย defer การปิดเมื่อรู้แล้วว่า `resp` ไม่ใช่ nil: ย้าย `if err != nil { ...; return }` ขึ้นไปอยู่เหนือ `defer resp.Body.Close()`
+</SpotTheBug>
 
 export const quizGoTooling = [
   {
@@ -147,37 +417,63 @@ export const quizGoTooling = [
       "go run ต้องการไฟล์ go.mod; go build ไม่ต้องการ",
       "เหมือนกัน — go build เรียก go run ภายใน"
     ],
-    answer: 1
+    answer: 1,
+    explain: "go run compile ไปยังตำแหน่งชั่วคราว รัน แล้วเก็บกวาด — ไม่มีอะไรเหลือบน disk go build เขียน binary ที่มีชื่อให้คุณรันซ้ำได้ทีหลัง"
   },
   {
-    q: "ควรรวม flags ใดกับ go build เมื่อ cross-compile static Linux binary?",
+    q: "```go\ntype Safe struct {\n    mu    sync.Mutex\n    count int\n}\nfunc process(s Safe) { // takes Safe by value\n    s.mu.Lock()\n    defer s.mu.Unlock()\n    s.count++\n}\n```\ngo vet analyzer ตัวไหน flag โค้ดนี้ และเพราะอะไร?",
     options: [
-      "GOOS=linux GOARCH=amd64 เท่านั้น",
-      "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags=\"-s -w\"",
-      "go build -static -target linux/amd64",
-      "GOFLAGS=-static go build ./..."
+      "printf — เพราะ count ถูกพิมพ์ผิดที่อื่น",
+      "copylocks — การส่ง Safe แบบ value copy mutex ด้วย ดังนั้น process จึง lock สำเนาที่เป็นอิสระซึ่งไม่ป้องกันอะไรเลย",
+      "unusedresult — s.count++ ทิ้งผลลัพธ์",
+      "ไม่มี — นี่จะเป็น bug ก็ต่อเมื่อ process ถูกเรียกแบบ concurrent เท่านั้น"
     ],
-    answer: 1
+    answer: 1,
+    explain: "ทุกครั้งที่เรียก process(s) จะ copy struct ทั้งหมด รวมถึง internal state ของ mutex ด้วย copylocks flag สิ่งนี้ตรง ๆ: 'passes lock by value' มันเป็น bug ตั้งแต่ signature ของ function รับ Safe แบบ value แล้ว ไม่ว่าจะถูกเรียกแบบ concurrent หรือไม่ — สำเนานั้นพังตั้งแต่มันถูกสร้างแล้ว"
+  },
+  {
+    q: "```go\ngo func() {\n    wg.Add(1)\n    defer wg.Done()\n    doWork()\n}()\nwg.Wait()\n```\ngo vet analyzer waitgroup รายงานข้อความจริงอะไรที่นี่ และ race จริง ๆ คืออะไร?",
+    options: [
+      "'WaitGroup.Add called from inside new goroutine' — wg.Wait() ใน parent อาจ return ก่อนที่ Add จะรันด้วยซ้ำ เพราะการ schedule ของ goroutine ไม่รับประกันว่าจะเกิดก่อน Wait",
+      "'assignment copies lock value' — WaitGroup มี mutex อยู่ภายใน",
+      "ไม่มีข้อความ — นี่ถูกต้องแล้วตราบใดที่มี defer wg.Done()",
+      "'result of wg.Add call not used' — ควรเช็ก return value ของ Add"
+    ],
+    answer: 0,
+    explain: "ยืนยันแล้วจริง: go vet รายงานตรง ๆ ว่า 'WaitGroup.Add called from inside new goroutine' race นี้เป็นเรื่องจริง: parent goroutine อาจถึง wg.Wait() ก่อนที่ goroutine ใหม่จะเริ่มรันด้วยซ้ำ และ Wait() คืนค่าทันทีถ้า counter ยังเป็นศูนย์ — Add ต้องเกิดก่อน go statement ไม่ใช่ข้างในมัน"
+  },
+  {
+    q: "govulncheck รายงาน '0 vulnerabilities in packages you import' แต่ '8 vulnerabilities in modules you require' หมายความว่าอะไร?",
+    options: [
+      "tool พัง — ตัวเลขสองอันนี้ควรตรงกัน",
+      "มี function ที่รู้ว่ามี vulnerability 8 ตัวอยู่ในต้นไม้ dependency แต่ call-graph analysis แสดงว่า call path ของโค้ดคุณไม่เคยไปถึงตัวไหนเลย",
+      "คุณต้องอัปเกรด dependency ทั้ง 8 ตัวทันทีไม่ว่าจะใช้งานหรือไม่",
+      "govulncheck เจอ vulnerability 8 ตัวในโค้ดของคุณเองโดยเฉพาะ"
+    ],
+    answer: 1,
+    explain: "govulncheck แยกความแตกต่างระหว่าง vulnerability ที่มีอยู่ใน required module กับ call graph จริงของโค้ดคุณที่เข้าถึงมัน นี่คือ output จริงที่ยืนยันแล้วจาก scan บน scratch module ของบทนี้เอง — dependency ที่ required (รวมถึงบางส่วนของ toolchain ของ standard library) อาจมี CVE ที่รู้จักอยู่ใน function ที่ไม่มีอะไรในโปรแกรมคุณเรียกเลย"
   },
   {
     q: "go vet ตรวจจับ issues ประเภทใดที่ compiler ไม่ตรวจ?",
     options: [
       "import ที่ขาดหาย",
       "syntax errors",
-      "format verbs ของ Printf ที่ไม่ตรงกัน, lock copies, และ semantic bugs อื่นๆ",
+      "format verbs ของ Printf ที่ไม่ตรงกัน, lock copies, และ semantic bugs อื่นๆ ที่มันพิสูจน์ได้ด้วยความมั่นใจสูง",
       "unused variables"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go vet รัน analyzer เฉพาะจุด (printf, copylocks, lostcancel และอื่น ๆ) สำหรับ pattern ที่ compile ผ่านสะอาดแต่เกือบแน่นอนว่าผิด มันตั้งใจหลีกเลี่ยงงานของ compiler (syntax, import ขาดหาย) และหลีกเลี่ยง heuristic ที่มั่นใจต่ำซึ่งจะสร้าง false positive"
   },
   {
-    q: "คำสั่งใดแสดง documentation สำหรับ fmt.Println ใน terminal?",
+    q: "CI config ที่ generate มารันแค่ `go vet ./...` และ `go build ./...` ก่อน merge pipeline นี้พลาด bug ประเภทไหนที่การเพิ่ม `govulncheck ./...` และ `go test -race ./...` จะจับได้?",
     options: [
-      "go help fmt.Println",
-      "go doc fmt.Println",
-      "go info fmt Println",
-      "godoc -func fmt.Println"
+      "ไม่มีเลย — go vet และ go build ครอบคลุม race และ known vulnerability อยู่แล้ว",
+      "known vulnerability ใน dependency code ที่เข้าถึงได้ และ data race ที่ปรากฏเฉพาะตอน runtime ภายใต้การเข้าถึงแบบ concurrent",
+      "แค่ปัญหา formatting เท่านั้น ซึ่ง gofmt จับได้อยู่แล้ว",
+      "compile error ที่เกิดจากการ merge ที่ผิดพลาด"
     ],
-    answer: 1
+    answer: 1,
+    explain: "go vet เป็น static และไม่รู้จัก vulnerability database หรือสังเกตการเข้าถึงแบบ concurrent ตอน runtime; go build พิสูจน์แค่ว่าโค้ด compile ผ่าน govulncheck และ -race จับ bug สองประเภทที่ต่างกันโดยสิ้นเชิงและเป็นจริงโดยสิ้นเชิง ที่ pipeline แบบ vet-and-build อย่างเดียวปล่อยผ่านไป"
   }
 ];
 

@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Method คืออะไร?
 
@@ -63,6 +64,131 @@ func (t Celsius) String() string {
 
 นี่คือเหตุผลที่ interface ที่ต้องการ pointer-receiver method สามารถตอบสนองได้เฉพาะโดย `*T` ไม่ใช่ `T`
 
+## Addressability: เมื่อ method set กัดคุณ
+
+การเรียก pointer-receiver method บน value จะ auto-take address ให้เอง — `c.Inc()` บนตัวแปร `c` จริง ๆ แล้วหมายถึง `(&c).Inc()` แต่ Go จะ take address ได้ก็ต่อเมื่อ `c` เป็น **addressable**: ตัวแปรธรรมดา, field ของ struct ที่ addressable, หรือ `*p` สำหรับ pointer `p` ใด ๆ มี value สองแบบในชีวิตประจำวันที่**ไม่** addressable — map value และผลลัพธ์ของ composite literal ที่ใช้ตรง ๆ
+
+```go
+type Counter struct{ count int }
+
+func (c *Counter) Inc() { c.count++ }
+
+func main() {
+	m := map[string]Counter{"a": {}}
+	m["a"].Inc() // map values are not addressable
+}
+```
+
+Compile ด้วย Go 1.26.5 ได้ผลลัพธ์:
+
+```text
+./main.go:15:9: cannot call pointer method Inc on Counter
+```
+
+เหตุผลคือเรื่องโครงสร้าง: map สามารถ rehash และย้าย entry ของมันได้ตลอดเวลา ดังนั้น Go จึงปฏิเสธที่จะให้ address ที่เสถียรเข้าไปในมัน ทางแก้คือเก็บเป็น pointer แทน (`map[string]*Counter`) หรือ copy ค่าออกมา แก้ไข แล้วเก็บกลับเข้าไป
+
+error แบบเดียวกันเกิดกับ composite literal ที่ใช้ตรง ๆ ด้วย เพราะ literal ไม่มีตัวแปรให้ take address:
+
+```go
+Counter{}.Inc()
+```
+
+```text
+./main.go:12:12: cannot call pointer method Inc on Counter
+```
+
+Addressability ยังตัดสิน interface satisfaction ด้วย method set ของ `T` มีเฉพาะ value-receiver methods ดังนั้นการ assign value ของ `T` ให้ interface ที่ต้องการ pointer-receiver method จะ fail ตั้งแต่ compile time ไม่ใช่ตอนเรียก:
+
+```go
+type Incer interface{ Inc() }
+
+var i Incer = Counter{}
+```
+
+```text
+./main.go:16:16: cannot use Counter{} (value of struct type Counter) as Incer value in variable declaration: Counter does not implement Incer (method Inc has pointer receiver)
+```
+
+`var i Incer = &Counter{}` compile ผ่าน เพราะ method set ของ `*Counter` มี `Inc` รวมอยู่ด้วย
+
+## Method value vs Method expression
+
+**Method value** — `c.Inc` — คือ function ที่ผูกกับ receiver `c` ตัวที่กำหนด ณ ตอนที่คุณ take มันออกมา **Method expression** — `Counter.Value` — take type เองมา และ receiver จะกลายเป็น parameter ตัวแรกของ function:
+
+```go
+c := &Counter{}
+inc := c.Inc     // bound to c already — inc() means c.Inc()
+inc()
+
+value := Counter.Value // unbound — receiver is the first argument
+fmt.Println(value(*c))
+```
+
+Method value มีประโยชน์เมื่อต้องส่ง bound method เป็น callback (`http.HandleFunc("/x", h.serveX)`); method expression พบไม่บ่อย ส่วนใหญ่เจอใน generic code ที่ต้องเรียก method บน underlying type ของ type parameter
+
+## Nil pointer receiver
+
+การเรียก method ผ่าน nil pointer นั้นถูกกฎหมายใน Go ตราบใดที่ body ของ method ไม่ dereference field ที่เป็น nil ก่อนเช็ก นี่คือวิธีมาตรฐานในการเขียน recursive nil-safe method บนโครงสร้างแบบ linked:
+
+```go
+type List struct {
+	val  int
+	next *List
+}
+
+func (l *List) Sum() int {
+	if l == nil {
+		return 0
+	}
+	return l.val + l.next.Sum()
+}
+```
+
+`var l *List; l.Sum()` คืนค่า `0` โดยไม่ panic — ตัว call method เองไม่ dereference `l` และ nil check ใน body ก็จัดการมันเอง
+
+## การตั้งชื่อ receiver
+
+Receiver แบบ idiomatic ใน Go คือ 1-2 ตัวอักษรที่มาจากชื่อ type — `c Counter`, `r *Rectangle` — ไม่เคยใช้ `this` หรือ `self` ใช้ชื่อ receiver เดียวกันสำหรับทุก method บน type นั้น standard library ทำตามแบบนี้ตลอด (`func (b *Buffer) WriteString`, `func (t Time) Add`)
+
+## Method บน named function type
+
+เพราะ named type ใด ๆ มี methods ได้ named function type ก็มีได้เหมือนกัน standard library ใช้สิ่งนี้เพื่อแปลง function ธรรมดาให้ตอบสนอง interface ได้ — `http.HandlerFunc` คือ `func(http.ResponseWriter, *http.Request)` ที่มี method `ServeHTTP` ซึ่งเป็นสิ่งเดียวที่ `http.Handler` ต้องการ:
+
+```go
+type IntOp func(int) int
+
+func (f IntOp) Twice(x int) int {
+	return f(f(x))
+}
+```
+
+`IntOp(double).Twice(3)` เรียก `double` บนผลลัพธ์ของตัวมันเอง — function เองคือ receiver
+
+## Copy mutex: กับดัก value receiver
+
+`sync.Mutex` ห้าม copy หลังจากใช้งานครั้งแรกเด็ดขาด เพราะ copy จะมี lock state เป็นของตัวเองแยกต่างหาก value receiver จะ copy ทั้ง struct ทุกครั้งที่เรียก — ดังนั้น value-receiver method บน struct ที่มี mutex จึง lock copy อย่างเงียบ ๆ โดยไม่ป้องกันอะไรเลย:
+
+```go
+type Safe struct {
+	mu    sync.Mutex
+	count int
+}
+
+func (s Safe) Inc() { // value receiver — copies mu on every call
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.count++
+}
+```
+
+`go vet` จับ bug นี้ได้ตรง ๆ:
+
+```text
+main.go:11:9: Inc passes lock by value: command-line-arguments.Safe contains sync.Mutex
+```
+
+ทางแก้คือใช้ pointer receiver เสมอ: `func (s *Safe) Inc()` struct ใดที่มี `sync.Mutex`, `sync.WaitGroup`, หรือคล้ายกัน ต้องใช้ pointer receiver กับทุก method และห้าม pass หรือ return แบบ value เด็ดขาด
+
 export const methodsCode = `package main
 
 import "fmt"
@@ -87,15 +213,53 @@ func (t Celsius) String() string {
 \treturn fmt.Sprintf("%.1f\\u00b0C", float64(t))
 }
 
+// List demonstrates a nil pointer receiver: Sum handles a nil *List gracefully.
+type List struct {
+\tval  int
+\tnext *List
+}
+
+func (l *List) Sum() int {
+\tif l == nil {
+\t\treturn 0
+\t}
+\treturn l.val + l.next.Sum()
+}
+
+// IntOp is a named function type with its own method.
+type IntOp func(int) int
+
+func (f IntOp) Twice(x int) int {
+\treturn f(f(x))
+}
+
 func main() {
-\tc := Counter{}
+\tc := &Counter{}
 \tc.Inc()
 \tc.Inc()
 \tc.Inc()
-\tfmt.Println(c.Value())
+\tfmt.Println(c.Value()) // 3
 
 \ttemp := Celsius(36.6)
-\tfmt.Println(temp.String())
+\tfmt.Println(temp.String()) // 36.6°C
+
+\t// Method value: bound to c the moment it is created.
+\tinc := c.Inc
+\tinc()
+\tfmt.Println(c.Value()) // 4
+
+\t// Method expression: receiver becomes an explicit first argument.
+\tvalue := Counter.Value
+\tfmt.Println(value(*c)) // 4
+
+\tvar empty *List
+\tfmt.Println(empty.Sum()) // 0 — nil receiver, handled inside Sum
+
+\tlist := &List{val: 1, next: &List{val: 2}}
+\tfmt.Println(list.Sum()) // 3
+
+\tdouble := IntOp(func(x int) int { return x * 2 })
+\tfmt.Println(double.Twice(3)) // 12
 }`;
 
 <Playground code={methodsCode} />
@@ -103,22 +267,47 @@ func main() {
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
-|---------|---------|------|
-| value receiver | immutable, เรียกได้บน non-addressable values | copy struct ทุกครั้งที่เรียก |
-| pointer receiver | mutate ได้, ไม่ copy struct | ต้อง nil-check, pointer ต้อง addressable |
-| method บน non-struct type | ขยาย behavior ของ any type ใน package | ไม่สามารถ add method บน imported type ได้ |
+|---|---|---|
+| Value receiver | เข้าใจง่าย, เรียกได้บน value ที่ไม่ addressable | copy struct ทุกครั้งที่เรียก |
+| Pointer receiver | mutate ได้, ไม่ copy | ต้อง nil-check, receiver ต้อง addressable |
+| Method บน type ที่ไม่ใช่ struct | ขยาย behavior ของ named type ใด ๆ ใน package | เพิ่ม method บน type จาก package อื่นไม่ได้ |
+| Method value | ผูก receiver เข้ากับ function ส่งเป็น callback ได้ง่าย | ทำให้ receiver มีชีวิตอยู่ตลอดอายุของ closure |
+| Pointer receiver บน type ที่มี mutex | เป็นตัวเลือกที่ถูกต้องเพียงแบบเดียว | ทุก method — แม้แต่ read-only — ต้องรับ pointer |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **value receiver และ pointer receiver ใช้แทนกันได้** — value receiver ทำงานบนสำเนา ไม่สามารถ mutate receiver ได้
-- **สามารถเพิ่ม method บน type ของ package อื่นได้** — Go ไม่อนุญาต ต้อง wrap หรือ embed แทน
-- **method set ของ T และ *T เหมือนกัน** — *T มี method set ใหญ่กว่า (รวมทั้ง pointer-receiver methods) ส่งผลต่อ interface satisfaction
+- **value receiver และ pointer receiver ใช้แทนกันได้** — value receiver ทำงานบนสำเนา ไม่สามารถ mutate ค่าต้นฉบับของ caller ได้
+- **สามารถเพิ่ม method บน type ของ package อื่นได้** — Go ไม่อนุญาต ต้อง wrap type นั้นด้วย named type ในเครื่อง หรือใช้ embedding แทน
+- **`T` และ `*T` มี method set เหมือนกัน** — method set ของ `*T` ใหญ่กว่า มัน include pointer-receiver methods ด้วย ซึ่งส่งผลต่อ interface satisfaction
+- **map value ที่มี pointer-receiver method ก็ใช้ได้เหมือนตัวแปร struct ธรรมดา** — ไม่จริง map value ไม่ addressable ดังนั้น `m[k].Inc()` เป็น compile error ไม่ใช่ runtime surprise
+- **copy struct ที่ embed `sync.Mutex` ไม่เป็นไรถ้ายังไม่รีบ `Lock`** — copy นั้นพังตั้งแต่วินาทีที่มันถูกสร้างแล้ว `go vet` flag ที่ตัว copy เอง ไม่ใช่แค่ตอนเรียก lock
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **net/http**: http.ResponseWriter เป็น interface — Handler ทุกตัวรับ interface นี้แทน concrete type ทำให้ test ได้ง่ายด้วย mock
+> `net/http`: `http.ResponseWriter` เป็น interface — `Handler` ทุกตัวรับมันแทน concrete type ทำให้ test handler ได้ง่ายด้วย mock `http.HandlerFunc` เป็น named function type ที่มี method `ServeHTTP` ดังนั้น function ธรรมดาก็ตอบสนอง `http.Handler` ได้ด้วยการ convert แค่บรรทัดเดียว
 >
-> **`*bytes.Buffer`** และ **`*http.Client`**: ทั้งคู่ใช้ pointer receiver ทุก method เพราะมี internal state ที่ต้องแก้ไข (buffer bytes, connection pool) — consistency ของ receiver type สำคัญมาก
+> `*bytes.Buffer` และ `*http.Client` ทั้งคู่ใช้ pointer receiver กับทุก method เพราะมี internal state ที่ method ต้อง mutate (buffered bytes, connection pool) — ความสม่ำเสมอของ receiver kind สำคัญตรงนี้
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ snippet ที่ generate มา นิยาม methods ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- ทุก method บน type ใช้ receiver kind *เดียวกัน* หรือเปล่า — value ทั้งหมด หรือ pointer ทั้งหมด? การผสมกันคือสัญญาณเตือน
+- ถ้า method mutate field, receiver เป็น pointer หรือเปล่า? value-receiver mutation compile ผ่านแต่ไม่ทำอะไรเลยอย่างเงียบ ๆ
+- struct ของ type นั้นมี `sync.Mutex`, `sync.WaitGroup`, หรือคล้ายกันหรือเปล่า? ทุก method ต้องเป็น pointer receiver และ type ต้องไม่ถูก copy หรือ pass แบบ value เด็ดขาด
+- pointer-receiver method ถูกเรียกบน map value (`m[k].Method()`) หรือ composite literal สด ๆ (`T{}.Method()`) หรือเปล่า? ทั้งสองแบบ compile ไม่ผ่าน — เป็นเรื่อง addressability ไม่ใช่ runtime bug
+- interface variable ถูก assign ด้วย value type (`var i Iface = T{}`) ทั้งที่ method ที่ต้องการมี pointer receiver หรือเปล่า? นั่นคือ compile error ที่โค้ดที่ generate มาอาจไม่เคยถูกรันจริงเลย
+
+<SpotTheBug code={`type Counter struct{ n int }
+
+func (c *Counter) Inc() { c.n++ }
+
+func main() {
+	m := map[string]Counter{"a": {}}
+	m["a"].Inc()
+}`}>
+`m["a"]` ไม่ addressable — map value ถูกย้ายได้ตลอดเวลาจาก rehash ดังนั้น Go จึงปฏิเสธที่จะ take address ให้กับการเรียก pointer-receiver แบบนี้ compiler message จริงคือ `cannot call pointer method Inc on Counter` แก้ได้โดยใช้ `map[string]*Counter` หรือโหลดค่าออกมา mutate แล้วเก็บกลับ: `c := m["a"]; c.Inc(); m["a"] = c`
+</SpotTheBug>
 
 <Callout title="ใช้ pointer receiver เมื่อต้องการแก้ไข — และใช้ให้สม่ำเสมอ">
 Value receiver ทำงานบนสำเนาเสมอ ดังนั้นการแก้ไขจะหายไปเงียบ ๆ ใช้ pointer receiver ทุกครั้งที่ method ต้องเปลี่ยนสถานะของ receiver เมื่อเลือกใช้ pointer receiver กับ method ใดใน type หนึ่ง ให้ใช้กับทุก method ใน type นั้นเพื่อให้ method set สอดคล้องกันและหลีกเลี่ยงช่องว่าง interface-satisfaction ที่น่าแปลกใจ
@@ -133,7 +322,8 @@ export const quizMethods = [
       "เกิด compile error เพราะ value receiver ไม่สามารถเข้าถึง fields ได้",
       "ขึ้นอยู่กับว่าตัวแปรอยู่บน heap หรือ stack"
     ],
-    answer: 1
+    answer: 1,
+    explain: "value receiver เป็นแค่ parameter — Go copy struct เข้าไปในมันเหมือน argument ทั่วไป การ mutate สำเนาจึงไม่มีทางไปถึงตัวแปรของ caller"
   },
   {
     q: "method set ของ type ใดที่รวม methods ทั้ง value-receiver และ pointer-receiver?",
@@ -143,7 +333,30 @@ export const quizMethods = [
       "ทั้ง T และ *T เท่ากัน",
       "ไม่มี — method sets ถูกกำหนด ณ call site"
     ],
-    answer: 1
+    answer: 1,
+    explain: "method set ของ *T มีทุก method ที่ประกาศบน T ทั้ง value และ pointer receiver ส่วน method set ของ T มีแค่ตัวที่เป็น value-receiver เท่านั้น"
+  },
+  {
+    q: "```go\ntype Counter struct{ n int }\nfunc (c *Counter) Inc() { c.n++ }\n\nfunc main() {\n    m := map[string]Counter{\"a\": {}}\n    m[\"a\"].Inc()\n}\n```\nโค้ดนี้ compile ผ่านไหม?",
+    options: [
+      "ผ่าน และเพิ่มค่าใน Counter ที่เก็บไว้",
+      "ผ่าน แต่การเพิ่มค่าหายไปอย่างเงียบ ๆ",
+      "ไม่ผ่าน — cannot call pointer method Inc on Counter",
+      "ไม่ผ่าน — undefined: Counter"
+    ],
+    answer: 2,
+    explain: "map value ไม่ addressable ดังนั้น Go สร้าง &m[\"a\"] เพื่อเรียก pointer-receiver method ไม่ได้ compiler error จริงคือ `cannot call pointer method Inc on Counter` เป๊ะ ๆ"
+  },
+  {
+    q: "```go\ntype Safe struct {\n    mu    sync.Mutex\n    count int\n}\nfunc (s Safe) Inc() {\n    s.mu.Lock()\n    defer s.mu.Unlock()\n    s.count++\n}\n```\n`go vet` รายงานอะไร?",
+    options: [
+      "ไม่มีอะไร — compile และรันถูกต้องแม้ภายใต้ load",
+      "Inc passes lock by value: command-line-arguments.Safe contains sync.Mutex",
+      "cannot call pointer method Lock on sync.Mutex",
+      "s.count++ has no effect"
+    ],
+    answer: 1,
+    explain: "value receiver copy ทั้ง struct — รวมถึง mutex ด้วย — ทุกครั้งที่เรียก ดังนั้น Lock/Unlock จึงทำงานบนสำเนาที่แยกจากกันและไม่ป้องกันอะไรเลย copylocks check ของ go vet รายงานข้อความนี้ตรง ๆ"
   },
   {
     q: "คุณต้องการนิยาม method บน `type Kelvin float64` มีข้อจำกัดอะไร?",
@@ -153,17 +366,19 @@ export const quizMethods = [
       "สามารถนิยาม methods บน Kelvin ได้ตราบใดที่ type นิยามใน package ของคุณ",
       "ไม่สามารถนิยาม methods บน type ที่มี underlying type เป็น primitive ได้"
     ],
-    answer: 2
+    answer: 2,
+    explain: "named type ใด ๆ ที่ประกาศใน package ของคุณเองมี methods ได้ ไม่ว่า underlying type จะเป็นอะไร มีแค่ type จาก package อื่น บวกกับ pointer type และ interface type เท่านั้นที่ทำไม่ได้"
   },
   {
-    q: "type ของคุณมี 5 methods: 4 ใช้ value receiver และ 1 ใช้ pointer receiver คุณควรทำอย่างไร?",
+    q: "```go\nc := &Counter{}\ninc := c.Inc\nc = &Counter{}\ninc()\n```\n`inc()` จะเพิ่มค่าให้ Counter ตัวไหน?",
     options: [
-      "ปล่อยไว้ — การผสมกันไม่เป็นไรตราบใดที่แต่ละ method compile ได้",
-      "แปลง methods ทั้งหมดเป็น pointer receiver เพื่อความสม่ำเสมอ",
-      "แปลง methods ทั้งหมดเป็น value receiver เพื่อความสม่ำเสมอ",
-      "แยก type เป็นสอง types แยกกัน type ละ receiver"
+      "Counter ตัวใหม่ที่ assign ในบรรทัดที่สาม",
+      "Counter ตัวเดิมที่ c ชี้อยู่ตอนที่สร้าง inc",
+      "ทั้งสองตัว — inc เก็บ reference ไปยังตัวแปร c เอง",
+      "ไม่มีตัวไหนเลย — นี่คือ compile error"
     ],
-    answer: 1
+    answer: 1,
+    explain: "method value อย่าง c.Inc capture ค่าของ receiver (ในที่นี้คือ pointer) ณ ตอนที่มันถูกสร้างขึ้น การ reassign c ในภายหลังไม่เปลี่ยนสิ่งที่ inc ผูกอยู่"
   }
 ];
 

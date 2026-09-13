@@ -1,6 +1,6 @@
 ---
 title: time
-description: 'time.Time, time.Duration, การ format ด้วย reference layout, การ parse และการคำนวณ (Add/Sub) โดยใช้เวลาคงที่เพื่อผลลัพธ์ที่แน่นอน'
+description: 'time.Time, time.Duration, การ format ด้วย reference layout, การ parse และการคำนวณ (Add/Sub) โดยใช้เวลาคงที่ที่ deterministic'
 sidebar:
   order: 3
 ---
@@ -9,13 +9,15 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## time.Time และ time.Duration
 
 Package `time` มี type หลักสองตัว:
 
-- **`time.Time`** — ช่วงเวลาหนึ่งที่มีความแม่นยำระดับ nanosecond พร้อม location (timezone) เสมอ
-- **`time.Duration`** — signed 64-bit integer แทนความยาวของเวลาในหน่วย nanosecond ค่าคงที่อย่าง `time.Hour`, `time.Minute`, `time.Second` และ `time.Millisecond` ทำให้การคำนวณอ่านง่าย
+- **`time.Time`** — จุดหนึ่งในเวลาที่มีความละเอียดระดับ nanosecond พกพา location (timezone) เสมอ
+- **`time.Duration`** — จำนวนเต็ม 64-bit แบบมีเครื่องหมายที่แทนช่วงเวลาเป็น nanosecond ค่าคงที่ duration อย่าง `time.Hour`, `time.Minute`, `time.Second` และ `time.Millisecond` ทำให้การคำนวณอ่านง่าย
 
 ```go
 d := 2*time.Hour + 30*time.Minute + 15*time.Second
@@ -24,24 +26,59 @@ fmt.Println(d) // 2h30m15s
 
 ## การสร้าง time.Time
 
-ในโค้ด production จะเรียก `time.Now()` เพื่อรับเวลาปัจจุบัน สำหรับการทดสอบและตัวอย่างที่ต้องการผลลัพธ์คงที่ให้ใช้ `time.Date`:
+ในโค้ด production เรียก `time.Now()` เพื่อได้เวลาปัจจุบัน สำหรับ test และตัวอย่างที่ deterministic ให้ใช้ `time.Date`:
 
 ```go
 t := time.Date(2024, 1, 2, 15, 4, 5, 0, time.UTC)
 // year, month, day, hour, min, sec, nanosec, location
 ```
 
-ค่าของ `time.Month` (ตั้งแต่ `time.January` ถึง `time.December`) เป็น typed constant แต่ก็สามารถส่ง integer literal (1–12) ได้เพราะสามารถ assign ให้ `time.Month` ได้
+ค่า `time.Month` (`time.January` ถึง `time.December`) เป็น typed constant; สามารถส่ง integer literal (1–12) แทนได้เพราะ assign เข้า `time.Month` ได้
 
-## การ format — reference layout
+## Monotonic clock: Equal เทียบกับ ==
 
-Go ใช้ช่วงเวลาอ้างอิงที่เป็นรูปธรรมแทนรหัส format แบบนามธรรมอย่าง `YYYY-MM-DD` ช่วงเวลาอ้างอิงคือ:
+`time.Now()` อ่านทั้ง wall clock และในแพลตฟอร์มส่วนใหญ่ อ่าน monotonic clock ด้วย แล้วเก็บทั้งคู่ไว้ในค่า `time.Time` การอ่านค่า monotonic เดินหน้าอย่างเดียวเสมอ แม้ wall clock ของ OS จะถูกปรับด้วย NTP หรือแก้มือ — นี่คือสิ่งที่ `Since` และ `Sub` ใช้พอดี การวัด duration ที่ผ่านไปจึงปลอดภัยจาก clock ที่กระโดด
+
+การอ่านค่าคู่นี้ก็เป็นเหตุผลที่ `==` กับ `.Equal()` อาจไม่ตรงกันแม้จะดูเหมือนเป็นจุดเวลาเดียวกัน:
+
+```go
+a := time.Now()
+b := a               // identical copy — a == b is true
+c := a.Round(0)       // Round(0) strips the monotonic reading
+fmt.Println(a == b, a.Equal(b)) // true true
+fmt.Println(a == c, a.Equal(c)) // false true
+```
+
+`==` เทียบ struct ทั้งหมด — wall clock, monotonic reading และ location ทั้งหมด — ดังนั้นค่า `Time` สองตัวที่แทนจุดเวลาเดียวกันอาจเทียบไม่เท่ากันได้ถ้าตัวหนึ่งถูกถอด monotonic reading ออกไป (ผ่าน `Round`, ผ่าน round-trip ทาง `Marshal`/`Unmarshal` หรือผ่าน `time.Parse`) `Equal` เทียบแค่จุดเวลาเท่านั้นและไม่สนใจสิ่งเหล่านั้นเลย **ใช้ `Equal` เพื่อเทียบค่า `time.Time` สองตัวเสมอ** ไม่ใช้ `==` เว้นแต่ต้องการตรวจจับ monotonic reading ที่ถูกถอดออกโดยเฉพาะ
+
+## กับดักหน่วยของ n คูณ time.Second และ time.Sleep(5)
+
+ค่าคงที่ duration (`time.Second`, `time.Millisecond`, …) มีไว้เพื่อไม่ให้ integer ธรรมดาถูกเข้าใจผิดว่าเป็น duration — แต่ความผิดพลาดที่เกี่ยวข้องกันสองแบบยังพบบ่อยในโค้ดที่ AI เขียน:
+
+```go
+var n time.Duration = 2
+d := n * time.Second // fine: n is already a Duration
+fmt.Println(d)        // 2s
+```
+
+bug จะโผล่เมื่อ `n` เป็น `int` ธรรมดาแทนที่จะเป็น `time.Duration`: `n * time.Second` เมื่อ `n int` จะ compile ไม่ผ่านเลยด้วยซ้ำ ("mismatched types") ซึ่งเป็น Go ที่ปกป้องเราอยู่ — แต่ `time.Sleep(n)` compile ผ่านสำหรับค่าที่แปลงเป็น `int` ได้ทุกตัว และ `time.Sleep(5)` จะ sleep **5 nanosecond** ไม่ใช่ 5 วินาที เพราะ `Sleep` รับ `Duration` และ 5 คือจำนวน nanosecond เปล่าๆ เมื่อไม่มีการคูณ:
+
+```go
+time.Sleep(5) // sleeps 5 nanoseconds — almost certainly not what was intended
+time.Sleep(5 * time.Second) // sleeps 5 seconds — the constant makes the unit explicit
+```
+
+เวลาอ่าน diff `time.Sleep` (หรือ `context.WithTimeout`, `time.NewTimer`, …) ที่ถูกเรียกด้วย integer literal เปล่าๆ โดยไม่มีค่าคงที่ `time.Xxx` คูณอยู่ด้วย ควรมองดูอีกครั้งเสมอ
+
+## Formatting — reference layout
+
+Go ใช้เวลาอ้างอิงที่เป็นรูปธรรมแทน format code แบบนามธรรมอย่าง `YYYY-MM-DD` เวลาอ้างอิงคือ:
 
 ```
 Mon Jan 2 15:04:05 MST 2006
 ```
 
-หากต้องการ format เวลา ให้เขียนช่วงเวลาอ้างอิงในรูปแบบที่ต้องการ:
+การ format เวลา คือการเขียนเวลาอ้างอิงในรูปแบบที่ต้องการ:
 
 ```go
 t.Format("2006-01-02")             // "2024-01-02"
@@ -50,16 +87,27 @@ t.Format("02 Jan 2006 15:04 MST")  // "02 Jan 2024 15:04 UTC"
 t.Format(time.RFC3339)             // "2024-01-02T15:04:05Z"
 ```
 
-## การ Parse
+Go 1.20 เพิ่มค่าคงที่ layout ที่มีชื่อสำหรับรูปแบบที่พบบ่อยที่สุด จึงไม่ต้องพิมพ์เวลาอ้างอิงซ้ำอีก: `time.DateTime` (`"2006-01-02 15:04:05"`), `time.DateOnly` (`"2006-01-02"`) และ `time.TimeOnly` (`"15:04:05"`)
 
-`time.Parse` เป็นการทำงานตรงข้ามกับ `Format` — รับ layout และ string:
+## Parsing
+
+`time.Parse` คือด้านตรงข้ามของ `Format` — รับ layout กับ string:
 
 ```go
 parsed, err := time.Parse("2006-01-02", "2024-06-15")
 // parsed is midnight UTC on June 15, 2024
 ```
 
-string ของ layout ต้องตรงกับ component ของช่วงเวลาอ้างอิงที่ใช้ — ตัวอักษรเดียวกันในตำแหน่งเดียวกัน
+layout string ต้องตรงกับ component ของเวลาอ้างอิงที่ใช้ — ตัวอักษรเดียวกันในตำแหน่งเดียวกัน
+
+**`time.Parse` คืน `Time` เป็น UTC เสมอ** เมื่อ layout ไม่มี component ของ timezone — มันไม่เคยสมมติ timezone ของเครื่อง เมื่อ input string แทนเวลา *local* ใน timezone ที่ระบุ (timestamp จาก log file ที่เขียนใน `Asia/Bangkok` เช่น) ให้ใช้ `time.ParseInLocation(layout, value, loc)` แทน ซึ่งตีความ string เป็น wall-clock time ใน `loc` แทนที่จะเป็น UTC:
+
+```go
+loc, _ := time.LoadLocation("Asia/Bangkok")
+p1, _ := time.Parse("2006-01-02 15:04:05", "2026-09-13 14:30:00")               // UTC
+p2, _ := time.ParseInLocation("2006-01-02 15:04:05", "2026-09-13 14:30:00", loc) // Asia/Bangkok
+// p1 and p2 represent different instants even though the digits are identical
+```
 
 ## การคำนวณ — Add และ Sub
 
@@ -70,14 +118,16 @@ before   := deadline.Before(t)          // false
 after    := deadline.After(t)           // true
 ```
 
-`Add` รับ `Duration` และคืน `Time` `Sub` รับ `Time` สองค่าและคืน `Duration` ระหว่างทั้งสอง
+`Add` รับ `Duration` แล้วคืน `Time` `Sub` รับ `Time` สองตัวแล้วคืน `Duration` ระหว่างสองค่านั้น
+
+`AddDate(years, months, days)` เป็นการคำนวณแบบปฏิทิน ไม่ใช่การคำนวณ duration และมันสามารถ overflow เดือนในแบบที่ทำให้โค้ด "เพิ่มหนึ่งเดือน" ที่ AI เขียนแปลกใจได้: `time.Date(2026, 1, 31, ...).AddDate(0, 1, 0)` ไม่ได้ clamp ไปที่วันสุดท้ายของกุมภาพันธ์ — มันปรับ 31 กุมภาพันธ์ให้เลื่อนไปมีนาคมแทน กลายเป็นวันที่ 3 มีนาคม (2026 ไม่ใช่ปีอธิกสุรทิน) โค้ดใดที่เพิ่มเดือนให้วันที่ใกล้ปลายเดือนต้องจัดการเรื่องนี้อย่างชัดเจน
 
 ## Timer, ticker และ channel ของมัน
 
-`time.After`, `time.NewTimer` และ `time.NewTicker` ส่งค่าผ่าน channel ทั้งหมด มี semantic สองอย่างที่เปลี่ยนไปเมื่อไม่นานนี้และเป็นพฤติกรรมเดียวที่เหลืออยู่บน Go 1.27:
+`time.After`, `time.NewTimer` และ `time.NewTicker` ล้วนส่งค่าผ่าน channel semantics สองอย่างเปลี่ยนไปเมื่อไม่นานมานี้และเป็นพฤติกรรมเดียวใน Go 1.27:
 
-- **channel ของ timer เป็น unbuffered** — ตั้งแต่ Go 1.23 (สำหรับ module `go 1.23+`) channel ของ timer เป็นแบบ synchronous: จะเห็นค่าก็ต่อเมื่อ timer fire แล้วเท่านั้น และ `t.Stop()` / `t.Reset()` รับประกันว่าไม่มีค่าเก่าค้างส่งมาทีหลัง — พิธี "drain channel หลัง Stop" แบบเก่าไม่จำเป็นอีกแล้ว GODEBUG `asynctimerchan` ที่เป็นทางหนีถูกถอดออกใน Go 1.27 ทุกโปรแกรมจึงได้พฤติกรรมนี้
-- **timer ที่ไม่มีใครอ้างถึงถูก GC เก็บได้** — `time.After` ใน `select` ภายใน loop ไม่รั่วจนกว่าจะ fire อีกต่อไป เมื่อไม่มีอะไรอ้างถึง timer มันก็ถูกเก็บได้
+- **Timer channel ไม่มี buffer** ตั้งแต่ Go 1.23 (สำหรับ module ที่ `go 1.23+`) channel ของ timer เป็นแบบ synchronous: ค่าจะถูกเห็นก็ต่อเมื่อ timer ทำงานแล้วเท่านั้น และ `t.Stop()` / `t.Reset()` การันตีว่าจะไม่มีค่าเก่าถูกส่งมาอีกหลังจากนั้น — พิธีกรรม "drain channel หลัง Stop" แบบเก่าหายไปแล้ว escape hatch `asynctimerchan` GODEBUG ถูกลบใน Go 1.27 ทุกโปรแกรมจึงได้พฤติกรรมนี้
+- **timer ที่ไม่มีใครอ้างอิงถูก garbage collect** `time.After` ข้างใน `select` ใน loop ไม่ leak จนกว่ามันจะ fire อีกต่อไป — เมื่อไม่มีอะไรอ้างอิง timer แล้วมันถูกเก็บได้
 
 ```go
 // given ctx context.Context
@@ -90,7 +140,24 @@ case <-ctx.Done():
 }
 ```
 
-ในโค้ดที่รันนานยังควรใช้ `time.NewTicker` แทน `time.Tick` เพื่อให้ `Stop()` ได้ และใช้ `context.WithTimeout` แทน timer ที่ประกอบเองเมื่อ deadline เป็นของ request
+ยังคงควรใช้ `time.NewTicker` แทน `time.Tick` ในโค้ดที่มีอายุยืนเพื่อจะได้ `Stop()` มันได้ และใช้ `context.WithTimeout` แทน timer ที่เขียนเองเมื่อ deadline เป็นของ request
+
+**ก่อน Go 1.23 `time.Tick` คือการ leak ที่การันตีได้เลย** มันคืนแค่ channel โดยไม่มี handle ให้เรียก `Stop()` ดังนั้น ticker ข้างหลังมันไม่มีทาง garbage collector จะปล่อยคืนได้ — โค้ด idiomatic ก่อน 1.23 จึงใช้ `time.NewTicker` แทนเสมอ เพื่อให้มีอะไรให้ `Stop()` ได้ ตั้งแต่ Go 1.23 garbage collector สามารถเก็บคืน `Ticker` (หรือ `Timer`) ที่ไม่มีใครอ้างอิงได้แม้ไม่มี `Stop()` และ documentation ของ `time.Tick` เองตอนนี้บอกว่า "there is no longer any reason to prefer NewTicker when Tick will do" `Stop()` ยังสำคัญเมื่อต้องการหยุดการส่งค่าจริงๆ ในขณะที่ยังมี reference อื่นค้างอยู่ — แต่ไม่จำเป็นอีกต่อไปเพียงเพื่อกัน leak โค้ด (หรือ AI assistant) ที่ยังยืนยันว่า "ห้ามใช้ `time.Tick` มัน leak เสมอ" กำลังพูดถึงความเชื่อสมัยก่อน 1.23
+
+## การ inject clock สำหรับ test
+
+โค้ดที่เรียก `time.Now()` ตรงๆ test แบบ deterministic ได้ยาก — คำตอบที่ "ถูก" เปลี่ยนทุกครั้งที่รัน วิธีแก้ทั่วไปคือรับ clock เป็น function value แทนที่จะเรียก `time.Now()` ตรงๆ ข้างใน เพื่อให้ test แทนที่ด้วยเวลาคงที่ได้:
+
+```go
+func isExpired(now func() time.Time, deadline time.Time) bool {
+    return now().After(deadline)
+}
+
+// production: isExpired(time.Now, deadline)
+// test:       isExpired(func() time.Time { return fixedTime }, deadline)
+```
+
+นี่คือแนวคิด dependency-injection แบบเดียวกับที่ใช้กับ database connection หรือ HTTP client — ส่งสิ่งที่แปรผันเป็น parameter (หรือ interface เล็กๆ ที่มี method `Now() time.Time`) แทนที่จะใช้ global
 
 export const timeCode = `package main
 
@@ -134,72 +201,216 @@ func main() {
 
 <Playground code={timeCode} />
 
+export const timeAdvancedCode = `package main
+
+import (
+\t"fmt"
+\t"time"
+)
+
+func main() {
+\t// 1. monotonic clock: Since/Sub use it even if the wall clock jumps;
+\t// Equal compares the instant, == compares the whole struct (including monotonic reading + location)
+\ta := time.Now()
+\tb := a // identical copy
+\tfmt.Println("a == b:", a == b, "a.Equal(b):", a.Equal(b))
+
+\tc := a.Round(0) // strips the monotonic reading
+\tfmt.Println("a == c (monotonic stripped):", a == c, "a.Equal(c):", a.Equal(c))
+
+\t// 2. the n*time.Second unit bug: n is already a Duration once multiplied,
+\t// but a bare integer like 5 passed to Sleep means 5 nanoseconds, not 5 seconds
+\tvar n time.Duration = 2
+\td := n * time.Second
+\tfmt.Println("2 * time.Second:", d)
+\t// time.Sleep(5) sleeps 5 nanoseconds — a classic unit bug, not "5 seconds"
+\tstart := time.Now()
+\ttime.Sleep(5)
+\tfmt.Println("Sleep(5) slept for less than a millisecond:", time.Since(start) < time.Millisecond)
+
+\t// 3. time.DateTime and friends (Go 1.20)
+\tt := time.Date(2026, 9, 13, 14, 30, 0, 0, time.UTC)
+\tfmt.Println("time.DateTime:", t.Format(time.DateTime))
+\tfmt.Println("time.DateOnly:", t.Format(time.DateOnly))
+\tfmt.Println("time.TimeOnly:", t.Format(time.TimeOnly))
+
+\t// 4. Parse returns UTC; ParseInLocation uses the given location
+\tp1, _ := time.Parse("2006-01-02 15:04:05", "2026-09-13 14:30:00")
+\tfmt.Println("Parse location:", p1.Location())
+\tloc, _ := time.LoadLocation("Asia/Bangkok")
+\tp2, _ := time.ParseInLocation("2006-01-02 15:04:05", "2026-09-13 14:30:00", loc)
+\tfmt.Println("ParseInLocation location:", p2.Location(), "same instant as UTC 07:30:", p2.UTC().Format(time.TimeOnly))
+
+\t// 5. Ticker.Stop and AddDate month overflow
+\tticker := time.NewTicker(time.Hour)
+\tticker.Stop() // stops delivery now; not required for GC since Go 1.23, but still good practice
+
+\tjan31 := time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC)
+\toverflowed := jan31.AddDate(0, 1, 0) // "add one month" overflows into March
+\tfmt.Println("Jan 31 + 1 month:", overflowed.Format(time.DateOnly))
+
+\t// 6. injecting a clock for tests: accept a func() time.Time instead of calling time.Now directly
+\tfixedClock := func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+\tisExpired := func(now func() time.Time, deadline time.Time) bool { return now().After(deadline) }
+\tfmt.Println("isExpired with injected clock:", isExpired(fixedClock, time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC)))
+}`;
+
+<Playground code={timeAdvancedCode} />
+
+output จริงจากโปรแกรมนี้บน Go 1.26.5 (การเทียบค่าแบบ boolean ทำให้ deterministic แม้จะเรียก `time.Now()`):
+
+```text
+a == b: true a.Equal(b): true
+a == c (monotonic stripped): false a.Equal(c): true
+2 * time.Second: 2s
+Sleep(5) slept for less than a millisecond: true
+time.DateTime: 2026-09-13 14:30:00
+time.DateOnly: 2026-09-13
+time.TimeOnly: 14:30:00
+Parse location: UTC
+ParseInLocation location: Asia/Bangkok same instant as UTC 07:30: 07:30:00
+Jan 31 + 1 month: 2026-03-03
+isExpired with injected clock: true
+```
+
+สังเกตว่าทุกการตรวจสอบข้างบนเป็น **ความสัมพันธ์** (`==` เทียบกับ `Equal`, "น้อยกว่าหนึ่ง millisecond", ชื่อ location, วันที่ปฏิทินคงที่) ไม่ใช่ค่าที่ผูกกับ wall-clock — เป็นวิธีเดียวที่จะทำให้ output ของตัวอย่างที่ใช้ `time.Now()` เหมือนเดิมทุกครั้งที่รัน
+
+## Monotonic reading เทียบกับ wall clock reading
+
+export const timeClockDiagram = `flowchart LR
+  Now["time.Now()"] --> T["time.Time value"]
+  T --> Wall["wall clock reading"]
+  T --> Mono["monotonic reading"]
+  Wall -- "affected by NTP / manual changes" --> Format["Format() / == comparison"]
+  Mono -- "always moves forward" --> SinceSub["Since() / Sub()"]
+  T -- "Round(0) strips monotonic" --> T2["Time value: wall clock only"]`;
+
+<Mermaid code={timeClockDiagram} title="Since/Sub อ่านจาก monotonic clock; Format กับ == เห็น wall clock ด้วย" />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
-| time.Time เป็น value type | immutable, safe to copy และ share | ต้องระวัง timezone ที่แต่ละ Time carry |
-| time.Duration (int64 nanoseconds) | arithmetic ชัดเจน — 5*time.Second | ต้อง multiply constant ชัดเจน ไม่ใช่แค่ "5" |
-| reference layout ("2006-01-02") | อ่านเข้าใจได้โดยดู example | ต่างจาก YYYY/MM/DD ของภาษาอื่น — ต้องจำ magic numbers |
+| time.Time เป็น value type | immutable, copy และแชร์ได้ปลอดภัย | ทุก Time พก timezone ที่ต้องคำนึงถึง |
+| time.Duration (int64 nanosecond) | คำนวณไม่กำกวม — `5*time.Second` | ต้องคูณด้วยค่าคงที่ที่มีชื่อ ไม่ใช่เขียน "5" เฉยๆ |
+| Reference layout ("2006-01-02") | self-documenting เมื่อรู้ตัวอย่างแล้ว | ต่างจาก YYYY/MM/DD ของภาษาอื่น — ต้องจำตัวเลขวิเศษ |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **time.Now() return UTC เสมอ** — ขึ้นกับ local timezone ของเครื่อง — ควรใช้ time.Now().UTC() เมื่อต้องการ UTC ชัดเจน
-- **time.Sleep(1*time.Second) precise** — OS scheduler อาจ sleep นานกว่าที่กำหนด เช่น 1.05s — ไม่ใช่ hard real-time
-- **time.Equal เหมือน ==** — time.Equal เปรียบเทียบ instant ในเวลา (ignore timezone), == เปรียบเทียบ memory layout ทั้งหมดรวม timezone
+- **time.Now() คืน UTC เสมอ** — ขึ้นกับ timezone ท้องถิ่นของเครื่อง; เรียก `time.Now().UTC()` เมื่อต้องการ UTC ชัดเจน
+- **time.Sleep(1 * time.Second) แม่นยำ** — OS scheduler อาจ sleep นานกว่าที่ขอ เช่น 1.05s — มันไม่ใช่ hard real-time
+- **time.Equal เหมือนกับ ==** — `time.Equal` เทียบจุดเวลา (ไม่สน timezone); `==` เทียบ memory layout ทั้งหมด รวม timezone ด้วย
+- **time.Sleep(5) sleep 5 วินาที** — มัน sleep 5 nanosecond; `Sleep` รับ `time.Duration` และ integer literal เปล่าๆ คือจำนวน nanosecond ไม่ใช่ "จำนวนเวลา" ที่ไม่สนหน่วย
+- **time.Tick leak เสมอถ้าไม่เรียก Stop()** — จริงก่อน Go 1.23 ตอนที่ Ticker ที่ไม่มีใครอ้างอิงไม่มีทาง GC ได้; ตั้งแต่ Go 1.23 garbage collector เก็บคืน Ticker หรือ Timer ที่ไม่มีใครอ้างอิงได้เอง จึงเป็นคำแนะนำที่ล้าสมัยแล้ว (Stop() ยังมีประโยชน์เพื่อหยุดการ tick ขณะที่ยังมี reference ค้างอยู่ แค่ไม่จำเป็นเพื่อกัน leak อีกต่อไป)
+- **AddDate(0, 1, 0) ตกวันเดียวกันของเดือนถัดไปเสมอ** — ใกล้ปลายเดือนมันอาจเลื่อนไปเดือนถัดไปอีกทีแทน (31 มกราคม + 1 เดือน ≠ 31 กุมภาพันธ์ ซึ่งไม่มีอยู่จริง)
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **net/http.Server**: `http.Server{ReadHeaderTimeout: 5 * time.Second}` ตั้งค่า timeout เป็น time.Duration เพื่อกัน slow-header client ค้าง connection ไว้
+> **net/http.Server**: `http.Server{ReadHeaderTimeout: 5 * time.Second}` ตั้ง timeout เป็น `time.Duration` เพื่อหยุด client ที่ส่ง header ช้าไม่ให้ค้าง connection ไว้
 >
-> **context.WithTimeout**: สร้าง deadline ที่ต้องส่งต่อข้าม function call — เช่นเรียก downstream service แล้วยกเลิกอัตโนมัติเมื่อหมดเวลา
+> **context.WithTimeout**: สร้าง deadline ที่ต้องส่งต่อข้าม function call — เช่น เรียก downstream service แล้วยกเลิกอัตโนมัติเมื่อหมดเวลา
 >
-> **net/http.TimeoutHandler**: สร้าง `context.WithTimeout` จาก `r.Context()` แล้ว select บน `ctx.Done()` เพื่อตัด request ที่ handler ทำงานช้าเกินกำหนด
+> **net/http.TimeoutHandler**: สร้าง `context.WithTimeout` จาก `r.Context()` แล้ว select บน `ctx.Done()` เพื่อตัด request เมื่อ handler ทำงานนานเกินไป
 
-<Callout title="Reference time ของ Go — Mon Jan 2 15:04:05 MST 2006">
-ช่วงเวลาอ้างอิงไม่ได้ถูกเลือกมาแบบสุ่ม แต่ละ component เป็นตัวเลขที่โดดเด่น: month=1, day=2, hour=15 (บ่าย 3), minute=4, second=5, year=2006 เรียงตามนาฬิกา 12 ชั่วโมง: 1/2/3:4:5 PM '06 ทำให้ layout อธิบายตัวเองได้ — เขียนสิ่งที่ต้องการให้ output เป็นโดยใช้ตัวเลขเหล่านั้นพอดี ข้อผิดพลาดที่พบบ่อยคือใช้ `YYYY` หรือ `DD` แบบภาษาอื่น ซึ่ง Go จะแปลเป็นตัวอักษร Y, M, D และจะปรากฏใน output ตามตัวอักษรนั้นๆ
+<Callout title="เวลาอ้างอิงของ Go — Mon Jan 2 15:04:05 MST 2006">
+เวลาอ้างอิงนี้ไม่ได้สุ่มมา แต่ละ component เป็นตัวเลขที่ต่างกัน: month=1, day=2, hour=15 (3 โมงเย็น), minute=4, second=5, year=2006 เรียงแบบนาฬิกา 12 ชั่วโมง: 1/2/3:4:5 PM '06 ทำให้ layout เป็น self-documenting — เขียน output ที่ต้องการโดยใช้ตัวเลขเป๊ะๆ พวกนี้ ความผิดพลาดที่พบบ่อยคือใช้ `YYYY` หรือ `DD` จากภาษาอื่น ซึ่งสำหรับ Go มันคือตัวอักษร Y, M, D เฉยๆ และจะปรากฏใน output ตามตัวอักษรนั้นเลย
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด `time` compile ผ่านไม่ว่าหน่วยหรือ timezone จะถูกหรือไม่ ดังนั้นควรตรวจด้วยตาเองทุกครั้ง:
+
+- `time.Sleep`, `context.WithTimeout` หรือ `time.NewTimer` รับ integer literal เปล่าๆ แทนที่จะเป็นค่าที่คูณด้วยค่าคงที่ `time.Xxx` หรือไม่?
+- โค้ดเทียบค่า `time.Time` สองตัวด้วย `==` แทนที่จะเป็น `.Equal()` หรือไม่ — โดยเฉพาะหลังจากตัวใดตัวหนึ่งผ่าน `Parse`, `Round` หรือ round-trip กับ database?
+- โค้ดเรียก `time.Parse` บน timestamp ที่รู้อยู่แล้วว่าเป็น local time ใน timezone ที่ระบุ ทั้งที่ควรใช้ `ParseInLocation` หรือไม่?
+- `AddDate(0, n, 0)` (หรือ `AddDate(n, 0, 0)`) ถูกรันใกล้ปลายเดือน (หรือ 29 กุมภาพันธ์) โดยไม่จัดการเรื่อง calendar overflow หรือไม่?
+- comment หรือคำอธิบายอ้างว่า `time.Tick`/`Ticker` ที่ไม่ได้ Stop "leak เสมอ" หรือไม่ — ข้อความนี้จริงก่อน Go 1.23 แต่ไม่ใช่เรื่องทั้งหมดอีกต่อไป?
+- โค้ด test เรียก `time.Now()` ตรงๆ ข้างใน function ที่กำลัง test แทนที่จะรับ clock ที่ inject เข้ามาหรือไม่?
+
+<SpotTheBug code={`func retryWithBackoff(attempt int, do func() error) error {
+	for i := 0; i < attempt; i++ {
+		if err := do(); err == nil {
+			return nil
+		}
+		time.Sleep(5) // wait 5 seconds before retrying
+	}
+	return fmt.Errorf("failed after %d attempts", attempt)
+}`}>
+
+comment บอกว่า "5 วินาที" แต่ `time.Sleep` รับ `time.Duration` — จำนวน nanosecond แบบ `int64` — และ `5` ที่ไม่มีหน่วยแปลว่า **5 nanosecond** ไม่ใช่ 5 วินาที loop retry นี้แทบไม่มี backoff delay เลย มันยิง `do()` เร็วเท่าที่ CPU จะทำได้ แก้ได้โดยคูณด้วยค่าคงที่ที่มีชื่อ:
+
+```go
+time.Sleep(5 * time.Second)
+```
+
+</SpotTheBug>
 
 export const quizTime = [
   {
-    q: "Reference time ของ Go ที่ใช้สำหรับการ format คืออะไร?",
+    q: "เวลาอ้างอิงของ Go ที่ใช้สำหรับ formatting คืออะไร?",
     options: [
       "Mon Jan 1 00:00:00 UTC 2000",
       "Mon Jan 2 15:04:05 MST 2006",
       "Fri Dec 31 23:59:59 UTC 1999",
       "Thu Jan 1 00:00:00 UTC 1970"
     ],
-    answer: 1
+    answer: 1,
+    explain: "เวลาอ้างอิงของ Go เข้ารหัสแต่ละ component ของ layout เป็นตัวเลขที่ต่างกัน (1/2 3:4:5 '06 เรียงแบบ 12-hour) ซึ่งเป็นสิ่งที่ทำให้ layout string เป็น self-documenting"
   },
   {
-    q: "การเรียกใดที่คืนค่า time.Time ใหม่ที่ 24 ชั่วโมงหลังจาก t?",
+    q: "\`\`\`go\ntime.Sleep(5)\nfmt.Println(\"done\")\n\`\`\`\nโค้ดนี้ sleep นานแค่ไหน?",
     options: [
-      "t.Sub(24 * time.Hour)",
-      "t.Add(24 * time.Hour)",
-      "time.Add(t, 24)",
-      "t.Plus(time.Day)"
+      "5 วินาที",
+      "5 มิลลิวินาที",
+      "5 nanosecond",
+      "compile ไม่ผ่าน — Sleep ต้องการหน่วย"
     ],
-    answer: 1
+    answer: 2,
+    explain: "time.Sleep รับ time.Duration ซึ่งเป็นแค่จำนวน nanosecond แบบ int64; literal เปล่าๆ 5 ที่ไม่มีตัวคูณ time.Xxx แปลว่า 5 nanosecond ไม่ใช่ 5 วินาที"
   },
   {
     q: "t.Sub(other) คืนค่าอะไร?",
     options: [
       "time.Time",
-      "int64 ในหน่วยวินาที",
+      "int64 เป็นวินาที",
       "time.Duration",
-      "float64 ในหน่วยชั่วโมง"
+      "float64 เป็นชั่วโมง"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Sub รับค่า Time สองตัวแล้วคืน Duration ระหว่างกัน; Add ทำตรงข้าม รับ Time กับ Duration แล้วคืน Time"
   },
   {
-    q: "ทำไมควรหลีกเลี่ยง time.Now() ใน playground / test snippet?",
+    q: "\`\`\`go\na := time.Now()\nb := a.Round(0)\nfmt.Println(a == b, a.Equal(b))\n\`\`\`\nโค้ดนี้พิมพ์อะไร?",
     options: [
-      "time.Now() ไม่มีใน Go 1.27+",
-      "คืนเวลาที่ binary ถูก compile",
-      "ให้ output ที่ไม่แน่นอนซึ่งเปลี่ยนแปลงทุกครั้งที่รัน",
-      "คืนค่าเที่ยงคืน UTC เสมอ"
+      "true true",
+      "false false",
+      "false true",
+      "true false"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Round(0) ถอด monotonic clock reading ออกจาก copy ทำให้ == (ที่เทียบ struct ทั้งหมด) เห็นความต่าง ในขณะที่ Equal (ที่เทียบแค่จุดเวลา) ยังรายงานว่าเท่ากัน"
+  },
+  {
+    q: "time.Parse(\"2006-01-02 15:04:05\", s) ถูกใช้กับ string ที่รู้อยู่แล้วว่าเป็น local time ใน Asia/Bangkok มีอะไรผิด?",
+    options: [
+      "ไม่มีอะไรผิด — Parse ตรวจจับ timezone ที่ถูกต้องจาก context เสมอ",
+      "Parse ตีความ string เป็น UTC ทำให้ Time ที่ได้คลาดเคลื่อนไปตาม offset ของ timezone จากจุดเวลาที่ตั้งใจ",
+      "Parse จะคืน error เพราะ layout ไม่มี timezone",
+      "layout string ต้องกลับด้านสำหรับ timestamp ของ Bangkok"
+    ],
+    answer: 1,
+    explain: "time.Parse สมมติว่าเป็น UTC เมื่อ layout ไม่มี component ของ timezone; ParseInLocation(layout, value, loc) ต่างหากที่ตีความ string เป็น wall-clock time ใน location ที่ระบุอย่างถูกต้อง"
+  },
+  {
+    q: "ทำไมควรรับ parameter `now func() time.Time` แทนการเรียก time.Now() ข้างใน function ที่ต้องการ test?",
+    options: [
+      "time.Now() ถูก deprecate ใน Go 1.27",
+      "มันให้ test แทนที่ด้วยเวลาคงที่ที่ deterministic แทนเวลาปัจจุบันจริง",
+      "มันทำให้ function รันเร็วขึ้น",
+      "func() time.Time ถูกบังคับโดย package testing"
+    ],
+    answer: 1,
+    explain: "การ inject clock เป็น parameter (หรือ interface เล็กๆ) หมายความว่า test ส่ง function ที่คืนเวลาคงที่ได้ ทำให้ logic ที่ขึ้นกับเวลา deterministic และรันซ้ำได้ผลเหมือนเดิม"
   }
 ];
 

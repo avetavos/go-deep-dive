@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Composition over inheritance
 
@@ -54,6 +56,19 @@ e.Name // compile error: ambiguous selector e.Name
 
 Promotion is resolved at compile time, and promoted methods join the outer type's method set — that is why `Employee` satisfies `Describer` below. The long form `e.Named.Name` is always valid too, even when the short form would be ambiguous.
 
+export const promotionDiagram = `flowchart TD
+  E["Employee (depth 0)"]
+  N["Named (depth 1, embedded)"]
+  E -->|embeds| N
+  E -.promoted.-> Name["e.Name"]
+  E -.promoted.-> Desc["e.Describe()"]
+  N --> NameField["Name field"]
+  N --> DescMethod["Describe() method"]
+  NameField -.-> Name
+  DescMethod -.-> Desc`;
+
+<Mermaid code={promotionDiagram} title="A field or method at a shallower embedding depth wins; two candidates at the same depth are ambiguous" />
+
 You can **override** a promoted method by declaring a method with the same name on the outer type:
 
 ```go
@@ -93,9 +108,151 @@ A critical distinction:
 
 Because there is no virtual dispatch, embedding does not allow polymorphism on the outer type. To get polymorphism, you still need an interface.
 
+## Embedding `*T` vs `T`
+
+Embedding a pointer instead of a value changes two things: whether the embedded type is shared or copied, and whether it can be nil. Its zero value is nil until something allocates it — and calling a promoted method through that nil pointer dereferences it:
+
+```go
+type Named struct{ Name string }
+
+func (n *Named) Hello() string { return "hi " + n.Name }
+
+type Employee struct {
+	*Named // embedded pointer — zero value is nil
+	Dept   string
+}
+
+func main() {
+	e := Employee{Dept: "eng"} // Named is nil, not allocated
+	fmt.Println(e.Dept)
+	fmt.Println(e.Hello()) // panics: promoted method dereferences a nil embedded pointer
+}
+```
+
+Running this on Go 1.26.5:
+
+```text
+eng
+panic: runtime error: invalid memory address or nil pointer dereference
+```
+
+Embedding `Named` by value instead avoids the nil case entirely, at the cost of copying the whole `Named` struct into every `Employee`. Embedding `*Named` avoids the copy and lets several outer values share one `Named`, but every promoted method call is one nil check away from this panic until something assigns the pointer.
+
+## Embedding an interface for partial mocks
+
+Struct embedding works with interface types too, not just concrete ones. Embedding an interface field gives the outer type every method of that interface for free — including the ones you never implement yourself, which forward straight to whatever the field holds. This is a common trick for a partial test double: override only the method the test cares about, and inherit the rest.
+
+```go
+type Store interface {
+	Get(key string) string
+	Put(key, val string)
+}
+
+// mockStore embeds the interface to get a partial implementation for free —
+// only override the method the test cares about.
+type mockStore struct {
+	Store // nil — any unoverridden method panics if called
+}
+
+func (m *mockStore) Get(key string) string { return "stub-" + key }
+
+func main() {
+	var s Store = &mockStore{}
+	fmt.Println(s.Get("x")) // stub-x — overridden, fine
+
+	s.Put("x", "y") // panics: Put is not overridden, falls through to the nil embedded Store
+}
+```
+
+```text
+stub-x
+panic: runtime error: invalid memory address or nil pointer dereference
+```
+
+`mockStore` satisfies `Store` the moment it embeds it — the compiler is happy because the embedded interface's method set covers everything `Store` requires — but the embedded field itself is nil until you assign a real implementation. Calling any method you did not override reaches into that nil field and panics. This pattern is deliberate and useful for stubbing exactly one method, but every unoverridden call is a live landmine, not a safe default.
+
+## JSON flattening through embedding
+
+`encoding/json` promotes embedded struct fields into the parent's JSON object when the embedded field has no tag of its own — this is often exactly what an API needs, and easy to trigger by accident when it is not:
+
+```go
+type Address struct {
+	City string `json:"city"`
+}
+
+type Person struct {
+	Address // embedded, no json tag — fields flatten into the parent object
+	Name    string `json:"name"`
+}
+
+func main() {
+	p := Person{Address: Address{City: "Bangkok"}, Name: "Ada"}
+	b, _ := json.Marshal(p)
+	fmt.Println(string(b))
+}
+```
+
+```text
+{"city":"Bangkok","name":"Ada"}
+```
+
+`Address`'s fields appear directly in `Person`'s JSON object, with no `"address": {...}` nesting — the same field-promotion rule that lets you write `p.City` in Go also flattens the JSON. Give the embedded field a tag (`Address \`json:"address"\``) to get a nested object instead; that also switches it from an *embedded* field to a *named* one, so `p.City` stops compiling and becomes `p.Address.City`.
+
+## Method sets when embedding `T` vs `*T`
+
+Whether embedding by value or by pointer, promoted methods join the outer type's method set according to the usual value/pointer rule — but which methods those are depends on the *embedded* type's receivers, and the result can be surprising. Embedding `Named` by value into `Employee`, when `Named`'s only method has a pointer receiver:
+
+```go
+type Named struct{ Name string }
+
+func (n *Named) Hello() string { return "hi " + n.Name }
+
+type Sayer interface{ Hello() string }
+
+type Employee struct {
+	Named // embedded by value
+	Dept  string
+}
+
+func main() {
+	var _ Sayer = Employee{} // Employee's method set has only value-receiver promoted methods
+}
+```
+
+```text
+./main.go:15:16: cannot use Employee{} (value of struct type Employee) as Sayer value in variable declaration: Employee does not implement Sayer (method Hello has pointer receiver)
+```
+
+`Employee` (value) does not satisfy `Sayer`, because `Hello` needs `*Named`, and an embedded-by-value `Named` field only promotes its pointer-receiver methods to `*Employee`, not to `Employee`. `var _ Sayer = &Employee{}` compiles fine — the same rule that governs a type's own methods (`T`'s method set vs `*T`'s) applies recursively through embedding.
+
+## A leaked Lock/Unlock from an embedded mutex
+
+Embedding `sync.Mutex` is a popular shortcut to get lock/unlock without naming a field — but embedding promotes `Lock` and `Unlock` into the *exported* method set of the outer type, handing every caller direct access to the internal lock:
+
+```go
+// Bad: embedding sync.Mutex promotes Lock/Unlock into Cache's exported API —
+// any caller can lock/unlock the internal mutex directly.
+type Cache struct {
+	sync.Mutex
+	data map[string]string
+}
+
+func main() {
+	c := &Cache{data: map[string]string{}}
+	c.Lock() // Lock is part of Cache's public method set — leaked
+	c.data["a"] = "1"
+	c.Unlock()
+}
+```
+
+This compiles and runs without a race here, but it is a design bug: nothing stops a caller outside `Cache` from calling `c.Lock()` and never unlocking, or locking around code that also calls a `Cache` method that locks internally — an instant deadlock. Use a named, unexported field instead — `mu sync.Mutex` — so only `Cache`'s own methods can reach the lock, and the locking discipline stays entirely inside the type that owns it.
+
 export const embeddingCode = `package main
 
-import "fmt"
+import (
+\t"encoding/json"
+\t"fmt"
+)
 
 type Named struct {
 \tName string
@@ -135,6 +292,28 @@ func print(d Describer) {
 \tfmt.Println(d.Describe()) // promoted Describe still calls Named's String, not Employee's
 }
 
+// Store is a minimal dependency; mockStore embeds it to get a partial fake for free.
+type Store interface {
+\tGet(key string) string
+\tPut(key, val string)
+}
+
+type mockStore struct {
+\tStore // only Get is overridden below; calling Put would panic on this nil embedded Store
+}
+
+func (m *mockStore) Get(key string) string { return "stub-" + key }
+
+// Address is embedded without a json tag, so its fields flatten into Person's JSON object.
+type Address struct {
+\tCity string \`json:"city"\`
+}
+
+type Person struct {
+\tAddress
+\tName string \`json:"name"\`
+}
+
 func main() {
 \te := Employee{
 \t\tNamed:      Named{Name: "Alice"},
@@ -144,6 +323,13 @@ func main() {
 \tfmt.Println(e.Name)       // Alice
 \tfmt.Println(e.Describe()) // Name: Named(Alice) — Named's own String, not Employee's override
 \tprint(e)
+
+\tvar s Store = &mockStore{}
+\tfmt.Println(s.Get("x")) // stub-x — overridden, safe to call
+
+\tp := Person{Address: Address{City: "Bangkok"}, Name: "Ada"}
+\tb, _ := json.Marshal(p)
+\tfmt.Println(string(b)) // {"city":"Bangkok","name":"Ada"} — embedded fields flatten into the parent object
 }`;
 
 <Playground code={embeddingCode} />
@@ -168,6 +354,40 @@ func main() {
 >
 > `bufio.ReadWriter` embeds `*bufio.Reader` and `*bufio.Writer` directly, promoting their `Read`/`Write` methods (and others) so callers reach both through a single `ReadWriter` value, with no duplicated code.
 
+## Reading AI-generated code
+
+When generated code embeds a type, check for these before trusting it:
+
+- Is the embedded field a pointer (`*T`)? If so, is it guaranteed to be non-nil before any promoted method is called? A zero-value struct with an embedded `*T` field has a nil `T` until something assigns it.
+- Does the embedded field's type include `sync.Mutex`, `sync.RWMutex`, or similar? If it is not a named, unexported field (`mu sync.Mutex`), `Lock`/`Unlock` leak into the outer type's exported API.
+- Is an interface embedded to build a partial mock or decorator? Every method not explicitly overridden forwards to the embedded field, which panics if that field was never assigned.
+- Does an embedded struct field lack a JSON tag when the intent was a nested `"address": {...}` object? Without a tag, its fields flatten into the parent object instead.
+- When embedding by value, does the embedded type's only relevant method have a pointer receiver? If so, the *value* form of the outer type may not satisfy an interface that the *pointer* form does — check which one the code actually uses.
+
+<SpotTheBug code={`type Cache struct {
+	sync.Mutex
+	data map[string]int
+}
+
+func NewCache() *Cache {
+	return &Cache{data: make(map[string]int)}
+}
+
+func (c *Cache) Inc(key string) {
+	c.Lock()
+	defer c.Unlock()
+	c.data[key]++
+}
+
+func main() {
+	c := NewCache()
+	c.Lock() // caller reaches into Cache's internal lock directly
+	c.Inc("requests")
+	c.Unlock()
+}`}>
+`Cache` embeds `sync.Mutex` directly, which promotes `Lock` and `Unlock` into `Cache`'s own exported method set — any caller, not just `Cache`'s methods, can call `c.Lock()`. In `main`, the caller locks the mutex and then calls `c.Inc`, which tries to `Lock` again internally — `sync.Mutex` is not reentrant, so the goroutine blocks on itself forever: `fatal error: all goroutines are asleep - deadlock!`. The fix is a named, unexported field — `mu sync.Mutex` — so only `Cache`'s own methods can reach the lock, and callers can never interfere with its internal locking discipline.
+</SpotTheBug>
+
 <Callout title="Embedding is composition, not inheritance">
 There is no virtual dispatch on the outer type. `Named.Describe()` calls `n.String()` on itself, so it always resolves to `Named`'s own `String` — even when the concrete value is an `Employee` with its own `String()` override, and even when `Describe` is called through the `Describer` interface. Compare that to `d.String()` called directly on the interface: it dispatches to `Employee`'s override, because that call does not go through `Named` at all. This is intentional: Go's embedding is a code-reuse mechanism, not a polymorphism mechanism. For polymorphism, define an interface and let both types satisfy it independently.
 </Callout>
@@ -181,17 +401,41 @@ export const quizEmbedding = [
       "Only `e.Named.Name` — the short form is not available for embedded fields",
       "`e.Get(\"Name\")` — promoted fields use a generic accessor"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Both forms reach the same field. The short form is available because there is no shallower field or method also named Name; the long form always works regardless."
   },
   {
-    q: "You embed `Named` in `Employee` and also declare `func (e Employee) Describe() string`. Which method does `e.Describe()` call?",
+    q: "```go\ntype Named struct{ Name string }\nfunc (n *Named) Hello() string { return \"hi \" + n.Name }\n\ntype Employee struct {\n    *Named\n    Dept string\n}\n\ne := Employee{Dept: \"eng\"}\nfmt.Println(e.Hello())\n```\nWhat happens?",
     options: [
-      "Named's Describe — embedded methods always take precedence",
-      "Employee's Describe — the outer type's method shadows the promoted one",
-      "Both are called and the results are concatenated",
-      "A compile error — you cannot override a promoted method"
+      "Prints `hi ` — Name defaults to an empty string",
+      "panic: runtime error: invalid memory address or nil pointer dereference",
+      "Compile error — Employee does not implement Hello",
+      "Prints `hi eng` — Dept is used as a fallback"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Employee embeds *Named by pointer, and its zero value leaves that pointer nil — nothing in the literal assigns it. Calling the promoted Hello dereferences the nil *Named to read n.Name, which panics exactly with this message."
+  },
+  {
+    q: "```go\ntype Cache struct {\n    sync.Mutex\n    data map[string]string\n}\n```\nWhat is the problem with embedding `sync.Mutex` directly like this?",
+    options: [
+      "It does not compile — sync.Mutex cannot be embedded",
+      "Lock and Unlock are promoted into Cache's exported method set, so any external caller can lock/unlock it directly",
+      "It makes every method on Cache require a pointer receiver",
+      "It silently copies the mutex on every method call"
+    ],
+    answer: 1,
+    explain: "Embedding promotes Lock/Unlock to Cache's own public API. A named, unexported field (mu sync.Mutex) keeps the lock private to Cache's own methods, preventing callers from locking around a Cache method that also locks internally."
+  },
+  {
+    q: "```go\ntype Named struct{ Name string }\nfunc (n *Named) Hello() string { return \"hi \" + n.Name }\ntype Sayer interface{ Hello() string }\n\ntype Employee struct {\n    Named // embedded by value\n    Dept  string\n}\n\nvar _ Sayer = Employee{}\n```\nDoes this compile?",
+    options: [
+      "Yes — Employee always gets every method of Named, promoted",
+      "No — Employee (value) does not implement Sayer; Hello has a pointer receiver and Named is embedded by value",
+      "Yes, but only because Sayer has just one method",
+      "No — Sayer must be embedded, not implemented"
+    ],
+    answer: 1,
+    explain: "Embedding Named by value only promotes value-receiver methods to Employee itself; pointer-receiver methods like Hello are promoted to *Employee. var _ Sayer = &Employee{} would compile — the same T vs *T method-set rule applies recursively through embedding."
   },
   {
     q: "Interface `io.ReadWriter` embeds `io.Reader` and `io.Writer`. A type that satisfies `io.ReadWriter` automatically satisfies…",
@@ -201,17 +445,19 @@ export const quizEmbedding = [
       "io.Writer only",
       "Both io.Reader and io.Writer"
     ],
-    answer: 3
+    answer: 3,
+    explain: "Interface embedding is set union: satisfying the composed interface requires (and therefore implies) satisfying every interface embedded inside it."
   },
   {
-    q: "What is the main difference between Go embedding and Java inheritance?",
+    q: "A `Person` struct embeds `Address` (no json tag) and both are marshaled with `encoding/json`. What does the JSON look like?",
     options: [
-      "Go embedding is slower because it uses reflection internally",
-      "Go embedding provides virtual dispatch; Java inheritance does not",
-      "Go embedding is composition with promoted methods; there is no virtual dispatch or type hierarchy",
-      "Go embedding requires the outer type to list every promoted method explicitly"
+      "`{\"address\":{\"city\":\"Bangkok\"},\"name\":\"Ada\"}` — nested under an address key",
+      "`{\"city\":\"Bangkok\",\"name\":\"Ada\"}` — Address's fields flatten into Person's object",
+      "A marshal error — embedded structs cannot be serialized",
+      "`{\"Address\":{\"City\":\"Bangkok\"},\"name\":\"Ada\"}` — nested under the Go field name"
     ],
-    answer: 2
+    answer: 1,
+    explain: "encoding/json follows the same field-promotion rule Go itself uses: an embedded field with no tag of its own promotes its fields into the parent object, so City appears directly in Person's JSON, not nested."
   }
 ];
 

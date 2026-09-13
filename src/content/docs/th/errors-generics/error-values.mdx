@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## interface error
 
@@ -82,6 +84,128 @@ Sentinel เหมาะที่สุดสำหรับเงื่อน�
 
 วินัยนี้ทำให้โค้ดมองเห็นทุก call ที่อาจเกิด error ได้ที่ callsite เมื่ออ่าน function ของ Go คุณจะเห็นชัดเจนว่า operation ใดที่อาจล้มเหลวได้และ caller ทำอะไรกับแต่ละกรณี — ไม่มีการ propagate แบบ implicit ไม่มีเส้นทาง exception ที่มองไม่เห็น
 
+## กับดัก typed-nil interface
+
+ค่า `error` เป็น interface: คู่ (type, value) มันจะเป็น `nil` ก็ต่อเมื่อ**ทั้งคู่**ทั้ง type และ value ไม่ได้ถูกกำหนดเท่านั้น สิ่งนี้กลายเป็นกับดักทันทีที่ function ประกาศตัวแปร pointer แบบมี type แล้วคืนค่ามันตรง ๆ แทนที่จะคืน `nil` เปล่า ๆ:
+
+```go
+type MyError struct{ msg string }
+
+func (e *MyError) Error() string { return e.msg }
+
+func mightFail(fail bool) error {
+	var e *MyError // nil *MyError
+	if fail {
+		e = &MyError{msg: "boom"}
+	}
+	return e // BUG: always a non-nil error interface, even when e is nil
+}
+```
+
+`mightFail(false)` คืน `error` ที่มี type เป็น `*MyError` และมี value เป็น `nil` — นั่นคือ interface ที่ไม่ nil ที่ถือ pointer เป็น nil อยู่ข้างใน ไม่ใช่ nil interface `err == nil` จะได้ **false**:
+
+export const errorInterfaceLayoutDiagram = `flowchart LR
+  subgraph A["nil interface -- err == nil is true"]
+    A1["type = none"]
+    A2["value = none"]
+  end
+  subgraph B["typed nil in interface -- err == nil is false"]
+    B1["type = *MyError"]
+    B2["value = nil"]
+  end
+  subgraph C["real error -- err == nil is false"]
+    C1["type = *MyError"]
+    C2["value = pointer"]
+  end`;
+
+<Mermaid code={errorInterfaceLayoutDiagram} title="error คือคู่ (type, value) -- จะเป็น nil ก็ต่อเมื่อทั้งสองส่วนไม่ถูกกำหนดเลย" />
+
+export const typedNilCode = `package main
+
+import "fmt"
+
+// MyError is a normal custom error type.
+type MyError struct{ msg string }
+
+func (e *MyError) Error() string { return e.msg }
+
+// mightFail always returns the *MyError interface type — even on the
+// success path, where the underlying pointer is nil.
+func mightFail(fail bool) error {
+\tvar e *MyError // nil *MyError
+\tif fail {
+\t\te = &MyError{msg: "boom"}
+\t}
+\treturn e // BUG: always a non-nil error interface
+}
+
+func main() {
+\terr := mightFail(false)
+\tfmt.Println(err == nil)        // false — surprising!
+\tfmt.Printf("%v, %T\\n", err, err)
+
+\t// The fix: return a bare nil, not a nil pointer of a concrete type.
+\tvar clean error
+\tif false {
+\t\tclean = &MyError{msg: "boom"}
+\t}
+\tfmt.Println(clean == nil) // true
+}`;
+
+<Playground code={typedNilCode} />
+
+ทางแก้คือให้ถือ `*MyError` แบบ local เท่านั้น แล้วคืน `error`-typed `nil` เปล่า ๆ ในเส้นทางที่สำเร็จ — เหมือนที่ `clean` ทำด้านบน นี่คือต้นตอที่พบบ่อยที่สุดของ bug แบบ "ทำไม `if err != nil` ทำงานทั้งที่ไม่มีอะไรผิดพลาด?" ในโค้ด Go ไม่ว่าจะเขียนเองหรือ AI เขียน
+
+## Shadowing err และจัดการทีเดียวจบ
+
+`:=` จะประกาศตัวแปร**ใหม่**ทุกครั้งที่มีชื่ออย่างน้อยหนึ่งชื่อทางซ้ายที่ยังไม่เคยมีมาก่อน — รวมถึงใน init clause ของ `if` ด้วย นี่เป็นสาเหตุที่พบบ่อยของการทำ error หายไปเงียบ ๆ:
+
+```go
+func run() error {
+	var err error
+	if v, err := step(); err != nil { // BUG: := creates a new inner err
+		fmt.Println("inner saw:", v, err)
+	}
+	return err // always nil here, even though step() failed
+}
+```
+
+การรันโค้ดนี้จะพิมพ์ `inner saw: 0 step failed` ตามด้วย `run() returned: <nil>` — `err` ตัวนอกไม่เคยถูกแตะต้องเลย เพราะ `if v, err := step(); ...` ทำให้เกิด shadow ด้วยตัวแปรที่ scope อยู่แค่ใน block นั้น `go vet` ไม่จับ shadowing แบบนี้ (analyzer ชื่อ `shadow` เป็นเครื่องมือแยกต่างหาก ไม่ได้เปิดใช้เป็น default) การตรวจทุก `:=` ที่อยู่ใน `if`/`for` ข้าง ๆ `err` ที่มีอยู่แล้วใน scope จึงเป็นนิสัยที่ต้องรักษาไว้ด้วยตัวเอง
+
+วินัยที่เกี่ยวข้องกันคือการ**จัดการทุก error แค่ครั้งเดียว** เลือกอย่างใดอย่างหนึ่ง: return มัน (จะ wrap ก่อนก็ได้), log มัน, หรือ recover จากมัน — ห้ามทำมากกว่าหนึ่งอย่าง และห้ามทำน้อยกว่านั้น การทั้ง log *และ* return error ตัวเดียวกันจะทำให้เกิด log ซ้ำซ้อนขึ้นไปตาม call stack ส่วนการไม่ทำอะไรเลยก็ทำให้ความล้มเหลวจริงหายไปเงียบ ๆ
+
+## err == io.EOF ยังถือว่า idiomatic
+
+`errors.Is` เป็นเครื่องมือเอนกประสงค์สำหรับเทียบ sentinel เพราะมันรอดจากการ wrap ได้ `io.EOF` เป็นข้อยกเว้นที่ตั้งใจและมีเอกสารรองรับชัดเจน: contract ของ `io.Reader` รับประกันว่า `io.EOF` จะถูกคืนตรง ๆ ไม่ถูก wrap เลย ดังนั้นโค้ดเก่า ๆ จึงยังเทียบมันตรง ๆ ได้:
+
+```go
+n, err := r.Read(buf)
+if err == io.EOF {
+	// end of stream, not a failure
+}
+```
+
+`errors.Is(err, io.EOF)` ก็ใช้ได้เช่นกันและไม่เคยผิดเลย — แนะนำให้ใช้ในโค้ดใหม่เพื่อความสม่ำเสมอกับการเช็ก sentinel อื่น ๆ ทั้งหมด — แต่ก็ไม่ต้องแปลกใจถ้าเห็น `== io.EOF` ในโค้ดที่ใกล้ชิดกับ stdlib มันไม่ใช่ bug
+
+## Behaviour interfaces
+
+**behaviour interface** (เรียกอีกอย่างว่า opaque error check) ให้ caller ถามได้ว่า "error นี้ทำ X ได้ไหม?" โดยไม่ต้องรู้ concrete type ของมัน — มีประโยชน์เมื่อ error type ที่ไม่เกี่ยวข้องกันหลายตัวจาก package ต่างกันสามารถตอบคำถามเดียวกันได้ทั้งหมด:
+
+```go
+// timeout is a behaviour interface: any error that can answer "was this a
+// timeout?" satisfies it, regardless of its concrete type or package.
+type timeout interface {
+	Timeout() bool
+}
+
+func isTimeout(err error) bool {
+	var t timeout
+	return errors.As(err, &t) && t.Timeout()
+}
+```
+
+`errors.As` จะเดินไปตาม chain มองหาอะไรก็ตามที่ implement interface `timeout` — ไม่ใช่ type ที่เจาะจง นี่คือวิธีที่ `Timeout() bool` ของ `net.Error` ถูกออกแบบมาให้ใช้: error type ต่าง ๆ มากมายทั้งใน standard library และ third-party code implement มันไว้ caller จึงเช็กที่ behaviour ไม่ใช่ type
+
 export const errorValuesCode = `package main
 
 import (
@@ -126,6 +250,31 @@ func main() {
 
 <Playground code={errorValuesCode} />
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ AI generate return หรือเช็ก error ให้มองหาสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- function ที่ประกาศตัวแปร pointer แบบมี type (`var e *MyError`) เคย `return e` ตรง ๆ ในเส้นทางที่สำเร็จหรือเปล่า แทนที่จะ return `nil` เปล่า ๆ? นั่นคือกับดัก typed-nil ด้านบน
+- การเทียบ sentinel ใช้ `==` ทั้งที่ error อาจผ่าน `fmt.Errorf("...: %w", err)` มาจากที่ไหนสักแห่งใน call chain ก่อนหน้าหรือเปล่า? `==` จะพังทันทีที่มี wrapper เข้ามา ส่วน `errors.Is` ไม่พัง
+- `err` ถูกประกาศซ้ำด้วย `:=` ข้างใน `if`/`for` ที่มี `err` อยู่ใน scope อยู่แล้วหรือเปล่า? เช็กดูว่า `err` ตัวนอกถูกอ่านค่าจริงในภายหลังหรือไม่
+- ทุก error ถูกจัดการแค่ครั้งเดียวหรือเปล่า? สังเกต `log.Println(err)` ที่ตามด้วย `return err` ทันทีใน function เดียวกัน — นั่นคือการ log ความล้มเหลวเดียวกันซ้ำสองครั้งขณะที่มัน propagate ขึ้นไปตาม stack
+- การเช็ก behaviour ใช้ type assertion ตรง ๆ (`err.(timeout)`) แทนที่จะใช้ `errors.As(err, &t)` หรือเปล่า? type assertion จะพลาด interface นั้นทันทีที่ error ถูก wrap แม้แต่ครั้งเดียว
+
+<SpotTheBug code={`var ErrNotFound = errors.New("not found")
+
+func find(id string) error {
+	return fmt.Errorf("find %s: %w", id, ErrNotFound)
+}
+
+func main() {
+	err := find("42")
+	if err == ErrNotFound {
+		fmt.Println("not found")
+	}
+}`}>
+`find` wrap `ErrNotFound` ด้วย `%w` ทำให้ `err` เป็น `*fmt.wrapError` ไม่ใช่ `ErrNotFound` เอง `err == ErrNotFound` เทียบ wrapper นั้นกับ sentinel ด้วย identity แล้วได้ `false` — โค้ดใน `if` ไม่ทำงานเลย ทั้งที่ `ErrNotFound` อยู่ใน chain จริง ๆ ตรวจสอบแล้วบน 1.26.5: พิมพ์ `err == ErrNotFound` ได้ `false`, `errors.Is(err, ErrNotFound)` ได้ `true` ทางแก้คือใช้ `errors.Is(err, ErrNotFound)` ซึ่งเดินไปตาม chain แทนที่จะเทียบแค่ค่าชั้นนอกสุด
+</SpotTheBug>
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -161,17 +310,30 @@ export const quizErrorValues = [
       "error ถูกละเว้น",
       "caller ควรลองใหม่"
     ],
-    answer: 1
+    answer: 1,
+    explain: "nil คือ zero value ของ error interface ตาม convention แล้ว error เป็น nil หมายถึงการเรียกสำเร็จและค่า return ตัวอื่นใช้ได้จริง"
   },
   {
-    q: "function ใดสร้าง error value จาก string คงที่?",
+    q: "```go\ntype MyError struct{ msg string }\nfunc (e *MyError) Error() string { return e.msg }\n\nfunc mightFail(fail bool) error {\n    var e *MyError\n    if fail {\n        e = &MyError{msg: \"boom\"}\n    }\n    return e\n}\n\nfunc main() {\n    err := mightFail(false)\n    fmt.Println(err == nil)\n}\n```\nโค้ดนี้พิมพ์อะไร?",
     options: [
-      "fmt.Errorf",
-      "errors.New",
-      "log.Fatal",
+      "true",
+      "false",
+      "compile error",
       "panic"
     ],
-    answer: 1
+    answer: 1,
+    explain: "mightFail คืนตัวแปร e ที่มี type เป็น *MyError ตรง ๆ แม้ e จะเป็น nil pointer ก็ตาม error interface ที่ return กลับมามี concrete type (*MyError) เสมอ จึงไม่ใช่ nil interface — err == nil ได้ false"
+  },
+  {
+    q: "```go\nfunc run() error {\n    var err error\n    if v, err := step(); err != nil {\n        fmt.Println(\"inner saw:\", v, err)\n    }\n    return err\n}\n```\nสมมติ step() คืน error ที่ไม่ใช่ nil, run() จะ return อะไร?",
+    options: [
+      "error ที่ step() คืนมา",
+      "nil",
+      "compile error: err declared and not used",
+      "panic: nil pointer dereference"
+    ],
+    answer: 1,
+    explain: ":= ใน init clause ของ if ประกาศ err ตัวใหม่ที่ scope อยู่แค่ใน block นั้น เพราะ v เป็นชื่อใหม่ err ตัวนอกที่ประกาศด้วย var err error ไม่เคยถูก assign เลย run() จึง return nil เสมอไม่ว่า step() จะทำอะไร"
   },
   {
     q: "sentinel error ประกาศด้วยรูปแบบใด?",
@@ -181,7 +343,8 @@ export const quizErrorValues = [
       "type ErrX struct{}",
       "func ErrX() error"
     ],
-    answer: 1
+    answer: 1,
+    explain: "sentinel คือตัวแปรระดับ package ที่ถือ error value คงที่ สร้างครั้งเดียวด้วย errors.New เพื่อให้ caller เทียบด้วย identity ได้ (ควรใช้ errors.Is)"
   },
   {
     q: "ควรใช้ fmt.Errorf แทน errors.New เมื่อใด?",
@@ -191,7 +354,8 @@ export const quizErrorValues = [
       "ต้องการ sentinel ระดับ global",
       "ทั้ง ก และ ข"
     ],
-    answer: 3
+    answer: 3,
+    explain: "fmt.Errorf ใส่ runtime values เข้าไปในข้อความได้ และเมื่อใช้ %w จะ wrap error เดิมไว้ให้ errors.Is/errors.As ยังหาเจอ ส่วน errors.New ได้แค่ string คงที่ที่ไม่ถูก wrap"
   }
 ];
 

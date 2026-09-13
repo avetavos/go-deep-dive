@@ -11,6 +11,10 @@ import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import Mermaid from '../../../../components/Mermaid.astro';
 
+## แก่นของโมดูลนี้: pass by value เสมอ
+
+ทุกการเรียก function ใน Go copy argument ของมันเสมอ ไม่มีข้อยกเว้น ไม่มี reference-passing mode ที่ซ่อนอยู่ และไม่มีทาง opt out ได้เลย สิ่งที่ทำให้งงในตอนแรกคือ type บางตัวเป็น handle เล็ก ๆ ที่บังเอิญชี้ไปยังข้อมูลที่แชร์กัน — การ copy handle ก็ยังเป็นการ copy อยู่ดี มันแค่ทิ้งข้อมูลที่มันชี้ไปให้แชร์กันต่อ ทุกความเซอร์ไพรส์ในโมดูลนี้ (ทำไม slice mutation ถึงมองเห็นได้ข้าม function call แต่ append ไม่ ทำไมการเขียน map ในฟังก์ชันถึงกระทบ caller ทำไมการเขียน struct field ถึงไม่กระทบ) ล้วนมาจากข้อเท็จจริงเดียวนี้ทั้งนั้น เรียนมันที่นี่ก่อน แล้ว Structs, Slices, Maps, และ Pointers แต่ละบทจะกลายเป็นแค่ "อะไรถูก copy" ไม่ใช่กฎสี่ข้อที่ไม่เกี่ยวข้องกันที่ต้องท่องจำ
+
 ## ภาพรวม Type ใน Go
 
 ทุกค่าใน Go มี type แบบ static ที่กำหนดตั้งแต่ compile time ซึ่ง Go แบ่ง type ออกเป็นสองกลุ่มหลัก:
@@ -18,6 +22,17 @@ import Mermaid from '../../../../components/Mermaid.astro';
 **Value types** — ตัวแปรเก็บข้อมูลโดยตรง การ assign ค่าจะ copy ข้อมูลทั้งหมด ได้แก่ boolean, ตัวเลข (`int`, `int64`, `float64`, `uint8`, …), และ `string` รวมถึง composite value types อย่าง **array** และ **struct**
 
 **Reference-like types** — ตัวแปรเก็บ handle ขนาดเล็กที่ชี้ไปยังข้อมูลจริงซึ่งถูก allocate ไว้ที่อื่น การ assign จะ copy ตัว handle เอง ไม่ใช่ข้อมูลข้างใน — ส่วนนี้เป็น copy ที่ถูกต้อง เหมือน copy ค่าอื่น ๆ ทั่วไป **slice** (header แบบ pointer + len + cap), **map** และ **channel** (pointer เดียว), **function**, และ **pointer** (1 word) ล้วนทำงานแบบนี้ และเพราะ handle ทั้งสอง copy ยังชี้ไปข้อมูลชุดเดียวกัน การ mutation ผ่าน handle หนึ่งจะมองเห็นได้ผ่านอีก handle ด้วย **string** ก็สร้างด้วยวิธีเดียวกันภายใน — header แบบ pointer + len — แต่พฤติกรรมจากภายนอกเหมือน value type: ข้อมูลใน string เป็น immutable จึงไม่มีทางเกิด shared-mutation ที่น่าแปลกใจแบบ slice กับ map
+
+ความ immutable นั่นแหละคือเหตุผลที่ `[]byte(s)` ต้อง copy: การแปลง string เป็น byte slice ให้บางอย่างที่ mutate ได้กับเรา และวิธีเดียวที่จะรับประกันว่า string ต้นฉบับยังคง immutable ต่อไปคือให้ backing array ของตัวเอง ไม่ใช่แค่ view เข้าไปใน string:
+
+```go
+s := "hello"
+b := []byte(s)
+b[0] = 'H'
+fmt.Println(s, string(b)) // hello Hello — s never changed; b was an independent copy from the start
+```
+
+verify บน 1.26.5 แล้ว: ได้ `hello Hello` เป๊ะ การแปลงกลับด้วย `string(b)` ก็ copy อีกครั้งด้วยเหตุผลย้อนกลับกัน — เมื่ออะไรก็ตามเป็น `string` แล้ว ไม่มีอะไรจะ mutate มันผ่าน handle อื่นได้อีกเลย ดังนั้น runtime จึงไม่สามารถแค่เปลี่ยน label backing array ของ `b` ให้เป็น string โดยไม่ copy ก่อนได้
 
 export const typeTaxonomyDiagram = `flowchart TD
   Root["Go Type Taxonomy"]
@@ -107,7 +122,8 @@ export const quizIndex = [
       "struct { X, Y int }",
       "*int (pointer)"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Struct เป็น value type: การ assign จะ copy ทุก field slice, map, และ pointer ล้วน reference-like — การ assign copy แค่ handle เล็ก ๆ (header หรือ address) ที่ยังชี้ไปข้อมูลชุดเดียวกันอยู่ดี"
   },
   {
     q: "Go จะ print อะไรเมื่อคุณอ่าน map key ที่ยังไม่เคยกำหนดค่า?",
@@ -117,7 +133,8 @@ export const quizIndex = [
       "Error value",
       "Zero value ของ value type ที่ map นั้นใช้"
     ],
-    answer: 3
+    answer: 3,
+    explain: "การอ่าน map key ที่ไม่มีอยู่ไม่เคย panic เลย — มันคืน zero value ของ value type ของ map นั้นเสมอ (0 สำหรับ int, \"\" สำหรับ string เป็นต้น)"
   },
   {
     q: "ทั้ง `[]Point` slice และ `[3]Point` array เก็บค่า Point ความแตกต่างหลักคืออะไร?",
@@ -127,7 +144,8 @@ export const quizIndex = [
       "Array มีขนาดคงที่ตั้งแต่ compile time; slice ขยายได้ dynamic",
       "เหมือนกันทุกอย่าง — วงเล็บเป็นแค่ syntax sugar"
     ],
-    answer: 2
+    answer: 2,
+    explain: "ความยาวของ array เป็นส่วนหนึ่งของ type ของมัน ([3]Point กับ [4]Point คือคนละ type) และคงที่ตลอดไป slice คือ dynamic view ที่หนุนด้วย array และโตได้ผ่าน append"
   }
 ];
 

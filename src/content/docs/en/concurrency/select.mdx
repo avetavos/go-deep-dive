@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The select statement
 
@@ -40,6 +42,33 @@ default:
 
 This is the idiomatic way to poll a channel without blocking.
 
+export const selectFlowDiagram = `flowchart TD
+  Start["select { ... }"] --> Ready{"Any case ready?"}
+  Ready -->|"exactly one ready"| Run["run that case"]
+  Ready -->|"multiple ready"| Rand["pick one at random"]
+  Ready -->|"none ready"| HasDefault{"default present?"}
+  HasDefault -->|yes| Def["run default immediately"]
+  HasDefault -->|no| Block["block the goroutine until a case becomes ready"]`;
+
+<Mermaid code={selectFlowDiagram} title="select's decision process: random among ready cases, default only when nothing is ready, block only when there is no default" />
+
+## The busy-spin default anti-pattern
+
+A `default` case is tempting to reach for whenever you want to "check and move on," but wrapping it in a bare `for` loop turns a cheap non-blocking check into a CPU-burning busy-spin:
+
+```go
+for {
+    select {
+    case v := <-ch:
+        process(v)
+    default:
+        // nothing ready — loop right back around and check again
+    }
+}
+```
+
+With nothing to slow it down, this loop re-evaluates `select` millions of times a second, pinning a full CPU core to 100% even while `ch` sits empty. It is almost never what you actually want. Two fixes cover nearly every real case: if you are polling on a schedule, use a `time.Ticker` and add its channel as a real `select` case (removing the `default` and the manual loop entirely); if you are waiting for the next value with no deadline, drop `default` altogether and let `select` block — that is what it is designed to do, and it costs nothing while idle.
+
 ## Timeouts
 
 A common pattern is combining `select` with `time.After`, which returns a channel that receives a value after the specified duration:
@@ -54,6 +83,87 @@ case <-time.After(2 * time.Second):
 ```
 
 Prefer `context.WithTimeout` (covered in the Context lesson) when the deadline must propagate to callees; `time.After` is fine for a one-off local timeout — since Go 1.23 an unreferenced timer is garbage-collected even if you never call `Stop`.
+
+### time.After inside a loop
+
+The GC reclaiming an unstopped timer (since Go 1.23) fixes the old *memory* leak, but it does not make `time.After` free. Every call still allocates a brand-new `time.Timer` and a brand-new channel — fine for a one-off timeout, expensive when called on every iteration of a hot loop:
+
+```go
+for {
+    select {
+    case v := <-ch:
+        process(v)
+    case <-time.After(time.Second): // allocates a new timer every single iteration
+        fmt.Println("no value this second")
+    }
+}
+```
+
+Inside a loop, create the timer once with `time.NewTimer` and call `Reset` on it after each iteration instead — one allocation total instead of one per iteration:
+
+```go
+t := time.NewTimer(time.Second)
+defer t.Stop()
+for {
+    select {
+    case v := <-ch:
+        process(v)
+    case <-t.C:
+        fmt.Println("no value this second")
+    }
+    if !t.Stop() {
+        <-t.C // drain a timer that fired between the select and the Stop call
+    }
+    t.Reset(time.Second)
+}
+```
+
+## Disabling a case with a nil channel
+
+Assigning `nil` to a channel variable that a `select` case reads from disables that case *permanently* — a nil channel never becomes ready, so `select` will never pick it again, no matter how many more times the loop runs. This is the standard way to stop `select` from repeatedly re-selecting a channel that has already given you everything it will ever give.
+
+The clearest example is draining two channels until both are closed. A closed channel's receive case is always immediately ready (with `ok == false`), so without disabling it, the loop would spin on the drained channel instead of waiting on the one still producing values:
+
+```go
+for a != nil || b != nil {
+    select {
+    case v, ok := <-a:
+        if !ok {
+            a = nil // disable: this case can never fire again
+            continue
+        }
+        sum += v
+    case v, ok := <-b:
+        if !ok {
+            b = nil // disable: this case can never fire again
+            continue
+        }
+        sum += v
+    }
+}
+```
+
+The loop condition `a != nil || b != nil` and the nil-out inside each `!ok` branch together guarantee the loop exits exactly when both channels are drained and closed — never spinning on a closed channel, never exiting early.
+
+## ctx.Done() in every long-running loop
+
+Any `select` inside a loop that might run for a while should include a `case <-ctx.Done()`, exactly like the pattern above disables a drained channel. Without it, a loop can keep consuming from a work channel long after the surrounding request has been cancelled — wasted work that nobody is waiting for:
+
+```go
+for {
+    select {
+    case v, ok := <-work:
+        if !ok {
+            return
+        }
+        process(v)
+    case <-ctx.Done():
+        return ctx.Err() // stop promptly instead of draining everything first
+    }
+}
+```
+
+The Context lesson covers `ctx.Done()` and `ctx.Err()` in full; the rule from a `select` point of view is simply: if the loop can outlive a single quick operation, give cancellation its own case.
 
 ## Runnable example
 
@@ -111,6 +221,69 @@ func main() {
 
 <Playground code={selectCode} />
 
+The second runnable snippet below covers the two patterns just introduced: nil-ing out a drained channel so `select` stops re-selecting it, and giving a cancelled `context` its own case so a loop stops promptly instead of draining everything else first.
+
+export const selectDisableCode = `package main
+
+import (
+\t"context"
+\t"fmt"
+)
+
+func main() {
+\t// Nil-out to disable a case: once a channel is drained and closed, set
+\t// the local variable to nil so its select case can never fire again --
+\t// otherwise a closed channel's case is always immediately ready (with
+\t// ok == false), spinning the loop on it forever.
+\ta := make(chan int, 2)
+\tb := make(chan int, 2)
+\ta <- 1
+\ta <- 2
+\tclose(a)
+\tb <- 10
+\tb <- 20
+\tclose(b)
+
+\tsum := 0
+\tfor a != nil || b != nil {
+\t\tselect {
+\t\tcase v, ok := <-a:
+\t\t\tif !ok {
+\t\t\t\ta = nil // disable: this case never fires again
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\tsum += v
+\t\tcase v, ok := <-b:
+\t\t\tif !ok {
+\t\t\t\tb = nil // disable: this case never fires again
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\tsum += v
+\t\t}
+\t}
+\tfmt.Println("sum:", sum) // deterministic regardless of interleaving order
+
+\t// ctx.Done() inside a loop: exit promptly on cancellation instead of
+\t// draining every remaining item first.
+\tctx, cancel := context.WithCancel(context.Background())
+\twork := make(chan int) // deliberately never sent to
+\tcancel()               // cancel before the loop starts
+\tprocessed := 0
+loop:
+\tfor {
+\t\tselect {
+\t\tcase <-work:
+\t\t\tprocessed++
+\t\tcase <-ctx.Done():
+\t\t\tfmt.Println("stopped early:", ctx.Err())
+\t\t\tbreak loop
+\t\t}
+\t}
+\tfmt.Println("processed before stopping:", processed)
+}`;
+
+<Playground code={selectDisableCode} />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -125,6 +298,58 @@ func main() {
 - **A `default` case makes `select` faster** — a tight loop around a `default` case spins the CPU and burns it
 - **`time.After` leaks because it spawns a new goroutine every call** — a timer never spawns a goroutine; before Go 1.23 an unstopped timer sat on the heap until it fired (a real leak — of the timer object, not a goroutine); since 1.23 the GC reclaims it even without `Stop`, but calling `time.After` repeatedly in a hot loop still allocates a new timer object every iteration — use `time.NewTimer` + `Reset` instead
 
+## select {} and why it deadlocks main
+
+`select` with no cases at all — `select {}` — can never have a ready case, by construction, so it blocks the current goroutine forever. If that goroutine is `main` and there is no other goroutine left running, that is a real, whole-program **deadlock**, and the runtime reports it exactly like the nil-channel deadlock from the Channels lesson:
+
+```go
+func main() {
+	select {}
+}
+```
+
+```text
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [select (no cases)]:
+main.main()
+	/tmp/selectempty/main.go:4 +0x1c
+exit status 2
+```
+
+The `[select (no cases)]` tag names the exact cause, the same way `[chan receive (nil chan)]` did for a nil channel. `select {}` is occasionally used *intentionally* to keep `main` alive forever — a leaner alternative to `for {}` — but that only works when other goroutines are still doing useful work in the background (an HTTP server's listener goroutine, for example). Used with nothing else running, it is indistinguishable from this fatal error.
+
+## Reading AI-generated code
+
+When a generated snippet uses `select` inside a loop, check for these before trusting it:
+
+- Does a `case` inside a `select` that sits inside a `for` use a bare `break`, expecting it to exit the loop? It only exits the `select` — the `for` keeps going.
+- Is there a `default` case inside a loop with nothing else slowing it down? That is a busy-spin burning a full CPU core.
+- Does the loop call `time.After(d)` as a `select` case on every iteration, instead of creating one `time.NewTimer` before the loop and calling `Reset` after each iteration?
+- Is there a `case <-ctx.Done()` in every `select` that sits inside a loop that could run for a while — or can the loop keep consuming work after the caller has already given up?
+- Does a channel that should stop being selected (already drained and closed) get nil'd out, or will its always-ready `ok == false` case spin the loop forever?
+
+<SpotTheBug code={`for {
+	select {
+	case <-ctx.Done():
+		fmt.Println("stopping")
+		break // intended to exit the for loop
+	case v := <-work:
+		process(v)
+	}
+}`}>
+`break` inside a `select` case only breaks out of the `select` statement — `select` is one of the constructs (with `switch`) that a bare `break` targets before an enclosing `for`. Once `ctx` is already cancelled, `ctx.Done()`'s case is permanently ready, so the loop re-enters `select`, hits the same case, prints `"stopping"` again, and repeats — a busy-spin that never actually stops. Captured output from a version of this program with a safety counter added just to observe the behavior:
+
+```text
+stopping
+stopping
+stopping
+stopping
+```
+
+The fix is a labeled break naming the `for` loop explicitly: `loop: for { select { case <-ctx.Done(): return /* or: break loop */ ... } }`. Returning from the enclosing function (when that is valid) sidesteps the ambiguity entirely, which is why the runnable examples above use `return` or a labeled `break loop`.
+</SpotTheBug>
+
 <Callout title="Gotcha: empty select blocks forever">
 A `select` with no cases — `select {}` — blocks the current goroutine forever. This is occasionally used intentionally to keep `main` alive (a leaner alternative to `for {}`), but it is more commonly a mistake. Always ensure your select has at least one reachable case or a `default`. A `select` with only a `default` and no channel cases executes the `default` immediately every time — useful for a non-blocking poll, but an infinite loop if placed inside `for` without additional logic.
 </Callout>
@@ -138,7 +363,8 @@ export const quizSelect = [
       "One case is chosen at random",
       "All ready cases execute in order"
     ],
-    answer: 2
+    answer: 2,
+    explain: "select deliberately picks a uniformly random ready case rather than the first one written in source order — this is what prevents one channel from starving another when both are frequently ready."
   },
   {
     q: "What is the effect of adding a `default` case to a select?",
@@ -148,7 +374,8 @@ export const quizSelect = [
       "The default runs only when all channels are closed",
       "It prevents the goroutine from being preempted"
     ],
-    answer: 1
+    answer: 1,
+    explain: "default is only ever taken when no other case can proceed right now — it turns select from a blocking operation into an instant poll, which is exactly what makes it dangerous inside an unthrottled for loop."
   },
   {
     q: "What does `time.After(d)` return?",
@@ -158,7 +385,41 @@ export const quizSelect = [
       "A `<-chan time.Time` that receives once after duration d elapses",
       "A context with a deadline set to now + d"
     ],
-    answer: 2
+    answer: 2,
+    explain: "time.After returns a receive-only channel that select can wait on alongside other cases — the whole point is that it does not block by itself, select does the waiting."
+  },
+  {
+    q: "```go\na, b := make(chan int, 1), make(chan int, 1)\nclose(a)\nfor a != nil || b != nil {\n    select {\n    case _, ok := <-a:\n        if !ok { a = nil }\n    case v := <-b:\n        fmt.Println(v)\n    }\n}\n```\nWhat keeps this loop from spinning forever on the closed, empty channel a?",
+    options: [
+      "Nothing — this spins forever burning CPU",
+      "Setting a to nil once its !ok branch fires permanently disables that case",
+      "close(a) automatically removes a's case from the select",
+      "The compiler rejects this program because a is never sent to before closing"
+    ],
+    answer: 1,
+    explain: "A nil channel's case is never ready, so once a is nil'd out, select can only ever consider b's case (or block if b never becomes ready) — this is the standard nil-to-disable idiom."
+  },
+  {
+    q: "```go\nfor {\n    select {\n    case <-ctx.Done():\n        fmt.Println(\"stopping\")\n        break\n    case v := <-work:\n        process(v)\n    }\n}\n```\nAssuming ctx is already cancelled, what happens?",
+    options: [
+      "The loop prints \"stopping\" once and exits, because break exits the for loop",
+      "The loop prints \"stopping\" repeatedly forever — break only exits the select, not the for",
+      "This is a compile error: break is not allowed inside select",
+      "The loop blocks forever because ctx.Done() only fires once"
+    ],
+    answer: 1,
+    explain: "break targets the innermost for, switch, or select — here that is the select. ctx.Done()'s case stays permanently ready once cancelled, so the for loop immediately re-enters select and hits the same case again, forever."
+  },
+  {
+    q: "```go\nfunc main() {\n    select {}\n}\n```\nWhat happens when this runs, with no other goroutines started?",
+    options: [
+      "It compiles and exits immediately with no output",
+      "fatal error: all goroutines are asleep - deadlock!",
+      "panic: select on empty select statement",
+      "It is a compile-time error — select must have at least one case"
+    ],
+    answer: 1,
+    explain: "A select with zero cases can never have a ready case, so it blocks forever. With main the only goroutine and nothing that could ever wake it, the runtime detects the whole-program deadlock and reports this fatal error rather than hanging silently."
   }
 ];
 

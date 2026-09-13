@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Channel คืออะไร?
 
@@ -65,6 +67,50 @@ v, ok := <-ch
 // ok == false → channel is closed and drained; v is the zero value
 ```
 
+## Nil Channel
+
+Channel variable ที่แค่ประกาศ แต่ไม่เคย `make` คือ **nil**:
+
+```go
+var ch chan int // nil — not the same as make(chan int)
+```
+
+ทุก operation บน nil channel จะ block **ตลอดไป** — ไม่ panic, block คือ send และ receive บน nil channel ทั้งคู่ทำให้ goroutine หยุดรอโดยไม่มีอะไรมาปลุกมันได้เลย:
+
+```go
+var ch chan int
+<-ch // blocks forever
+```
+
+ถ้ารันเป็น goroutine เดียวใน `main` นี่คือ **deadlock** จริง ๆ: สถานะที่ชุด goroutine ทั้งหมด block รออยู่ โดยแต่ละตัวรอสิ่งที่มีแต่ goroutine อื่นที่ block อยู่ในชุดเดียวกันเท่านั้นที่ให้ได้ ทำให้ไม่มีตัวไหนไปต่อได้เลย Go runtime ตรวจจับกรณีเฉพาะที่ *ทุก* goroutine ใน program block พร้อมกัน แล้วจบด้วย `fatal error` ไม่ใช่ panic — `recover()` เรียกไม่ได้:
+
+```text
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [chan receive (nil chan)]:
+main.main()
+	/tmp/nilchandeadlock/main.go:5 +0x2c
+exit status 2
+```
+
+Tag `[chan receive (nil chan)]` ใน goroutine trace คือตัวบอกใบ้ — มันระบุ nil channel เป็นสาเหตุตรง ๆ ไม่ใช่แค่ "block เฉย ๆ" nil channel send ก็ deadlock เหมือนกัน รายงานเป็น `[chan send (nil chan)]` นี่คือเหตุผลที่ struct field แบบ `chan` ที่เป็น zero value ที่ลืม initialize เป็นบัค AI-generated คลาสสิก: มัน compile ผ่าน แล้ว hang ทันทีที่มีอะไรไปแตะมันครั้งแรก
+
+Nil channel ไม่ได้เป็นแค่บัคเสมอไป — case ที่เป็น nil ใน `select` จะถูก *ปิดใช้งาน* แทนที่จะ block ซึ่งเป็นเทคนิคที่ตั้งใจใช้ อธิบายในบท Select
+
+## ตาราง Channel Operation ฉบับสมบูรณ์
+
+สาม operation — send, receive, `close` — ทำงานต่างกันขึ้นอยู่กับว่า channel เป็น nil, open, หรือ closed:
+
+| Operation | nil channel | open channel | closed channel |
+|---|---|---|---|
+| `ch <- v` (send) | block ตลอดไป | block จนกว่า receiver พร้อม (unbuffered) หรือ buffer มีที่ว่าง | **panic**: `send on closed channel` |
+| `<-ch` (receive) | block ตลอดไป | block จนกว่ามีค่า | return ทันที: zero value, `ok == false` |
+| `close(ch)` | **panic**: `close of nil channel` | close สำเร็จ — receiver ที่ block อยู่ unblock ทันที | **panic**: `close of closed channel` |
+| `len(ch)` | `0` | จำนวน element ใน buffer ที่ยังไม่ถูกรับ | จำนวน element ใน buffer ที่ยังเหลือ |
+| `cap(ch)` | `0` | ความจุของ buffer | ความจุของ buffer (ไม่เปลี่ยนหลัง close) |
+
+panic message ทั้งสาม และ deadlock message ด้านบน copy มาจาก output จริงของ `go run` บน Go 1.26.5 คำเดียวที่ต้องจำ: **nil block, closed panic ตอน send และไม่ block เลยตอน receive**
+
 export const channelsCode = `package main
 
 import "fmt"
@@ -106,6 +152,148 @@ func main() {
 
 <Playground code={channelsCode} />
 
+## close คือสัญญาณ Broadcast
+
+การ close channel จะปลุก **ทุก** goroutine ที่ block รออยู่บนมัน ไม่ใช่แค่ตัวเดียว — ต่างจาก receive ปกติที่ส่งค่าให้ goroutine ที่รออยู่แค่ตัวเดียวเท่านั้น เมื่อรวมกับ `chan struct{}` นี่คือวิธี idiomatic ในการ broadcast "stop" หรือ "ready" ไปยัง goroutine จำนวนไม่จำกัดพร้อมกัน
+
+`struct{}` คือ empty struct — ไม่มี field เลยและกินพื้นที่ 0 byte `chan struct{}` ถูกใช้เป็นสัญญาณล้วน ๆ ไม่มีใครสนใจค่าที่รับได้ สนใจแค่ว่า receive มัน unblock:
+
+```go
+done := make(chan struct{})
+
+go func() {
+    <-done // unblocks the instant done is closed
+    fmt.Println("goroutine 1 saw the signal")
+}()
+go func() {
+    <-done // unblocks at the same instant, independently
+    fmt.Println("goroutine 2 saw the signal")
+}()
+
+close(done) // broadcasts to both goroutines simultaneously
+```
+
+ถ้าส่งค่าเดียวเข้า `done` จะปลุกแค่หนึ่งใน goroutine ทั้งสอง — อีกตัวจะ block ตลอดไป `close` เป็น channel operation เดียวที่ไปถึงทุก waiter พร้อมกัน
+
+## Happens-before และ Channel Ownership
+
+Channel ไม่ใช่แค่ความสะดวกด้าน scheduling — มันเป็นส่วนหนึ่งของการรับประกันใน [Go memory model](https://go.dev/ref/mem) เรื่องว่าเมื่อไหร่ write ที่ทำใน goroutine หนึ่งจะมองเห็นได้ใน goroutine อีกตัว กฎคือ: **send บน channel เกิด happens-before receive ที่จับคู่กันเสร็จสมบูรณ์** และสำหรับ channel ที่มี capacity `C` การ send ครั้งที่ k จะ happens-before การ receive ครั้งที่ (k+C) เสร็จสมบูรณ์ ในทางปฏิบัติหมายความว่า variable ใด ๆ ที่ goroutine เขียน *ก่อน* มัน send บน channel จะมองเห็นได้แน่นอนโดย goroutine ที่อ่านมัน *หลังจาก* receive จาก channel นั้น — ไม่ต้องใช้ mutex หรือ atomic แยกสำหรับการส่งต่อนี้
+
+การรับประกันนี้ยังเป็นเหตุผลที่ Go channel มี **กฎ ownership** ชัดเจน: goroutine ที่สร้าง channel คือตัวที่ send และ close มัน ส่วน goroutine อื่นทุกตัวถือแค่ `<-chan T` แบบ receive-only เท่านั้น ไม่เคย close หรือ send เลย function ที่ return channel ควร return เป็น directional type เพื่อให้ compiler บังคับได้ ไม่ใช่แค่ตาม convention:
+
+```go
+// producer owns out: it is the only goroutine that sends to it or closes it.
+func producer(n int) <-chan int {
+	out := make(chan int, n)
+	go func() {
+		defer close(out) // the owner closes, always
+		for i := 1; i <= n; i++ {
+			out <- i
+		}
+	}()
+	return out // callers only ever see <-chan int
+}
+```
+
+การละเมิดกฎนี้ — เช่น goroutine สองตัวคิดว่าตัวเองเป็นเจ้าของ channel เดียวกันและเรียก `close` ทั้งคู่ — คือบัคที่อยู่ใน section "อ่านโค้ดที่ AI เขียน" ด้านล่างของบทนี้เป๊ะ
+
+## Buffered Channel เป็น Semaphore
+
+Capacity ของ buffered channel ใช้เพื่อการนับล้วน ๆ ได้ ไม่ต้องส่งข้อมูลจริง — นี่คือ implementation แบบคลาสสิกของ counting semaphore ใน Go acquire permit ด้วยการ send เข้า channel (block เมื่อ buffer เต็ม); release ด้วยการ receive:
+
+```go
+sem := make(chan struct{}, 2) // at most 2 permits
+
+sem <- struct{}{} // acquire — blocks if 2 permits are already out
+// ... critical section, at most 2 goroutines here at once ...
+<-sem // release
+```
+
+นี่คือรูปแบบง่ายที่สุดของ bounded-parallelism pattern ที่อธิบายเต็ม ๆ ในบท Patterns — ควรรู้จักไว้ตรงนี้เพราะเป็นการใช้ capacity ของ buffered channel แบบที่สอง ต่างจากแค่ "ช่วยปรับ timing ให้ราบรื่น"
+
+snippet ด้านล่างรันทั้งสามไอเดีย: `close` เป็น broadcast ไปยัง 3 goroutine ที่รออยู่, `chan struct{}` ที่ buffer เป็น 2 ใช้เป็น semaphore, และ producer ที่เป็นเจ้าของ channel ของตัวเองตั้งแต่ต้นจนจบ
+
+export const channelsOwnershipCode = `package main
+
+import (
+\t"fmt"
+\t"sort"
+\t"sync"
+)
+
+func main() {
+\t// close as broadcast: every receiver unblocks the instant the channel
+\t// closes, no matter how many goroutines are waiting.
+\tdone := make(chan struct{})
+\tvar wg sync.WaitGroup
+\tresults := make([]string, 3)
+\tfor i := 0; i < 3; i++ {
+\t\twg.Add(1)
+\t\tgo func(id int) {
+\t\t\tdefer wg.Done()
+\t\t\t<-done // unblocks for every goroutine at once when done is closed
+\t\t\tresults[id] = fmt.Sprintf("worker %d saw the broadcast", id)
+\t\t}(i)
+\t}
+\tclose(done) // broadcasts to all 3 waiters simultaneously
+\twg.Wait()
+\tfor _, r := range results {
+\t\tfmt.Println(r)
+\t}
+
+\t// buffered channel as a counting semaphore: only 2 permits, so at most 2
+\t// goroutines run their critical section concurrently.
+\tsem := make(chan struct{}, 2)
+\tvar mu sync.Mutex
+\tinFlight, maxInFlight := 0, 0
+\tvar wg2 sync.WaitGroup
+\tfor i := 0; i < 5; i++ {
+\t\twg2.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg2.Done()
+\t\t\tsem <- struct{}{} // acquire
+\t\t\tmu.Lock()
+\t\t\tinFlight++
+\t\t\tif inFlight > maxInFlight {
+\t\t\t\tmaxInFlight = inFlight
+\t\t\t}
+\t\t\tmu.Unlock()
+
+\t\t\tmu.Lock()
+\t\t\tinFlight--
+\t\t\tmu.Unlock()
+\t\t\t<-sem // release
+\t\t}()
+\t}
+\twg2.Wait()
+\tfmt.Println("never exceeded 2 concurrent holders:", maxInFlight <= 2)
+
+\t// ownership: the sender both sends and closes; the consumer only ever
+\t// holds a <-chan so it physically cannot close or send.
+\tch := ownedProducer(3)
+\tvar got []int
+\tfor v := range ch {
+\t\tgot = append(got, v)
+\t}
+\tsort.Ints(got)
+\tfmt.Println(got)
+}
+
+// ownedProducer owns out: it is the only goroutine that sends to it or
+// closes it. Callers only ever see the receive-only <-chan int.
+func ownedProducer(n int) <-chan int {
+\tout := make(chan int, n)
+\tgo func() {
+\t\tdefer close(out)
+\t\tfor i := 1; i <= n; i++ {
+\t\t\tout <- i
+\t\t}
+\t}()
+\treturn out
+}`;
+
+<Playground code={channelsOwnershipCode} />
+
 ## Mental Model
 
 ```text
@@ -123,6 +311,20 @@ G1 ──send──→ [_][_][_] ←──recv── G2
              G1/G2 ทำงานอิสระมากกว่า
 ```
 
+export const channelStateDiagram = `flowchart LR
+  subgraph Lifecycle["chan T lifecycle"]
+    Nil["nil\n(var ch chan T)"]
+    Open["open\n(make(chan T, n))"]
+    Closed["closed\n(after close(ch))"]
+  end
+  Nil -->|make chan T| Open
+  Open -->|close ch| Closed
+  Nil -.send / receive: blocks forever.-> Nil
+  Closed -.send: panic!.-> Closed
+  Closed -.receive: zero value, ok=false, never blocks.-> Closed`;
+
+<Mermaid code={channelStateDiagram} title="Channel เปลี่ยนสถานะ nil → open → closed ทางเดียว ไม่ย้อนกลับ แต่ละสถานะมีกฎ send/receive ของตัวเอง" />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -139,6 +341,44 @@ G1 ──send──→ [_][_][_] ←──recv── G2
 - **close(ch) ลบข้อมูลใน buffer** — ไม่ — receiver ยังรับข้อมูลที่เหลือใน buffer ได้หลัง close
 - **สามารถ close channel จาก receiver ได้** — sender เท่านั้นที่ควร close channel
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ AI สร้างมาสร้างหรือ close channel ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- มี goroutine เดียวเท่านั้นที่เรียก `close` บน channel นี้จริงไหม หรือมีโอกาสที่ goroutine สองตัวจะเรียก `close` บนตัวเดียวกัน?
+- ทุก goroutine ที่ send บน channel นี้มี receiver ที่การันตีว่ายังอ่านอยู่จริงไหม หรือ receiver อาจ return ไปแล้ว ทำให้ sender block ตลอดไป?
+- มี channel variable ที่ถูกใช้ก่อน `make` หรือเปล่า (field แบบ channel ที่เป็น zero value ของ struct หรือ `var ch chan T` ที่ไม่เคยถูก assign)? ทุก operation บนมันจะ block ตลอดไปแทนที่จะ panic
+- function ที่ send อย่างเดียวประกาศ channel parameter เป็นสองทิศทาง (`chan T`) แทนที่จะเป็น `chan<- T` หรือเปล่า? ไม่ใช่บัค แต่พลาดโอกาสให้ compiler ช่วยป้องกัน receive โดยไม่ตั้งใจ
+- ทุก path — รวมถึง error return — ทำให้ send-after-close เป็นไปไม่ได้จริงไหม หรือมี branch ที่ early-return ข้ามจุดที่ channel ถูก close ไปแล้ว?
+
+<SpotTheBug code={`func merge(chs ...<-chan int) <-chan int {
+	out := make(chan int)
+	var wg sync.WaitGroup
+	for _, c := range chs {
+		wg.Add(1)
+		go func(c <-chan int) {
+			defer wg.Done()
+			for v := range c {
+				out <- v
+			}
+			close(out) // called once per input channel
+		}(c)
+	}
+	return out
+}`}>
+goroutine ทั้ง `len(chs)` ตัวเรียก `close(out)` เมื่อ input channel ของตัวเองหมด — แต่ `out` ใช้ร่วมกัน goroutine ตัวแรกที่เสร็จจะ close มัน; goroutine ตัวอื่นที่เสร็จทีหลังจะ panic บนการเรียก `close(out)` ของตัวเอง และ goroutine ตัวไหนที่ยังพยายาม send อยู่ก็ panic ด้วย `send on closed channel` output จริงบน Go 1.26.5 (ลำดับต่างกันไปตามการรัน):
+
+```text
+panic: send on closed channel
+
+goroutine 19 [running]:
+main.merge.func1(0xc0001c8000)
+	/tmp/mergebug/main.go:16 +0x98
+```
+
+`go run -race` ยังรายงาน `WARNING: DATA RACE` ระหว่าง send ที่แข่งกันกับ receive ที่ trigger close เพิ่มด้วย — นี่คือคำถาม "ใคร close" เรื่อง ownership จากก่อนหน้านี้ในบทนี้เป๊ะ วิธีแก้: ไม่มีใครใน goroutine ต่อ channel เรียก close(out) เลย goroutine เฉพาะทางตัวเดียวเรียก `wg.Wait()` แล้วค่อย `close(out)` แค่ครั้งเดียว หลังจาก input goroutine ทุกตัวเสร็จแล้ว — ดู fan-in `merge` เวอร์ชันที่แก้แล้วในบท Patterns
+</SpotTheBug>
+
 <Callout title="ข้อควรระวัง: ส่งเข้า channel ที่ปิดแล้วจะ panic">
 การเรียก `close(ch)` แล้วส่งเข้า `ch` จะทำให้เกิด runtime panic การรับจาก channel ที่ปิดแล้วไม่มีทาง panic — แต่จะ return zero value ของ type นั้น และ return value ตัวที่สอง comma-ok จะเป็น `false` หลักง่าย ๆ: เฉพาะ **sender** เท่านั้นที่ปิด channel และปิดก็ต่อเมื่อรู้ว่าจะไม่ส่งอีกแล้ว อย่าปิด channel จากฝั่ง receiver
 </Callout>
@@ -152,7 +392,8 @@ export const quizChannels = [
       "Goroutine บล็อกจนกว่า sender พร้อม",
       "Receive return ทันทีด้วย ok == false"
     ],
-    answer: 2
+    answer: 2,
+    explain: "unbuffered channel ไม่มีที่เก็บข้อมูล — receive จะเสร็จสมบูรณ์ได้ก็ต่อเมื่อมี goroutine ทำ send คู่กันในเวลาเดียวกันเท่านั้น จนกว่าจะถึงตอนนั้น goroutine ที่ receive จะ block"
   },
   {
     q: "คุณเรียก close(ch) บน buffered channel ที่ยังมี 3 items อยู่ใน buffer เกิดอะไรขึ้นเมื่อ range?",
@@ -162,7 +403,8 @@ export const quizChannels = [
       "Range loop exit ทันทีโดยไม่ให้ items ใด ๆ",
       "Range loop บล็อกรอ items เพิ่ม"
     ],
-    answer: 1
+    answer: 1,
+    explain: "close หยุดแค่การรับ send ใหม่ในอนาคต — ไม่ได้ลบสิ่งที่อยู่ใน buffer แล้ว range จะ receive ต่อไปจนกว่า buffer จะหมด แล้วจึง exit เพราะ channel ทั้ง close แล้วและว่างเปล่า"
   },
   {
     q: "return value ตัวที่สอง ok ใน `v, ok := <-ch` บอกอะไร?",
@@ -172,7 +414,8 @@ export const quizChannels = [
       "ว่าค่าที่รับไม่ใช่ zero value",
       "ว่า channel ยังเปิดอยู่ (true) หรือถูกปิดและดึงออกหมดแล้ว (false)"
     ],
-    answer: 3
+    answer: 3,
+    explain: "ok เป็น false ก็ต่อเมื่อ channel ถูก close แล้ว AND buffer ว่างเปล่า — เป็นกรณีเดียวที่ v เป็น zero value ที่ถูกสร้างขึ้นมาเฉย ๆ ไม่ใช่ค่าที่ sender ตัวไหนส่งจริง"
   },
   {
     q: "annotation ทิศทาง channel ใดที่จำกัด parameter ให้รับเท่านั้น?",
@@ -182,7 +425,30 @@ export const quizChannels = [
       "chan T",
       "readonly chan T"
     ],
-    answer: 1
+    answer: 1,
+    explain: "ตำแหน่งลูกศรสะท้อนทิศทางข้อมูล: <-chan T แปลว่า \"ข้อมูลไหลออกจาก channel นี้\" (receive-only) ส่วน chan<- T แปลว่า \"ข้อมูลไหลเข้า channel นี้\" (send-only)"
+  },
+  {
+    q: "```go\nfunc main() {\n    var ch chan int\n    ch <- 1\n}\n```\nเกิดอะไรขึ้นเมื่อรัน?",
+    options: [
+      "compile และรันผ่าน ไม่ print อะไรเลย",
+      "panic ด้วย \"send on closed channel\"",
+      "hang ตลอดไปโดยไม่มี output",
+      "fatal error: all goroutines are asleep - deadlock!"
+    ],
+    answer: 3,
+    explain: "ch ถูกประกาศแต่ไม่เคยถูก make ดังนั้นมันเป็น nil การ send บน nil channel จะ block ตลอดไป เนื่องจาก main เป็น goroutine เดียวและไม่มีทาง unblock ได้เลย runtime จึงตรวจจับว่าทั้ง program deadlock แล้วจบด้วย fatal error นี้แทนที่จะ hang เงียบ ๆ"
+  },
+  {
+    q: "```go\nch := make(chan int, 1)\nclose(ch)\nv, ok := <-ch\nfmt.Println(v, ok)\n```\nโค้ดนี้ print อะไร?",
+    options: [
+      "0 false",
+      "0 true",
+      "panic: receive on closed channel",
+      "block ตลอดไป"
+    ],
+    answer: 0,
+    explain: "buffer ว่างเปล่าก่อน close (ไม่เคยมีการ send เลย) ดังนั้นเมื่อ close แล้ว ทุก receive จะ return ทันทีด้วย zero value และ ok == false — การ receive จาก channel ที่ close แล้วและว่างเปล่าไม่มีทาง panic หรือ block"
   }
 ];
 

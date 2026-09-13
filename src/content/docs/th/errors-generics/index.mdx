@@ -9,47 +9,27 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## การจัดการ Error ใน Go
 
-ภาษาส่วนใหญ่จัดการกับความล้มเหลวผ่าน exceptions — กลไกพิเศษที่ควบคุมการไหลของโปรแกรมโดยการ unwind call stack จนกว่า `catch` block จะดักจับปัญหาไว้ได้ Go เลือกแนวทางที่แตกต่างอย่างสิ้นเชิง: **errors คือค่าธรรมดา**
+ภาษาส่วนใหญ่จัดการกับความล้มเหลวผ่าน exceptions — กลไกพิเศษที่ควบคุมการไหลของโปรแกรมโดยการ unwind call stack จนกว่า `catch` block จะดักจับปัญหาไว้ได้ Go เลือกแนวทางที่แตกต่างอย่างสิ้นเชิง: **errors คือค่าธรรมดา** ที่คืนกลับมาพร้อมกับผลลัพธ์และตรวจสอบตรง ๆ ด้วย `if err != nil` ไม่มี hidden control flow และไม่มี unchecked exceptions — ทุก failure point มองเห็นได้ที่ callsite บทเรียนถัดไป Error Values จะครอบคลุม interface `error` และ pattern นี้แบบละเอียด
 
-function ที่อาจล้มเหลวจะคืนค่าสองค่า: ผลลัพธ์และ `error` caller รับทั้งคู่และตัดสินใจว่าจะทำอะไร ไม่มี hidden control flow ไม่มี stack unwinding ไม่มี unchecked exceptions ทุก callsite ที่อาจเกิด error มองเห็นได้ในโค้ด ทำให้โปรแกรมตรวจสอบและทำความเข้าใจได้ง่ายขึ้น
+ครึ่งหลังของโมดูลนี้คือเครื่องมือคนละแบบไปเลย: **generics** ให้ function หรือ type เดียวทำงานกับหลาย concrete type ได้ โดยตรวจสอบตอน compile time แทนที่จะเขียนซ้ำด้วยมือหรือ type assert ตอน runtime panic และ recover อยู่ตรงกลาง — เป็นทางออกฉุกเฉินสำหรับ programmer error และสถานะที่เป็นไปไม่ได้ ไม่ใช่ตัวแทนของการคืน `(T, error)`
 
-รูปแบบ canonical ที่คุณจะเห็นทุกที่ใน Go:
+สิ่งหนึ่งที่ควรพกติดตัวมาจาก Functions ก่อนไปถึง Panic & Recover: deferred call ทำงานเป็น **LIFO order** — `defer` ตัวสุดท้ายที่ลงทะเบียนไว้ทำงานก่อน กฎนี้ไม่เปลี่ยนระหว่าง panic เลย และนั่นคือเหตุผลที่ `recover()` ต้องอยู่ข้างใน deferred function ตั้งแต่แรก
 
-```go
-result, err := doSomething()
-if err != nil {
-    // handle the failure — return, log, wrap, or recover
-}
-// err is nil: safe to use result
-```
+ทุกกฎในโมดูลนี้ลงเอยที่สิ่งใดสิ่งหนึ่งจากไม่กี่อย่างตอนเขียนโค้ดจริง: nil check ที่ทำงานทั้งที่ไม่ควร, compiler error ที่ระบุ pointer ที่ขาดหรือ constraint ที่ไม่ผ่าน, หรือ panic message ที่บอกตรง ๆ ว่าอะไรผิดพลาด การฝึกอ่านข้อความจริง ไม่ใช่แค่จำกฎแบบนามธรรม คือทักษะจริงที่โมดูลนี้สร้างขึ้น
 
-`nil` หมายถึงสำเร็จ error ที่ไม่ใช่ nil หมายถึงมีบางอย่างผิดพลาดและไม่ควรเชื่อถือ `result`
+## แผนที่โมดูล
 
-## interface error
-
-type `error` ของ Go นิยามไว้เป็น interface ที่มีเพียงหนึ่ง method ใน standard library:
-
-```go
-type error interface {
-    Error() string
-}
-```
-
-type ใดก็ตามที่ implement `Error() string` จะ satisfy interface `error` ได้ ซึ่งหมายความว่าคุณสามารถส่งผ่าน error แบบ string ธรรมดา, error ที่มีโครงสร้างซับซ้อน และทุกอย่างที่อยู่ระหว่างนั้น — ทั้งหมดผ่าน interface เดียวกัน `nil` เป็นค่า `error` ที่ถูกต้องและหมายถึงไม่มี error ใด ๆ เกิดขึ้น
-
-## สิ่งที่จะได้เรียนในโมดูลนี้
-
-| บทเรียน | หัวข้อ |
-|---------|--------|
-| หน้านี้ | ภาพรวมแนวคิดและตัวอย่างแรกที่รันได้ |
-| Error Values | `errors.New`, `fmt.Errorf`, sentinel errors, `errors.Is` |
-| Wrapping & Custom Errors | `%w`, `errors.As`, custom error types |
-| Panic & Recover | เมื่อไหร่ควร panic, `recover`, การ defer cleanup |
-| Generics | Type parameters, constraints, `~T`, union types, generic method (Go 1.27) |
-| Iterators | `iter.Seq`, range-over-func, helper แบบ iterator ใน `slices`/`maps` (Go 1.23+) |
+| บทเรียน | สิ่งที่จะได้เรียน |
+|---------|--------------------|
+| [Error Values](./error-values) | interface `error`, `errors.New`, sentinel errors, กับดัก typed-nil interface, `errors.Is` |
+| [Wrapping Errors](./wrapping) | `%w`, `errors.As`, `errors.Join`, custom error types, ทำไม receiver choice ถึงสำคัญ |
+| [Panic and Recover](./panic-recover) | เมื่อไหร่ควร panic, `recover`, `runtime.Error`, `panic(nil)`, ทำไม goroutine ป้องกันจากภายนอกไม่ได้ |
+| [Generics](./generics) | Type parameters, constraints, `comparable`, `cmp.Ordered`, generic method (Go 1.27) |
+| [Iterators](./iterators) | `iter.Seq`, range-over-func, `iter.Pull`, helper แบบ iterator ใน `slices`/`maps` (Go 1.23+) |
 
 ## ตัวอย่างแรก
 
@@ -102,6 +82,35 @@ func main() {
 - **panic = exception ที่ควรใช้แทน return error** — panic ใช้สำหรับ programmer error เท่านั้น ไม่ใช่ expected failure
 - **generics ทำ code ช้าลง** — Go generics ใช้ GC-shape stenciling: type ที่มี pointer/interface shape เดียวกันแชร์ instantiation เดียวกันและใช้ dictionary ส่ง type info ตอน runtime กรณีนี้ generics อาจ**ช้ากว่า** interface ด้วยซ้ำ; ส่วน value type (`int`, struct) ได้ code เฉพาะของตัวเองต่อ type จึงเร็ว
 
+## อ่านโค้ดที่ AI เขียน
+
+ทุกบทเรียนในโมดูลนี้ใช้การตรวจสอบชุดเดียวกันเพื่อจับ bug จากโค้ดที่ generate มาก่อนจะเอาไปใช้จริง:
+
+- function คืนตัวแปร pointer แบบมี type ตรง ๆ ผ่าน result ที่เป็น `error` แทนที่จะคืน `nil` เปล่า ๆ ในเส้นทางสำเร็จหรือเปล่า? นั่นคือกับดัก typed-nil interface และ `err == nil` จะผิด
+- `errors.As` ถูกเรียกด้วยตัวแปร target เองแทนที่จะเป็น address ของมัน (`&target`) หรือเปล่า? รูปแบบแรก panic ไม่ใช่แค่คืน `false`
+- `recover()` ถูกเรียกข้างใน helper function ที่ deferred function เรียกอีกที แทนที่จะเรียกตรง ๆ ข้างใน body ของ `defer func() { ... }()` หรือเปล่า? แค่ระดับความห่างชั้นเดียวก็เพียงพอที่จะทำให้มันคืน `nil` เสมอ
+- constraint interface (ที่มี type term คั่นด้วย `|` หรือ `~`) ถูกใช้เป็น type ของตัวแปรธรรมดา แทนที่จะใช้แค่ข้างใน `[T Constraint]` หรือเปล่า?
+- โค้ดเรียก `sort.Strings` หรือคล้ายกันตรง ๆ กับผลลัพธ์ของ `maps.Keys` หรือเปล่า? ตั้งแต่ Go 1.23 มันคืน `iter.Seq` ไม่ใช่ slice และ compile ไม่ผ่าน
+
+<SpotTheBug code={`type MyError struct{ msg string }
+
+func (e *MyError) Error() string { return e.msg }
+
+func mightFail(fail bool) error {
+	var e *MyError
+	if fail {
+		e = &MyError{msg: "boom"}
+	}
+	return e
+}
+
+func main() {
+	err := mightFail(false)
+	fmt.Println(err == nil)
+}`}>
+`mightFail` คืนตัวแปร `e` ที่มี type เป็น `*MyError` ตรง ๆ แม้ `e` จะเป็น `nil` ก็ตาม `error` interface ที่ return กลับมามี concrete type (`*MyError`) และ value เป็น nil — นั่นคือ interface ที่ไม่ nil ที่ถือ pointer เป็น nil อยู่ข้างใน ไม่ใช่ nil interface ตรวจสอบแล้วบน 1.26.5: โค้ดนี้พิมพ์ `false` ไม่ใช่ `true` ทางแก้คือถือ `*MyError` แค่ใน local variable แล้วคืน `nil` เปล่า ๆ ที่ไม่มี type ในเส้นทางสำเร็จ — ดูคำอธิบายเต็มพร้อม playground ที่รันได้ใน Error Values
+</SpotTheBug>
+
 export const quizErrorsGenericsOverview = [
   {
     q: "ใน Go เมื่อ function คืนค่า error ที่ไม่ใช่ nil หมายความว่าอะไร?",
@@ -111,7 +120,30 @@ export const quizErrorsGenericsOverview = [
       "คืนค่าที่ caller สามารถตรวจสอบและจัดการได้",
       "บันทึก log และคืน zero value"
     ],
-    answer: 2
+    answer: 2,
+    explain: "error ใน Go เป็นค่าธรรมดา ไม่ใช่ control-flow channel แยกต่างหาก caller ได้รับ error พร้อมผลลัพธ์และตัดสินใจเองว่าจะทำอะไรกับมัน"
+  },
+  {
+    q: "```go\ntype MyError struct{ msg string }\nfunc (e *MyError) Error() string { return e.msg }\n\nfunc mightFail(fail bool) error {\n    var e *MyError\n    if fail {\n        e = &MyError{msg: \"boom\"}\n    }\n    return e\n}\n\nfmt.Println(mightFail(false) == nil)\n```\nโค้ดนี้พิมพ์อะไร?",
+    options: [
+      "true",
+      "false",
+      "compile error",
+      "panic"
+    ],
+    answer: 1,
+    explain: "mightFail คืนตัวแปร e ที่มี type เป็น *MyError ตรง ๆ ดังนั้นแม้จะเป็น nil pointer error interface ที่ return กลับมาก็มี concrete type อยู่ — ทำให้มันเป็น interface ที่ไม่ nil ตรวจสอบแล้วบน 1.26.5: โค้ดนี้พิมพ์ false ดูคำอธิบายเต็มใน Error Values"
+  },
+  {
+    q: "```go\nvar ve *VErr\nerrors.As(err, ve) // not &ve\n```\nจะเกิดอะไรขึ้น?",
+    options: [
+      "errors.As คืน false",
+      "panic: errors: target must be a non-nil pointer",
+      "compile ผ่านและทำงานเหมือน errors.As(err, &ve)",
+      "ve ชี้ไปที่ err"
+    ],
+    answer: 1,
+    explain: "errors.As ต้องการ address ของตัวแปร target เพื่อเขียนผลการ match ลงไป การส่ง ve เองทำให้ได้ nil pointer ที่ไม่มีที่เก็บผล ซึ่ง panic แทนที่จะล้มเหลวเงียบ ๆ — ตรวจสอบแล้วบน 1.26.5 ดูคำอธิบายเต็มใน Wrapping Errors"
   },
   {
     q: "interface error ในตัว (built-in) นิยามว่าอย่างไร?",
@@ -121,7 +153,8 @@ export const quizErrorsGenericsOverview = [
       "interface{ Message() string }",
       "interface{ String() error }"
     ],
-    answer: 1
+    answer: 1,
+    explain: "error ถูก predeclare ไว้เป็น interface ที่มี method เดียว: Error() string type ใดก็ตามที่ implement method นี้จะ satisfy error"
   },
   {
     q: "package ใดที่ให้ errors.New และ errors.Is?",
@@ -131,7 +164,8 @@ export const quizErrorsGenericsOverview = [
       "errors",
       "io"
     ],
-    answer: 2
+    answer: 2,
+    explain: "package errors มี errors.New, errors.Is, errors.As, และ errors.Join ส่วน fmt.Errorf อยู่ใน fmt แต่ทำงานร่วมกับ errors ผ่าน verb %w"
   },
   {
     q: "Generics ถูกเพิ่มเข้ามาใน Go เวอร์ชันใด?",
@@ -141,7 +175,8 @@ export const quizErrorsGenericsOverview = [
       "1.18",
       "1.21"
     ],
-    answer: 2
+    answer: 2,
+    explain: "type parameter เปิดตัวใน Go 1.18 release หลัง ๆ ปรับปรุงเพิ่มเติม — cmp.Ordered ใน 1.21, generic type alias ใน 1.24, self-referential constraint และ generic method ใน 1.26/1.27 — แต่ feature หลักคือ 1.18"
   }
 ];
 

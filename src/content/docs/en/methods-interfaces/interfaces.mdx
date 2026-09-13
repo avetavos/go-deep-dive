@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is an interface?
 
@@ -105,6 +107,19 @@ func describe(s Shape) {
 \tfmt.Printf("area=%.2f perimeter=%.2f\\n", s.Area(), s.Perimeter())
 }
 
+// MyErr demonstrates the typed-nil-in-interface trap.
+type MyErr struct{ msg string }
+
+func (e *MyErr) Error() string { return e.msg }
+
+func mayFail(fail bool) error {
+\tvar p *MyErr // nil, but typed *MyErr
+\tif fail {
+\t\tp = &MyErr{msg: "boom"}
+\t}
+\treturn p // always a non-nil error interface, even when p is nil
+}
+
 func main() {
 \tshapes := []Shape{
 \t\tCircle{Radius: 5},
@@ -113,30 +128,27 @@ func main() {
 \tfor _, s := range shapes {
 \t\tdescribe(s)
 \t}
+
+\terr := mayFail(false)
+\tfmt.Println(err == nil) // false — the interface holds a typed nil *MyErr, not a true nil
 }`;
 
 <Playground code={interfacesCode} />
 
 ## Runtime Behavior
 
-```text
-an interface value is 2 words:
+An interface value is two words: a pointer to an **itab** (type + method table) and a pointer to the **data**.
 
-iface
- ├─ *itab  →  ┌──────────────────────┐
- │            │ type: Circle         │
- │            │ methods: [Area,      │
- │            │          Perimeter]  │
- │            └──────────────────────┘
- └─ data   →  Circle{Radius: 5}
+export const ifaceLayoutDiagram = `flowchart LR
+  subgraph Iface["interface value (2 words)"]
+    T["*itab"]
+    D["data"]
+  end
+  T --> ITAB["itab\n type: Circle\n methods: [Area, Perimeter]"]
+  D --> VAL["Circle{Radius: 5}"]
+  ITAB -.dynamic dispatch.-> CALL["itab.fun[0](data) → Circle.Area(data)"]`;
 
-dynamic dispatch:
-  shape.Area()
-    ↓
-  itab.fun[0](data)  ← indirect call
-    ↓
-  Circle.Area(data)
-```
+<Mermaid code={ifaceLayoutDiagram} title="An interface value holds a type/method table pointer and a data pointer — calling a method is an indirect call through the itab" />
 
 You can check that a type satisfies an interface at compile time, without ever creating a value, using a blank assignment:
 
@@ -145,6 +157,83 @@ var _ Shape = (*Circle)(nil)
 ```
 
 This line only compiles if `*Circle` has every method `Shape` requires. It costs nothing at runtime and catches a missing or misspelled method the moment you write it, instead of at the first call site.
+
+## A nil pointer inside an interface is not nil
+
+An interface value is `(type, data)`. It is only `== nil` when *both* words are nil. A function that declares a `*T` result but returns it through an `error`-typed return boxes a non-nil type descriptor around a nil data pointer — the interface itself is never nil, even though the pointer inside it is:
+
+```go
+type MyErr struct{ msg string }
+
+func (e *MyErr) Error() string { return e.msg }
+
+func f(fail bool) error {
+	var p *MyErr // nil, but typed *MyErr
+	if fail {
+		p = &MyErr{msg: "boom"}
+	}
+	return p // always returns a non-nil error interface, even when p is nil
+}
+```
+
+Running this on Go 1.26.5:
+
+```text
+<nil>
+false
+*main.MyErr
+```
+
+`fmt.Println(err)` prints `<nil>` — printing dereferences enough to show the pointer is nil — but `err == nil` is `false`, and `%T` confirms the dynamic type is `*main.MyErr`. The interface variable carries a type descriptor the moment you assign a typed `nil` pointer to it, and that type descriptor alone is enough to make the comparison fail. The fix is to return a literal `nil` when there is no error, never a typed nil pointer through an interface-typed return.
+
+### Boxing and allocation
+
+Storing a concrete value in an interface variable is called **boxing**. Whether it allocates on the heap depends on what the compiler can prove. Compiling the shapes example above with `-gcflags=-m`:
+
+```text
+./main.go:11:6: can inline Circle.Area
+./main.go:16:20: devirtualizing s.Area to Circle
+./main.go:16:20: inlining call to Circle.Area
+./main.go:15:16: c does not escape
+./main.go:16:20: ~r0 escapes to heap
+```
+
+When only one concrete type ever flows into `s Shape` in that function, the compiler **devirtualizes** the call — it knows statically that `s.Area` means `Circle.Area`, inlines it, and `c` itself never escapes. But storing two different concrete types into the same interface-typed slice defeats that:
+
+```text
+./main.go:19:20: c escapes to heap
+./main.go:19:27: Rect{...} escapes to heap
+```
+
+Once a `[]Shape` can hold either a `Circle` or a `Rect`, the compiler can no longer know which `Area` to call without going through the itab at runtime, so both values are boxed onto the heap. This is the real cost behind "interfaces aren't free" — not the interface value itself (still two words on the stack), but the boxed data it points to when static devirtualization is not possible.
+
+## Interface comparability can panic
+
+Two interface values are comparable with `==` only if their dynamic types are comparable. The compiler cannot know the dynamic type ahead of time when both sides are `any`, so it always allows the `==`, and defers the real check to runtime:
+
+```go
+var a, b any
+a = []int{1, 2}
+b = []int{1, 2}
+fmt.Println(a == b)
+```
+
+```text
+panic: runtime error: comparing uncomparable type []int
+```
+
+Slices, maps, and functions are not comparable — storing one inside an interface does not change that. Comparing two interface values whose dynamic type is a struct containing a slice or map field panics the same way. This is a common source of a crash deep inside test-assertion helpers or `map[any]any` keys that looked fine until a slice-typed field showed up.
+
+## Define interfaces at the consumer, not the producer
+
+A common anti-pattern imported from Java/C# codebases is a producer package that defines a large interface next to its one concrete implementation — `type UserServiceInterface interface { ... }` alongside `type UserService struct{ ... }`, with every method of `UserService` copied onto the interface "for testability." This is **interface pollution**: the interface adds a layer of indirection without decoupling anything, since there is still only one implementation, and every time `UserService` grows a method the interface must grow too.
+
+The idiomatic Go shape is the opposite: the package that *uses* a dependency declares the smallest interface it needs, right where it uses it. The producer package exports only a concrete type. This is exactly what `io.Copy` does — its signature is `func Copy(dst Writer, src Reader) (int64, error)`, defined in `io` itself, not by every type that happens to be copyable. A caller passing `*os.File`, `*bytes.Buffer`, or `net.Conn` never needs those types to "implement" anything on purpose; they satisfy `io.Reader`/`io.Writer` because they already have the right methods.
+
+Two symptoms mean an interface should move to the consumer or disappear entirely:
+
+- The interface has exactly one implementation in the entire codebase, and no test ever swaps in a fake.
+- The interface's method set is just "every exported method of the one struct that implements it" — a mechanical copy, not a deliberately small contract.
 
 ## Trade-offs
 
@@ -168,6 +257,37 @@ This line only compiles if `*Circle` has every method `Shape` requires. It costs
 >
 > Kubernetes' `runtime.Object` interface (`k8s.io/apimachinery/pkg/runtime`) lets a single generic controller work with every Kubernetes API resource — decoupling through a small interface.
 
+## Reading AI-generated code
+
+When a generated function returns an `error` (or any interface type), check for these before trusting it:
+
+- Does every return path use a bare `nil`, or does one path return a typed pointer variable that could itself be nil (`var p *MyErr; ...; return p`)? The second form makes `err != nil` true even on the "no error" path.
+- Is `==` used to compare two `any`-typed or interface-typed values? If either side's dynamic type could be a slice, map, or func, this compiles fine and panics at runtime.
+- Does a package define an interface right next to its one and only implementation, with the interface's methods mechanically mirroring the struct's? That is interface pollution — check whether any other type or test actually needs the indirection.
+- Does the code assert or check for extra capabilities (`Flusher`, `Hijacker`, `WriterTo`) instead of assuming the concrete type? Skipping that check silently drops functionality wrapped types provide.
+- Is a function parameter typed as a concrete struct when only one or two methods are actually called on it? That is a missed opportunity for a small, consumer-defined interface — not a bug, but a design smell worth flagging.
+
+<SpotTheBug code={`type MyErr struct{ msg string }
+
+func (e *MyErr) Error() string { return e.msg }
+
+func validate(input string) error {
+	var problem *MyErr
+	if input == "" {
+		problem = &MyErr{msg: "empty input"}
+	}
+	return problem
+}
+
+func main() {
+	err := validate("ok")
+	if err != nil {
+		panic("validation failed: " + err.Error())
+	}
+}`}>
+`validate` returns `problem`, a `*MyErr` variable, through an `error`-typed return — even on the success path where `problem` is nil. The returned `error` interface then holds `(type: *MyErr, data: nil)`, which is never `== nil`, so `err != nil` is true even though input was valid. `main` then calls `err.Error()` on that nil `*MyErr` receiver to read `msg`, which dereferences a nil pointer — the real panic is `panic: runtime error: invalid memory address or nil pointer dereference`, not the message text passed to `panic()`. The fix is to return a literal `nil` on the success path: `if input == "" { return &MyErr{msg: "empty input"} }; return nil`.
+</SpotTheBug>
+
 <Callout title="Interfaces are satisfied implicitly">
 Neither `Circle` nor `Rect` ever mentions `Shape`. They satisfy it because they have `Area()` and `Perimeter()` with the right signatures. This means you can define an interface *after* the types that satisfy it — the types do not need to change at all. Retroactive interface satisfaction is one of Go's most powerful refactoring tools.
 </Callout>
@@ -181,27 +301,52 @@ export const quizInterfaces = [
       "By having all the methods the interface requires — no keyword needed",
       "By calling `register(myType, MyInterface)` at init time"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Go interface satisfaction is structural: a type needs no declaration at all, only the right method set. This is what lets a type in one package satisfy an interface in another without either importing the other."
   },
   {
-    q: "You define an interface `Printer` with one method in package `ui`. A struct `Document` in package `doc` has that method. What import is needed?",
+    q: "```go\ntype MyErr struct{ msg string }\nfunc (e *MyErr) Error() string { return e.msg }\n\nfunc f(fail bool) error {\n    var p *MyErr\n    if fail {\n        p = &MyErr{msg: \"boom\"}\n    }\n    return p\n}\n\nerr := f(false)\nfmt.Println(err == nil)\n```\nWhat does this print?",
     options: [
-      "`doc` must import `ui` to declare it implements `Printer`",
-      "`ui` must import `doc` to reference `Document`",
-      "No additional import is needed — satisfaction is implicit",
-      "Both packages must import a shared `contracts` package"
+      "true — p is nil, so the returned error is nil",
+      "false — the interface holds a non-nil type descriptor around a nil *MyErr",
+      "A compile error — *MyErr does not implement error",
+      "A runtime panic — nil pointer dereference"
     ],
-    answer: 2
+    answer: 1,
+    explain: "err is (type: *MyErr, data: nil), not (nil, nil). An interface is only == nil when both the type and the data are nil, so this typed nil pointer makes the comparison false — a classic AI-generated-code trap."
   },
   {
-    q: "What does `any` mean in Go 1.18+?",
+    q: "```go\nvar a, b any\na = []int{1, 2}\nb = []int{1, 2}\nfmt.Println(a == b)\n```\nWhat happens when this runs?",
+    options: [
+      "Prints true — the slices have equal elements",
+      "Prints false — different slice headers",
+      "panic: runtime error: comparing uncomparable type []int",
+      "Compile error: invalid operation: a == b"
+    ],
+    answer: 2,
+    explain: "The compiler allows == between two any values because it cannot know the dynamic type in advance, but slices are not comparable. The check happens at runtime and panics exactly with this message once it discovers the dynamic type is []int."
+  },
+  {
+    q: "A package exports `type UserServiceInterface interface { ... }` with every method of its single `UserService` struct copied onto it, and nothing else in the codebase implements it or swaps in a fake. What is this called, and what should change?",
+    options: [
+      "Dependency injection — this is the correct idiomatic pattern, keep it",
+      "Interface pollution — the interface should move to (and shrink at) the consumer, or be deleted",
+      "Interface embedding — combine it with another interface to make it more useful",
+      "Duck typing — rename the methods so they match a stdlib interface"
+    ],
+    answer: 1,
+    explain: "An interface with exactly one implementation and no substitution point adds indirection without decoupling anything. Idiomatic Go defines small interfaces at the consumer, sized to what that consumer actually calls — the producer just exports a concrete type."
+  },
+  {
+    q: "What is the empty interface `any` (Go 1.18+) an alias for?",
     options: [
       "A union type that holds exactly two possible types",
-      "An alias for `interface{}` — an interface with no methods",
+      "`interface{}` — an interface with no methods, satisfied by every type",
       "A constraint used only in generic type parameters",
       "A pointer to an unknown type"
     ],
-    answer: 1
+    answer: 1,
+    explain: "any is purely a readability alias for interface{}. Because it requires zero methods, every type automatically satisfies it — which is also why it gives up type safety and should be used sparingly."
   },
   {
     q: "Your function needs to write bytes. Which parameter type is most idiomatic?",
@@ -211,7 +356,8 @@ export const quizInterfaces = [
       "`io.Writer` — an interface that any writer satisfies",
       "`any` — accept anything and type-assert inside"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Accepting the small io.Writer interface — defined at the consumer's point of use in the io package itself — lets callers pass *os.File, *bytes.Buffer, a network connection, or anything else with a Write method, without the function ever depending on a concrete type."
   }
 ];
 

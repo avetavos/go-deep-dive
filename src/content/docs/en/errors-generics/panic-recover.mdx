@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is panic?
 
@@ -58,6 +60,93 @@ func safeCall(fn func()) (err error) {
     return nil
 }
 ```
+
+`safeCall` only works because `err` is a **named** return value. `recover()` runs inside the deferred function, which is a separate closure from `safeCall` itself — the only way for it to affect what `safeCall` returns is to assign to a variable that is already part of the return signature. A deferred function cannot use an ordinary `return err` statement of its own; assigning to the named result is the only channel back to the caller.
+
+export const deferRecoverDiagram = `flowchart TD
+  P["panic() called"] --> D3["deferred #3 runs (LIFO)"]
+  D3 --> D2["deferred #2 runs"]
+  D2 --> D1["deferred #1 runs -- calls recover() directly"]
+  D1 --> R["recover() intercepts -- unwinding stops"]
+  R --> Return["function returns normally to its caller"]`;
+
+<Mermaid code={deferRecoverDiagram} title="defer still runs LIFO during a panic; recover() in the right defer stops the unwind" />
+
+## recover must be called directly by the deferred function
+
+`recover()` only intercepts a panic when it is called **directly** inside a function that was itself deferred. Calling it one level removed — from a helper function that the deferred function calls — does nothing: `recover()` returns `nil`, and the panic keeps unwinding as if `recover()` had never been called.
+
+```go
+// tryRecover calls recover(), but not directly from a deferred function --
+// it is one level too deep, so recover() returns nil here.
+func tryRecover() any {
+	return recover()
+}
+
+func riskyOp() {
+	defer func() {
+		r := tryRecover() // BUG: recover() is not called directly by this deferred func
+		fmt.Println("recovered:", r)
+	}()
+	panic("boom")
+}
+```
+
+Verified on 1.26.5, calling `riskyOp()` prints `recovered: <nil>` and then the program still crashes with `panic: boom` — the `fmt.Println` runs (proving the deferred function itself did execute), but `tryRecover`'s call to `recover()` was too far from the panic to catch it, so the panic propagates anyway. Only `recover()` written literally inside the `defer func() { ... }()` body works.
+
+## A panic in a goroutine kills the process
+
+An unrecovered panic in any goroutine — not just `main`'s — crashes the entire program, and no `recover()` anywhere else can stop it. A `defer`/`recover` pair in `main` provides no protection for panics in goroutines it starts:
+
+```go
+func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("main recovered:", r) // never reached
+		}
+	}()
+	go func() {
+		panic("boom in goroutine")
+	}()
+	time.Sleep(100 * time.Millisecond)
+	fmt.Println("never printed")
+}
+```
+
+Verified on 1.26.5, this crashes the whole process — `main`'s `recover()` never fires, and neither `"main recovered"` nor `"never printed"` appears:
+
+```
+panic: boom in goroutine
+
+goroutine 19 [running]:
+main.main.func1()
+	.../main.go:10 +0x2c
+created by main.main in goroutine 1
+	.../main.go:9 +0x24
+exit status 2
+```
+
+Every goroutine that can panic needs its **own** `defer`/`recover` at its top level; recovery does not cross goroutine boundaries in either direction.
+
+## log.Fatal and os.Exit skip defers
+
+`os.Exit` (and `log.Fatal`, which calls it) terminates the process immediately — it does not unwind the stack, and it does not run any pending deferred functions, even ones registered earlier in the same function:
+
+```go
+func work() {
+	defer fmt.Println("deferred cleanup ran") // BUG: never runs
+	fmt.Println("doing work")
+	os.Exit(1)
+}
+```
+
+Verified on 1.26.5, this prints only `doing work` — `"deferred cleanup ran"` never appears, because `os.Exit` bypasses `defer` entirely rather than triggering normal unwinding. Reserve `os.Exit`/`log.Fatal` for `main` (or very near it), after any cleanup that matters has already happened through ordinary control flow — never inside a function that other code expects to clean up after itself via `defer`.
+
+## The Must* convention
+
+A function named `MustX` (or `mustX` if unexported) is a deliberate exception to "return an error, don't panic": it does the work of `X`, but panics instead of returning an error when it fails. The convention signals the trade-off in the name itself, so callers can see at the call site that a failure here is unrecoverable.
+
+`regexp.MustCompile` is the canonical example: pattern from a hardcoded string at package init is either always valid or the program has a bug, so panicking during startup is the useful failure mode. `mustPositive` in the playground below follows the same pattern for input the caller controls entirely. Reach for `Must*` only when a failure genuinely means "the caller made a programming mistake, not a runtime condition" — never for a `MustX` that wraps I/O, network calls, or anything driven by external input.
 
 ## When to use panic
 
@@ -128,6 +217,118 @@ func main() {
 
 <Playground code={panicRecoverCode} />
 
+## Re-panicking, runtime.Error, and panic(nil)
+
+A deferred function can inspect what it recovered and decide the panic isn't its business — logging it, then calling `panic(r)` again with the same value to let it continue unwinding past this point:
+
+```go
+defer func() {
+	if r := recover(); r != nil {
+		if _, ok := r.(runtime.Error); ok {
+			fmt.Println("runtime error, re-panicking:", r)
+			panic(r) // re-panic: preserve the original value and type
+		}
+	}
+}()
+```
+
+`runtime.Error` is the interface every panic *the runtime itself* generates satisfies — index out of range, nil dereference, failed type assertion, and similar. Checking for it lets code distinguish "the program hit an impossible state" from "someone deliberately called `panic(someValue)`" before deciding whether to re-panic, log more aggressively, or handle it differently.
+
+`panic(nil)` gets special treatment: since Go 1.21, recovering it does not yield a bare `nil` (which would be indistinguishable from "there was no panic at all"). It yields a `*runtime.PanicNilError`:
+
+```go
+defer func() {
+	r := recover()
+	fmt.Printf("%v\n%T\n", r, r)
+}()
+panic(nil)
+```
+
+Verified on 1.26.5, this prints `panic called with nil argument` and `*runtime.PanicNilError`. Before Go 1.21, `recover()` after `panic(nil)` returned plain `nil`, making it impossible to tell "this deferred function ran because of a panic" from "this deferred function ran normally" — the `*runtime.PanicNilError` type closes that hole.
+
+export const panicDepthCode = `package main
+
+import (
+\t"fmt"
+\t"os"
+\t"runtime"
+)
+
+// mightRepanic recovers a runtime.Error just long enough to log it, then
+// re-panics with the same value so the caller still sees the failure.
+func mightRepanic() {
+\tdefer func() {
+\t\tif r := recover(); r != nil {
+\t\t\tif _, ok := r.(runtime.Error); ok {
+\t\t\t\tfmt.Println("runtime error, re-panicking:", r)
+\t\t\t\tpanic(r) // re-panic: preserve the original value and type
+\t\t\t}
+\t\t\tfmt.Println("recovered non-runtime panic:", r)
+\t\t}
+\t}()
+\tvar s []int
+\t_ = s[5] // triggers a runtime.Error: index out of range
+}
+
+func demoRepanic() {
+\tdefer func() {
+\t\tr := recover()
+\t\tfmt.Println("demoRepanic recovered:", r)
+\t\tif _, ok := r.(runtime.Error); ok {
+\t\t\tfmt.Println("still a runtime.Error after re-panic")
+\t\t}
+\t}()
+\tmightRepanic()
+}
+
+func demoPanicNil() {
+\tdefer func() {
+\t\tr := recover()
+\t\tfmt.Printf("panic(nil) recovers as: %v (%T)\\n", r, r)
+\t}()
+\tpanic(nil)
+}
+
+func main() {
+\tdemoRepanic()
+\tdemoPanicNil()
+
+\tdefer fmt.Println("this defer never runs -- os.Exit skips it")
+\tfmt.Println("about to exit")
+\tos.Exit(0)
+}`;
+
+<Playground code={panicDepthCode} />
+
+## Reading AI-generated code
+
+When a generated snippet uses panic/recover, check for these before trusting it:
+
+- Is `recover()` called from a helper function instead of literally inside the `defer func() { ... }()` body? One level of indirection is enough to make it always return `nil`.
+- Does a goroutine started with `go func() { ... }()` have its own `defer`/`recover`? A `recover()` in `main` or the parent goroutine does not protect it.
+- Does the function that recovers use a **named** return value? Assigning to an unnamed `err` inside the deferred closure has no effect on what the function actually returns.
+- Does `os.Exit` or `log.Fatal` appear inside a function that other code relies on for cleanup via `defer`? Neither runs pending defers.
+- Is a `MustX` function called with input that comes from a user, a file, or the network, rather than a fixed value known at compile/init time?
+
+<SpotTheBug code={`func tryRecover() any {
+	return recover()
+}
+
+func riskyOp() {
+	defer func() {
+		r := tryRecover()
+		fmt.Println("recovered:", r)
+	}()
+	panic("boom")
+}
+
+func main() {
+	riskyOp()
+	fmt.Println("reached after riskyOp")
+}`}>
+`recover()` only works when the call is written directly inside a deferred function — here it is one level removed, inside `tryRecover`, which `riskyOp`'s deferred function merely calls. Verified on 1.26.5: this prints `recovered: <nil>`, then the program still crashes with `panic: boom` — `"reached after riskyOp"` never prints. The fix is to inline the call: `r := recover()` directly inside the `defer func() { ... }()` body.
+</SpotTheBug>
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -163,17 +364,30 @@ export const quizPanicRecover = [
       "An error",
       "It panics again"
     ],
-    answer: 1
+    answer: 1,
+    explain: "recover() only ever intercepts a panic when called directly inside a deferred function. Anywhere else, including ordinary code with no panic in progress, it simply returns nil."
   },
   {
-    q: "After recover() intercepts a panic inside a deferred function, what happens?",
+    q: "```go\nfunc tryRecover() any {\n    return recover()\n}\n\nfunc riskyOp() {\n    defer func() {\n        r := tryRecover()\n        fmt.Println(\"recovered:\", r)\n    }()\n    panic(\"boom\")\n}\n```\nWhat happens when riskyOp() runs?",
     options: [
-      "Execution resumes from the line that called panic()",
-      "The deferred function finishes, then the function that panicked returns normally",
-      "The program exits with status 1",
-      "The goroutine is killed silently"
+      "It prints \"recovered: boom\" and returns normally",
+      "It prints \"recovered: <nil>\", then the program still crashes with panic: boom",
+      "It compiles but recover() panics because it was called twice",
+      "Nothing prints; the panic is silently discarded"
     ],
-    answer: 1
+    answer: 1,
+    explain: "recover() must be called directly inside the deferred function to intercept a panic. Here it's called one level removed, inside tryRecover, so it returns nil and the original panic keeps unwinding — verified on 1.26.5: the Println runs, then the process still crashes."
+  },
+  {
+    q: "```go\nfunc main() {\n    go func() {\n        panic(\"boom in goroutine\")\n    }()\n    time.Sleep(100 * time.Millisecond)\n    fmt.Println(\"done\")\n}\n```\nWhat happens?",
+    options: [
+      "\"done\" prints, then the goroutine's panic is ignored",
+      "The whole process crashes; \"done\" never prints",
+      "Only the goroutine dies; main continues normally",
+      "This deadlocks"
+    ],
+    answer: 1,
+    explain: "An unrecovered panic in any goroutine crashes the entire process immediately, regardless of what other goroutines (including main) are doing. There is no recover() anywhere that can protect against a panic in a different goroutine — verified on 1.26.5."
   },
   {
     q: "Which of these is an appropriate use of panic?",
@@ -183,7 +397,8 @@ export const quizPanicRecover = [
       "A database query returns no rows",
       "A network request times out"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A missing required config at startup means the program cannot run correctly at all — that's a programmer/deployment error, not a condition a caller can meaningfully handle. The other three are ordinary, expected runtime outcomes that should return an error."
   },
   {
     q: "deferred functions run in what order relative to other defers?",
@@ -193,7 +408,19 @@ export const quizPanicRecover = [
       "Random order",
       "All defers run in parallel"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Deferred calls are pushed onto a stack and run in reverse registration order — last in, first out — whether the function returns normally or is unwinding from a panic."
+  },
+  {
+    q: "A function calls os.Exit(1) partway through, after registering a defer earlier in the same function. What happens to that defer?",
+    options: [
+      "It runs before the process exits, as with any other return",
+      "It never runs — os.Exit terminates immediately without unwinding",
+      "It runs, but any panic inside it is ignored",
+      "It runs only if the exit code is 0"
+    ],
+    answer: 1,
+    explain: "os.Exit (and log.Fatal, which calls it) terminates the process immediately without running pending deferred functions — verified on 1.26.5: a deferred fmt.Println placed before os.Exit(1) never prints."
   }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## What is a goroutine?
 
@@ -37,6 +39,33 @@ The scheduler operates on three concepts:
 | **P** | Processor — a scheduling context (GOMAXPROCS of these exist) |
 
 Each P holds a run queue of Gs. An M must hold a P to run Gs. When a goroutine blocks on network I/O, the netpoller parks it and the M keeps its P. When it blocks in a *system call* (file I/O, cgo), the M hands its P to another thread so other goroutines keep running.
+
+## Work stealing and async preemption
+
+When a P's own run queue runs dry, it does not sit idle — it **steals** half the Gs from another P's run queue. This keeps every core busy even when work is unevenly distributed across goroutines, without any coordination from your code.
+
+Work stealing only helps if a G ever gives the scheduler a chance to move it. Before Go 1.14, a goroutine only yielded at specific points — a function call, a channel operation, an allocation — so a tight loop with none of those (`for { x++ }`) could hog its P forever, starving every other goroutine assigned to it. Go 1.14 added **asynchronous preemption**: the runtime periodically sends a signal (`SIGURG` on Unix) to threads running a goroutine that has held its P too long (about 10ms), and the signal handler forces that goroutine to yield at a safe point, even mid-loop. This is why a CPU-bound loop with no function calls is no longer able to lock out the rest of your program the way it could on Go 1.13 and earlier.
+
+## GOMAXPROCS vs NumCPU
+
+These two are easy to conflate but answer different questions:
+
+| | `runtime.NumCPU()` | `runtime.GOMAXPROCS(0)` |
+|---|---|---|
+| **Answers** | How many logical CPUs does the OS report for this process? | How many Ps exist — how many goroutines can run Go code at the same instant? |
+| **Can change at runtime?** | No — read once at process start | Yes — `GOMAXPROCS(n)` with `n >= 1` changes it immediately |
+| **Default relationship** | — | Historically equal to `NumCPU()`; since Go 1.25 also capped by the cgroup CPU quota in a container, and re-checked periodically |
+| **Passing 0** | not applicable | returns the current value without changing it — the idiomatic way to just read it |
+
+`runtime.GOMAXPROCS` never sets the value below 2 on its own (unless the machine itself has fewer than 2 CPUs available), even under a tight cgroup quota — a detail worth knowing if a container's CPU limit is a fraction like 0.5.
+
+For a live view of the scheduler's internal state — not just the P count — run any program with `GODEBUG=schedtrace=1000` to print a scheduler snapshot every 1000ms to stderr:
+
+```text
+SCHED 0ms: gomaxprocs=11 idleprocs=8 threads=5 spinningthreads=1 needspinning=0 idlethreads=0 runqueue=0 [ 1 0 0 0 0 0 0 0 0 0 0 ] schedticks=[ 0 0 0 0 0 0 0 0 0 0 2 ]
+```
+
+(`gomaxprocs` here is 11 because this trace was captured on an 11-core machine — the exact number always reflects the machine it runs on.) `runqueue` is the global run queue length; the bracketed list is each P's local run queue length. Reach for this when goroutines seem stuck and you need to see whether the scheduler is starved of Ps, not just whether your code has a logic bug.
 
 ## Waiting with sync.WaitGroup
 
@@ -95,6 +124,77 @@ func main() {
 
 <Playground code={goroutinesCode} />
 
+## Goroutine leaks
+
+A **goroutine leak** is a goroutine that is still alive but can never make progress and can never exit — it sits parked forever, holding its stack and anything it closed over. Unlike a memory leak from an unreferenced allocation, the garbage collector cannot free it, because the runtime itself still holds a live reference to it. Three causes account for almost every leak in real code:
+
+1. **Blocked on a channel with no counterpart.** A goroutine receives from (or sends to) a channel that nothing will ever send to (or receive from) — the most common cause by far.
+2. **Blocked on a lock that is never released.** A goroutine calls `mu.Lock()` and the goroutine that should call `Unlock()` panicked, returned early, or was itself leaked first.
+3. **A loop with no exit condition.** A `for` loop meant to run "until cancelled" that never checks `ctx.Done()` or a stop channel on any iteration.
+
+The runnable program below is cause #1: five goroutines each receive from an unbuffered channel that nothing ever sends to or closes.
+
+```go
+func leaky() {
+	ch := make(chan int) // unbuffered, nobody ever sends
+	go func() {
+		<-ch // blocks forever: nothing ever sends on ch or closes it
+	}()
+}
+
+func main() {
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		leaky()
+	}
+	time.Sleep(50 * time.Millisecond) // let the leaked goroutines actually start
+	after := runtime.NumGoroutine()
+	fmt.Println("leaked goroutines:", after-before)
+}
+```
+
+```text
+leaked goroutines: 5
+```
+
+`runtime.NumGoroutine()` is the cheapest leak-detection tool there is — a table-driven test that snapshots the count before and after calling the code under test, then asserts it returns to the baseline, catches most leaks in CI before they ever reach production. In production, `runtime/pprof`'s goroutine profile (or, since Go 1.27, the dedicated `goroutineleak` profile mentioned below) shows exactly where every live goroutine is blocked.
+
+## A panic in one goroutine kills the whole process
+
+`recover()` only catches a panic in the **same goroutine** where it is deferred. A panic in a goroutine you launched with `go f()` cannot be recovered by a `defer`/`recover()` in `main` or any other goroutine — if that goroutine does not recover its own panic, the entire process terminates immediately, taking down every other goroutine including `main`, no matter how much unfinished work they had:
+
+```go
+func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("recovered:", r) // never reached
+		}
+	}()
+	go func() {
+		panic("boom")
+	}()
+	time.Sleep(100 * time.Millisecond)
+	fmt.Println("main finished normally") // never reached
+}
+```
+
+```text
+panic: boom
+
+goroutine 7 [running]:
+main.main.func2()
+	/tmp/goroutine-panic/main.go:15 +0x2c
+created by main.main in goroutine 1
+	/tmp/goroutine-panic/main.go:14 +0x40
+exit status 2
+```
+
+The `defer`/`recover()` in `main` never runs — the runtime does not even attempt it, because recover only ever applies to the goroutine currently unwinding. Any goroutine that can panic must recover from its own panic if the program is meant to survive it; a common pattern is a small `defer func() { recover() }()` at the top of every long-lived worker goroutine, logging the recovered value instead of just discarding it.
+
+## Unbounded spawning
+
+`go handle(req)` once per incoming request is the simplest possible concurrency model, and it works fine — until request volume spikes and the number of in-flight goroutines grows without any ceiling. Each one holds a stack, whatever it captured, and often a database connection or file handle; enough of them exhausts memory or a connection pool long before CPU becomes the bottleneck. The fix is always to put a bound on how many run at once — a fixed-size worker pool, a buffered channel used as a semaphore (see the Channels lesson), or `errgroup.SetLimit` (covered in the Sync Primitives lesson) — rather than trusting that the input will stay small.
+
 ## The runtime in 2026
 
 Three runtime changes from Go 1.25–1.27 matter for everyday goroutine code:
@@ -132,6 +232,31 @@ Work stealing:
   P1's run queue is empty → steal a G from P2's run queue
 ```
 
+export const gmpDiagram = `flowchart TD
+  subgraph Gs["Goroutines (G) -- thousands, cheap"]
+    G1["G"]
+    G2["G"]
+    G3["G"]
+    G4["G"]
+  end
+  subgraph Ps["Processors (P) -- GOMAXPROCS of these"]
+    P1["P1 run queue"]
+    P2["P2 run queue"]
+  end
+  subgraph Ms["OS threads (M)"]
+    M1["M1"]
+    M2["M2"]
+  end
+  G1 --> P1
+  G2 --> P1
+  G3 --> P2
+  G4 --> P2
+  P1 --> M1 --> CPU0["CPU core 0"]
+  P2 --> M2 --> CPU1["CPU core 1"]
+  P1 -.P1 idle: steal a G from P2.-> P2`;
+
+<Mermaid code={gmpDiagram} title="The GMP model: goroutines queue on a P, a P must be held by an M to run on a CPU core, and an idle P steals work from a busy one" />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -148,6 +273,50 @@ Work stealing:
 - **More GOMAXPROCS always means faster** — I/O-bound workloads benefit less than CPU-bound ones
 - **Goroutine leaks are not a real problem** — a goroutine with no way to exit is a memory leak
 
+## Reading AI-generated code
+
+When a generated snippet launches a goroutine, check for these before trusting it:
+
+- Is `wg.Add(1)` called *before* the `go` statement, in the calling goroutine — never as the first line inside the new goroutine?
+- Does every goroutine have a real way to stop: a loop condition that eventually becomes false, a `ctx.Done()` case, or a channel it is guaranteed to receive from or send to exactly once?
+- If this goroutine can panic, does anything assume `recover()` elsewhere (including `main`) will catch it? It will not — a panic in a goroutine that does not recover its own panic kills the whole process.
+- Is the number of goroutines spawned bounded by a worker pool, semaphore, or `errgroup.SetLimit` — or does it grow with an unbounded input like one per request or one per line of a file?
+- Is a `sync.WaitGroup` (or any struct containing one) ever passed or returned by value instead of by pointer?
+
+<SpotTheBug code={`func main() {
+	var wg sync.WaitGroup
+	results := make([]int, 5)
+	for i := 0; i < 5; i++ {
+		go func(id int) {
+			wg.Add(1) // BUG: Add happens inside the goroutine
+			defer wg.Done()
+			results[id] = id * id
+		}(i)
+	}
+	wg.Wait()
+	fmt.Println(results)
+}`}>
+`wg.Add(1)` has to run in the calling goroutine before `wg.Wait()` can possibly observe it — here it runs inside each new goroutine instead, so the scheduler is free to reach `wg.Wait()` while the counter is still `0` because none of the five goroutines have called `Add` yet. `Wait()` then returns immediately, `main` reads `results` while some of the five goroutines are still writing to it, and `go run -race` catches the resulting race on `results`:
+
+```text
+WARNING: DATA RACE
+Read at 0x00c000140000 by main goroutine:
+  fmt.Println()
+      /opt/homebrew/Cellar/go/1.26.5/libexec/src/fmt/print.go:315 +0x1ec
+  main.main()
+      /tmp/wgaddbug/main.go:19 +0x88
+
+Previous write at 0x00c000140000 by goroutine 7:
+  main.main.func1()
+      /tmp/wgaddbug/main.go:15 +0x94
+...
+Found 1 data race(s)
+exit status 66
+```
+
+The output slice can print with missing or zero entries, or the race detector can report more than one race, depending entirely on scheduling — that unpredictability is itself the tell. The fix is exactly the rule from the Goroutines lesson: call `wg.Add(1)` once per iteration in the loop, before the `go` statement.
+</SpotTheBug>
+
 <Callout title="Gotcha: goroutines started in main may not run if main returns">
 If `main` returns before a goroutine has a chance to execute, that goroutine is silently killed. The Go runtime exits as soon as the `main` goroutine returns — it does not wait for background goroutines. Always use `sync.WaitGroup`, a channel, or another synchronization mechanism to ensure `main` stays alive long enough for goroutines to finish.
 </Callout>
@@ -161,7 +330,8 @@ export const quizGoroutines = [
       "64 KB, fixed",
       "It depends on the operating system"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Goroutines start tiny and grow their stack on demand (up to 1 GB by default), which is exactly why a program can run hundreds of thousands of them where OS threads, at 1-8 MB each, could not."
   },
   {
     q: "Where must wg.Add(1) be called relative to the go statement?",
@@ -171,7 +341,8 @@ export const quizGoroutines = [
       "Before the go statement, in the calling goroutine",
       "After wg.Wait()"
     ],
-    answer: 2
+    answer: 2,
+    explain: "If Add runs inside the goroutine, the scheduler can reach wg.Wait() before that goroutine has even started, so Wait sees a counter of 0 and returns while work is still pending."
   },
   {
     q: "What happens if main returns while goroutines are still running?",
@@ -181,7 +352,8 @@ export const quizGoroutines = [
       "All goroutines are killed immediately — the process exits",
       "A panic is raised"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Go has no concept of a background/daemon goroutine that outlives main. The instant the main goroutine returns, the process exits and every other goroutine is terminated, mid-work or not."
   },
   {
     q: "What does GOMAXPROCS control?",
@@ -191,7 +363,30 @@ export const quizGoroutines = [
       "The maximum goroutine stack size",
       "The number of CPU cores the OS assigns to the process"
     ],
-    answer: 1
+    answer: 1,
+    explain: "GOMAXPROCS sets the number of Ps — the scheduling contexts that let a goroutine actually execute Go code. It caps parallelism, not the total number of goroutines you can create, which is unbounded up to memory limits."
+  },
+  {
+    q: "```go\nfunc leaky() {\n    ch := make(chan int)\n    go func() {\n        <-ch\n    }()\n}\n\nfunc main() {\n    for i := 0; i < 5; i++ {\n        leaky()\n    }\n    time.Sleep(50 * time.Millisecond)\n    fmt.Println(runtime.NumGoroutine())\n}\n```\nWhat happens to the 5 goroutines started inside leaky?",
+    options: [
+      "Each one runs to completion because ch is buffered by default",
+      "They all leak — ch has no sender and is never closed, so each receive blocks forever",
+      "The program deadlocks immediately with a fatal error",
+      "Go's garbage collector detects the unreachable goroutines and stops them"
+    ],
+    answer: 1,
+    explain: "ch is unbuffered and nothing ever sends on it or closes it, so all five receives block permanently. The GC cannot reclaim a goroutine that is still runnable/blocked — that is precisely what makes this a leak rather than an ordinary freed allocation."
+  },
+  {
+    q: "```go\nfunc main() {\n    defer func() {\n        if r := recover(); r != nil {\n            fmt.Println(\"recovered:\", r)\n        }\n    }()\n    go func() { panic(\"boom\") }()\n    time.Sleep(100 * time.Millisecond)\n}\n```\nDoes the deferred recover() in main catch the panic?",
+    options: [
+      "Yes — recover() catches any panic anywhere in the program",
+      "No — recover only catches a panic in the same goroutine where it is deferred, so the process crashes",
+      "Yes, but only because time.Sleep gives the scheduler time to propagate it",
+      "No — the program hangs forever instead of crashing"
+    ],
+    answer: 1,
+    explain: "recover() is scoped to the goroutine that is currently panicking. The launched goroutine never recovers its own panic, so the runtime terminates the whole process with a fatal panic message — main's deferred recover never even runs."
   }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The io.Reader and io.Writer interfaces
 
@@ -130,6 +132,196 @@ func main() {
 
 <Playground code={ioBufioCode} />
 
+## The io.Reader contract in depth
+
+The two-line `Read(p []byte) (n int, err error)` signature hides three rules that trip up AI-generated code constantly:
+
+1. **`Read` can return `n > 0` and a non-nil `err` in the same call.** The caller must process the `n` bytes returned *before* checking `err` — discarding them because `err != nil` silently drops the last chunk of data.
+2. **A "short read" is legal.** `Read` may fill fewer bytes than `len(p)` even when more data is coming and `err == nil`. Never assume one `Read` call fills your buffer — loop, or use a helper that loops for you.
+3. **`io.EOF` is not a failure.** It is the normal signal that there is no more data. Treat `err == io.EOF` as "stop looping, no error to report" — never `log.Fatal` it or return it up the stack unwrapped as if something broke.
+
+```go
+n, err := r.Read(buf)
+if n > 0 {
+    process(buf[:n]) // always handle n bytes first
+}
+if err != nil {
+    if err == io.EOF {
+        return nil // clean end of stream, not an error
+    }
+    return err
+}
+```
+
+When you need an exact or minimum number of bytes and don't want to hand-write the loop, `io.ReadFull(r, buf)` reads until `buf` is full or returns `io.ErrUnexpectedEOF` if the stream ends first; `io.ReadAtLeast(r, buf, min)` is the same idea for a minimum length instead of the full buffer.
+
+## bufio.Scanner's 64 KB token limit
+
+`bufio.Scanner` caps each token (line) at `bufio.MaxScanTokenSize` — 64 KB — by default. When a line exceeds that, `Scan()` returns `false` and `Err()` returns `bufio.ErrTooLong`. This looks exactly like clean EOF unless you check `Err()` after the loop — the rest of the input is silently dropped.
+
+```go
+scanner := bufio.NewScanner(r)
+scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // raise the max to 1 MB
+for scanner.Scan() {
+    process(scanner.Text())
+}
+if err := scanner.Err(); err != nil {
+    log.Fatal(err) // catches ErrTooLong, not just I/O errors
+}
+```
+
+`scanner.Buffer(initial, max)` sets both the starting buffer and the ceiling it is allowed to grow to. Call it before the first `Scan()` if a single line might legitimately exceed 64 KB (a long JSON line, a base64 blob).
+
+## bufio.Writer, Flush, and Close errors
+
+`bufio.Writer` buffers writes in memory and only reaches the underlying `io.Writer` when the buffer fills, or when you call `Flush()` explicitly. Nothing is guaranteed to have reached disk or the network until `Flush()` returns.
+
+A `Close()` error matters for the same reason: a type built on top of a buffered writer (or a file) can surface a delayed write failure — such as a disk-full error — only when the last flush happens inside `Close`. Ignoring `defer f.Close()`'s return value silently swallows that failure.
+
+```go
+w := bufio.NewWriter(f)
+fmt.Fprintln(w, "important data")
+if err := w.Flush(); err != nil {
+    return fmt.Errorf("flush: %w", err) // the write may not have failed until now
+}
+if err := f.Close(); err != nil {
+    return fmt.Errorf("close: %w", err) // a writer's Close error is not decorative
+}
+```
+
+## io.Copy, TeeReader, Pipe, and NopCloser
+
+`io.Copy(dst, src)` reads from `src` and writes to `dst` until `src` returns `io.EOF`, relying on the `Writer` contract: `Write` must return a non-nil error if it wrote fewer than `len(p)` bytes, so `io.Copy` can trust a `nil` error to mean the full chunk landed.
+
+Three small `io` helpers round out the toolkit:
+
+- **`io.TeeReader(r, w)`** — returns a Reader that mirrors every byte it reads into `w` as a side effect (checksumming or logging a stream while it is consumed, without buffering it all in memory first).
+- **`io.Pipe()`** — an in-memory, synchronous `io.Reader`/`io.Writer` pair with no buffer; a write blocks until a matching read drains it, useful for streaming data from one goroutine to another without an intermediate buffer.
+- **`io.NopCloser(r)`** — wraps an `io.Reader` with a no-op `Close`, satisfying `io.ReadCloser`. This is exactly what `http.Request.Body` needs in a test, or what you hand back when you don't want a caller to close a shared reader.
+
+```go
+tee := io.TeeReader(resp.Body, hasher)     // reading tee also feeds hasher
+req.Body = io.NopCloser(bytes.NewReader(replayed)) // satisfy io.ReadCloser in a test
+```
+
+export const ioBufioAdvancedCode = `package main
+
+import (
+\t"bufio"
+\t"bytes"
+\t"fmt"
+\t"io"
+\t"strings"
+)
+
+// shortReader returns at most 3 bytes per Read call, and delivers n>0
+// together with io.EOF on the final call — a legal io.Reader.
+type shortReader struct {
+\tdata []byte
+}
+
+func (r *shortReader) Read(p []byte) (int, error) {
+\tif len(r.data) == 0 {
+\t\treturn 0, io.EOF
+\t}
+\tn := copy(p, r.data[:min(3, len(r.data))])
+\tr.data = r.data[n:]
+\tif len(r.data) == 0 {
+\t\treturn n, io.EOF // n > 0 AND err != nil in the same call
+\t}
+\treturn n, nil
+}
+
+func main() {
+\t// 1. short reads: n>0 with err!=nil on the last call
+\tsr := &shortReader{data: []byte("hello!")}
+\tbuf := make([]byte, 10)
+\tfor {
+\t\tn, err := sr.Read(buf)
+\t\tfmt.Printf("Read: n=%d err=%v data=%q\\n", n, err, buf[:n])
+\t\tif err != nil {
+\t\t\tbreak
+\t\t}
+\t}
+
+\t// 2. io.ReadFull loops for you
+\tsr2 := &shortReader{data: []byte("hello!")}
+\texact := make([]byte, 6)
+\tn, err := io.ReadFull(sr2, exact)
+\tfmt.Printf("ReadFull: n=%d err=%v data=%q\\n", n, err, exact[:n])
+
+\t// io.ReadFull when the stream has fewer bytes than requested
+\tsr3 := &shortReader{data: []byte("hi")}
+\tshort := make([]byte, 6)
+\tn, err = io.ReadFull(sr3, short)
+\tfmt.Printf("ReadFull short: n=%d err=%v\\n", n, err)
+
+\t// 3. bufio.Scanner ErrTooLong when a token exceeds the buffer max
+\tlongLine := strings.Repeat("x", 20)
+\tscanner := bufio.NewScanner(strings.NewReader(longLine + "\\ntail\\n"))
+\tscanner.Buffer(make([]byte, 0, 16), 16) // small max on purpose
+\tfor scanner.Scan() {
+\t\tfmt.Println("scanned:", scanner.Text())
+\t}
+\tfmt.Println("scanner.Err():", scanner.Err())
+
+\t// 4. bufio.Writer needs Flush
+\tvar out bytes.Buffer
+\tw := bufio.NewWriter(&out)
+\tfmt.Fprint(w, "buffered, not flushed yet")
+\tfmt.Println("before Flush, out.Len():", out.Len())
+\tw.Flush()
+\tfmt.Println("after Flush, out.Len():", out.Len())
+
+\t// 5. io.TeeReader mirrors what it reads into a side buffer
+\tvar tee bytes.Buffer
+\ttr := io.TeeReader(strings.NewReader("mirrored"), &tee)
+\tgot, _ := io.ReadAll(tr)
+\tfmt.Printf("TeeReader read=%q sideBuffer=%q\\n", got, tee.String())
+
+\t// 6. io.NopCloser satisfies io.ReadCloser for a plain Reader
+\tvar rc io.ReadCloser = io.NopCloser(strings.NewReader("wrapped"))
+\tdata, _ := io.ReadAll(rc)
+\tfmt.Println("NopCloser Close err:", rc.Close(), "data:", string(data))
+}`;
+
+<Playground code={ioBufioAdvancedCode} />
+
+Real output from this program on Go 1.26.5:
+
+```text
+Read: n=3 err=<nil> data="hel"
+Read: n=3 err=EOF data="lo!"
+ReadFull: n=6 err=<nil> data="hello!"
+ReadFull short: n=2 err=unexpected EOF
+scanner.Err(): bufio.Scanner: token too long
+before Flush, out.Len(): 0
+after Flush, out.Len(): 25
+TeeReader read="mirrored" sideBuffer="mirrored"
+NopCloser Close err: <nil> data: wrapped
+```
+
+Note the scanner loop above: `scanned:` never prints. The 20-byte line exceeds the 16-byte max on the very first token, so `Scan()` returns `false` immediately and `Err()` reports `bufio.Scanner: token too long` — the `"tail"` line is never seen.
+
+## The Reader/Writer pipeline
+
+export const ioPipelineDiagram = `flowchart LR
+  File["os.File / net.Conn"] --> BR["bufio.Reader"]
+  BR --> Scanner["bufio.Scanner"]
+  Scanner --> App["your code"]
+  App2["your code"] --> BW["bufio.Writer"]
+  BW -- "Flush()" --> Out["os.File / net.Conn"]
+  Src["io.Reader"] -- "io.Copy" --> Dst["io.Writer"]
+  Src -- "io.TeeReader" --> Side["side io.Writer"]`;
+
+<Mermaid code={ioPipelineDiagram} title="Reading batches through bufio, writing needs an explicit Flush, TeeReader forks a copy" />
+
+## bytes.Buffer must not be copied
+
+`bytes.Buffer` holds its data in an internal slice; copying a `bytes.Buffer` by value (assigning it, passing it by value, or storing it in a slice you then append to) copies that slice header without copying a mutex or lock — but the two copies now alias the same backing array while each tracks its own read/write offsets independently, so writes and reads on one copy corrupt what the other sees. The package doc says so explicitly: *"The zero value for Buffer is an empty buffer ready to use... Do not copy a non-zero Buffer."*
+
+Unlike `sync.Mutex`, there is no `go vet copylocks`-style check for this — `bytes.Buffer` does not embed a `noCopy` marker, so the compiler and `go vet` stay silent. Always pass `*bytes.Buffer`, never `bytes.Buffer` by value, once it holds data.
+
 ## Mental Model
 
 ```text
@@ -170,6 +362,46 @@ bufio.Writer batching:
 Write your functions to accept `io.Reader` or `io.Writer` rather than `*os.File` or `*http.Request`. This single habit makes your code universally testable — pass a `strings.NewReader` in tests, a real file in production, and an HTTP body in handlers, all without touching the function. It also means your function participates in the entire ecosystem of Go I/O composition: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader`, and so on.
 </Callout>
 
+## Reading AI-generated code
+
+AI assistants write `io`/`bufio` code that compiles and looks reasonable far more often than code that is actually correct on the edges. Check for these before trusting a review:
+
+- Does a `bufio.Scanner` loop check `scanner.Err()` after the loop, or does it treat `false` as always meaning clean EOF?
+- If the input could contain a line longer than 64 KB, did it call `scanner.Buffer(...)` to raise the limit, or will it silently truncate?
+- Does anything written through a `bufio.Writer` get `Flush()`ed before the function returns or the response is sent?
+- Is `f.Close()`'s return value checked when `f` was written to, not just when it was read from?
+- Does a custom `Read` implementation assume the caller always gets a full buffer, or does the caller correctly loop / use `io.ReadFull`?
+- Is a `bytes.Buffer` ever copied by value (passed as an argument, stored in a slice, returned from a function) after it has data in it?
+
+<SpotTheBug code={`func loadConfig(path string) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	cfg := map[string]string{}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		k, v, _ := strings.Cut(scanner.Text(), "=")
+		cfg[k] = v
+	}
+	return cfg, nil
+}`}>
+
+The loop never checks `scanner.Err()`. If one line in `path` is longer than the default 64 KB limit — a long value, a stray binary file — `Scan()` returns `false`, the loop ends, and `loadConfig` returns a **partial** config with a `nil` error, as if the file had been read completely. Fix it by checking the error after the loop:
+
+```go
+if err := scanner.Err(); err != nil {
+    return nil, fmt.Errorf("scan %s: %w", path, err)
+}
+return cfg, nil
+```
+
+If lines longer than 64 KB are expected and valid, call `scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)` before the loop instead of just detecting the failure.
+
+</SpotTheBug>
+
 export const quizIoBufio = [
   {
     q: "What does io.ReadAll(r) return?",
@@ -179,7 +411,8 @@ export const quizIoBufio = [
       "int, error",
       "io.Reader, error"
     ],
-    answer: 1
+    answer: 1,
+    explain: "io.ReadAll reads until EOF and returns everything it read as a []byte, plus any error other than io.EOF."
   },
   {
     q: "After bufio.Scanner.Scan() returns false, what must you check?",
@@ -189,7 +422,8 @@ export const quizIoBufio = [
       "scanner.Err() to distinguish EOF from a real error",
       "Nothing — false always means clean EOF"
     ],
-    answer: 2
+    answer: 2,
+    explain: "false means either clean EOF or an error (including ErrTooLong from a token over the 64 KB default limit) — only Err() tells you which."
   },
   {
     q: "Which type implements both io.Reader and io.Writer?",
@@ -199,7 +433,8 @@ export const quizIoBufio = [
       "bufio.Scanner",
       "io.Discard"
     ],
-    answer: 1
+    answer: 1,
+    explain: "bytes.Buffer has both Read and Write methods; strings.Reader is read-only and io.Discard is write-only."
   },
   {
     q: "Why accept io.Reader in a function instead of *os.File?",
@@ -209,7 +444,30 @@ export const quizIoBufio = [
       "Accepting io.Reader makes the function work with any source: files, buffers, strings, network — without code changes",
       "Go does not allow *os.File as a function parameter"
     ],
-    answer: 2
+    answer: 2,
+    explain: "io.Reader is the smallest common interface for a byte stream, so any function written against it works with a file, a test string, or a network connection unchanged."
+  },
+  {
+    q: "\`\`\`go\nsc := bufio.NewScanner(strings.NewReader(strings.Repeat(\"x\", 100000)))\nsc.Scan()\nfmt.Println(sc.Err())\n\`\`\`\nWhat does this print?",
+    options: [
+      "<nil>",
+      "EOF",
+      "bufio.Scanner: token too long",
+      "It panics"
+    ],
+    answer: 2,
+    explain: "A single 100,000-byte token exceeds the default 64 KB (bufio.MaxScanTokenSize) limit, so Scan() returns false on the first call and Err() reports bufio.ErrTooLong."
+  },
+  {
+    q: "\`\`\`go\nvar out bytes.Buffer\nw := bufio.NewWriter(&out)\nfmt.Fprint(w, \"hi\")\nfmt.Println(out.Len())\n\`\`\`\nWhat does this print, and why?",
+    options: [
+      "2 — bufio.Writer writes through immediately",
+      "0 — nothing reaches out until w.Flush() is called",
+      "It does not compile — Fprint needs an io.Writer, not a bufio.Writer",
+      "-1 — out is unset until Close"
+    ],
+    answer: 1,
+    explain: "bufio.Writer buffers writes in memory; out.Len() is 0 until Flush() (or the buffer fills) actually pushes the bytes into the underlying bytes.Buffer."
   }
 ];
 

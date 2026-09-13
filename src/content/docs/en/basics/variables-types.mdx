@@ -1,14 +1,16 @@
 ---
 title: 'Variables & Types'
-description: 'var, short :=, zero values, basic types, constants, iota, and explicit type conversions.'
+description: 'var, short :=, zero values, basic types, constants, iota, overflow, and why strings are byte sequences.'
 sidebar:
-  order: 3
+  order: 2
 ---
 
 import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Declaring variables
 
@@ -31,7 +33,7 @@ func main() {
 }
 ```
 
-`:=` cannot be used at package scope — only `var` works there. You also cannot use `:=` if every variable on the left side was already declared (at least one must be new).
+`:=` cannot be used at package scope — only `var` works there. You also cannot use `:=` if every variable on the left side was already declared (at least one must be new). That "at least one new" rule is exactly what makes accidental shadowing possible — see below.
 
 ## Zero values
 
@@ -46,13 +48,16 @@ Every type in Go has a **zero value** — the value a variable holds before any 
 | `bool` | `false` |
 | `rune` (alias for `int32`) | `0` |
 | `byte` (alias for `uint8`) | `0` |
+| array `[N]T` | an array of `N` zero values of `T` |
+| struct | every field set to its own zero value |
+| interface (including `error`) | `nil` |
 | pointer, slice, map, channel, function | `nil` |
 
-This guarantee means you can always use a variable safely after declaration, even without an explicit initialiser.
+This guarantee means you can always use a variable safely after declaration, even without an explicit initialiser. One nuance to keep in the back of your mind for later: `nil` itself is untyped, and the zero value of an *interface* variable is `nil` — but a `nil` concrete pointer stored inside an interface is not the same `nil`. That trap is covered in depth in Interfaces; for now, just know a `var err error` starts genuinely `nil`.
 
 ## Basic types
 
-Go's numeric types are explicit about their size. The unsized `int` and `uint` match the platform word size (32 or 64 bits).
+Go's numeric types are explicit about their size. The unsized `int` and `uint` match the platform word size (32 or 64 bits, decided by `GOARCH`, not the OS).
 
 ```go
 var i   int     = -100      // platform-sized signed integer
@@ -69,7 +74,7 @@ var ok  bool    = true
 
 ## Constants and iota
 
-Constants are declared with `const` and evaluated at compile time. Until a constant is used, it has no fixed type — it is an **untyped constant** that adapts to whatever numeric type the context requires, so the same `const Pi = 3.14159` can be assigned directly to a `float32` or a `float64` variable with no conversion needed. A `const` block with `iota` creates auto-incrementing integer sequences — the idiomatic Go way to define enumerations:
+Constants are declared with `const` and evaluated at compile time. A `const` block with `iota` creates auto-incrementing integer sequences — the idiomatic Go way to define enumerations:
 
 ```go
 const Pi = 3.14159
@@ -85,6 +90,34 @@ const (
 ```
 
 `iota` resets to zero at the start of each `const` block and increments by one for each constant specification within the block.
+
+## Untyped constants and constant arithmetic
+
+Until a constant is used, it has no fixed type — it is an **untyped constant** that adapts to whatever numeric type the context requires, so the same `const Pi = 3.14159` can be assigned directly to a `float32` or a `float64` variable with no conversion needed. This is also why `const Timeout = 5 * time.Second` works: `5` is an untyped integer constant, the multiplication happens at compile time, and the untyped result takes on `time.Duration`'s type only when it is assigned.
+
+Untyped constants are computed with arbitrary precision at compile time, which lets you write things that would overflow any real machine type — as long as you never convert them to one that's too small:
+
+```go
+const big = 1 << 62 // fine — an untyped constant, not yet any concrete int size
+_ = int32(big)       // compile error: constant 4611686018427387904 overflows int32
+```
+
+Compiling the second line with Go 1.26.5 gives exactly that message. The overflow is caught at compile time precisely *because* `big` is untyped — the compiler knows its exact value and knows it cannot fit in an `int32`.
+
+## `iota` beyond +1
+
+`iota` is not limited to "increment by one" — it is just a counter you can use in any expression, and you can skip values with the blank identifier:
+
+```go
+const (
+    _  = iota             // skip 0
+    KB = 1 << (10 * iota) // 1 << 10  == 1024
+    MB                    // 1 << 20  == 1048576
+    GB                    // 1 << 30  == 1073741824
+)
+```
+
+Each subsequent line without an explicit expression repeats the *previous* line's expression with the new `iota` substituted in. A new `const ( ... )` block always resets `iota` back to `0`, regardless of what the previous block ended on.
 
 ## Explicit type conversions
 
@@ -102,6 +135,75 @@ var n int = int(sum)     // truncates: 9
 s := strconv.Itoa(n)       // int → string
 back, _ := strconv.Atoi(s) // string → int (error ignored with _)
 ```
+
+## Integer overflow and `uint` underflow
+
+Go's fixed-width integers wrap around silently on overflow — there is no panic, no error, just a value that quietly went past its range:
+
+```go
+var small int8 = 127
+small++
+fmt.Println(small) // -128, not a compile error or a panic
+```
+
+The same thing happens at the bottom of an unsigned type's range. This is a common bug when computing an index from `len(...)`: subtracting from an unsigned value that could be zero wraps around to a huge positive number instead of going negative:
+
+```go
+s := ""
+var lastIndex uint = uint(len(s)) - 1
+fmt.Println(lastIndex) // 18446744073709551615 on a 64-bit platform, not -1
+```
+
+`len` itself returns a signed `int`, so `len(s)-1` on an `int` is a perfectly normal `-1` — the bug only appears once that value is stored into (or passed as) an unsigned type. Watch for `uint`, `uint32`, or similar showing up in size/index/count arithmetic near zero.
+
+## Strings are bytes
+
+A Go string is a read-only sequence of bytes, usually (but not necessarily) holding UTF-8 text. `len`, indexing with `s[i]`, and `range` all operate on it, but they don't agree on what a single "character" is:
+
+- `len(s)` counts **bytes**.
+- `s[i]` yields the **byte** at position `i`, not a character.
+- `range s` yields **runes** (Unicode code points) and the *byte offset* where each one starts — which is why the index sequence has gaps for multi-byte characters.
+
+```go
+word := "héllo" // é encodes to 2 bytes in UTF-8
+fmt.Println(len(word))     // 6 — byte length, not 5 characters
+fmt.Println(word[1])       // 195 — one byte of é's two-byte encoding, not 'é'
+for i, r := range word {
+    fmt.Printf("byte offset %d: %q\n", i, r)
+}
+```
+
+<Mermaid code={stringBytesDiagram} title="len(word) counts 6 bytes; range word visits 5 runes at byte offsets 0, 1, 3, 4, 5" />
+
+export const stringBytesDiagram = `flowchart TB
+  subgraph Bytes["len(word) = 6 bytes"]
+    direction LR
+    B0["byte 0: 'h'"] --> B1["byte 1: 0xC3"] --> B2["byte 2: 0xA9"] --> B3["byte 3: 'l'"] --> B4["byte 4: 'l'"] --> B5["byte 5: 'o'"]
+  end
+  subgraph Runes["range word = 5 runes"]
+    direction LR
+    R0["offset 0: 'h'"] --> R1["offset 1: 'é'"] --> R2["offset 3: 'l'"] --> R3["offset 4: 'l'"] --> R4["offset 5: 'o'"]
+  end`;
+
+If you need the number of *characters*, use `utf8.RuneCountInString(s)` or convert with `[]rune(s)` — both cost an O(n) scan, since Go does not precompute a rune count.
+
+## `:=` shadowing
+
+Because `:=` only requires *one* new variable on the left, it is easy to accidentally declare a fresh variable with the same name as one in an outer scope, instead of reusing it. This is especially dangerous with `err` inside an `if`:
+
+```go
+func run() error {
+    var err error
+    if v, err := step(); err != nil { // := declares a NEW err here, shadowing the outer one
+        fmt.Println("inner saw:", v, err)
+    }
+    return err // the outer err was never touched — still nil
+}
+```
+
+`step()` fails, the `if` body correctly prints the error — but `run()` still returns `nil`, because the `err` checked and printed inside the `if` is a completely different variable from the `err` declared with `var` one line above. The compiler accepts this silently: both `err` variables are used, so there is no "declared and not used" error to warn you.
+
+`go vet` does **not** catch this by default — the shadow check was pulled out of the default vet suite because it flags too many harmless cases. To catch it deliberately, install the separate analyzer and run it explicitly: `go install golang.org/x/tools/go/analysis/passes/shadow/cmd/shadow@latest`, then `go vet -vettool=$(which shadow) ./...`. `golangci-lint` also ships a `govet` setting that can enable the same `shadow` check. The safer habit, though, is to avoid `:=` inside an `if`/`for` when a variable with the same name already exists in the enclosing scope — declare it with `var` outside, then use plain `=` inside.
 
 export const variablesCode = `package main
 
@@ -151,6 +253,67 @@ func main() {
 
 <Playground code={variablesCode} />
 
+The second playground below is a self-contained tour of everything on this page that can silently go wrong: shadowing, overflow, underflow, and strings-as-bytes.
+
+export const variablesDepthCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+\t"unicode/utf8"
+)
+
+// step simulates an operation that can fail.
+func step() (int, error) {
+\treturn 0, errors.New("boom")
+}
+
+// run demonstrates := shadowing: the if-statement's err is a NEW variable,
+// not the outer one declared with var.
+func run() error {
+\tvar err error
+\tif v, err := step(); err != nil { // shadows the outer err
+\t\tfmt.Println("inner saw:", v, err)
+\t}
+\treturn err // outer err was never touched — still nil
+}
+
+const (
+\t_  = iota             // skip 0
+\tKB = 1 << (10 * iota) // 1 << 10
+\tMB                    // 1 << 20
+\tGB                    // 1 << 30
+)
+
+func main() {
+\t// := shadowing: a classic silent bug.
+\tfmt.Println("run() returned:", run())
+
+\t// Silent integer overflow: int8 wraps instead of panicking.
+\tvar small int8 = 127
+\tsmall++
+\tfmt.Println("int8(127)+1 =", small)
+
+\t// uint underflow: subtracting past zero wraps to a huge number.
+\ts := ""
+\tvar lastIndex uint = uint(len(s)) - 1
+\tfmt.Println("uint(len(\\"\\"))-1 =", lastIndex)
+
+\t// Strings are bytes: len, indexing, and range disagree on multi-byte runes.
+\tword := "héllo"
+\tfmt.Println("len(word) =", len(word))
+\tfmt.Println("word[1] =", word[1])
+\tfmt.Println("rune count =", utf8.RuneCountInString(word))
+\tfor i, r := range word {
+\t\tfmt.Printf("  byte offset %d: %q\\n", i, r)
+\t}
+
+\t// iota beyond +1: bit-shift pattern for size constants.
+\tfmt.Println("KB, MB, GB =", KB, MB, GB)
+}`;
+
+<Playground code={variablesDepthCode} />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -159,12 +322,39 @@ func main() {
 | Zero values | No uninitialised variables, no null-dereference surprise | A nil pointer or nil map can still panic — the zero value is only safe for types designed to be immediately usable |
 | No implicit conversion | No hidden precision loss | You must write `float64(x)` every time you convert |
 | `iota` enums | Concise way to build enumerations | No built-in string representation — you must write a `String()` method yourself |
+| Fixed-width integers | Predictable size and layout | Overflow wraps silently instead of panicking — no built-in bounds checking on arithmetic |
 
 ## Common Misconceptions
 
 - **"`int` is always 32-bit."** The size of `int` depends on `GOARCH` (amd64/arm64 = 64-bit, 386/arm = 32-bit), not the OS. Use `int32` or `int64` if you need a fixed size.
 - **"`var x = y` and `x := y` are always the same."** `:=` only works at function scope — it cannot be used at package scope.
 - **"The zero value of a pointer is 0."** The zero value of a pointer, slice, map, channel, or function is `nil`, not the number 0.
+- **"Overflowing an integer panics, like a nil dereference does."** It does not — Go's fixed-width integers wrap around silently. Nothing stops at runtime to tell you.
+- **"`len(s)` tells you how many characters are in `s`."** It tells you the byte length. A string with multi-byte runes has more bytes than characters.
+
+## Reading AI-generated code
+
+Generated code that touches variables and basic types tends to hide these exact bugs:
+
+- Does an `if`/`for` header use `:=` with a name (often `err`) that already exists in the enclosing scope? Check whether it's meant to reuse that variable or is silently shadowing it.
+- Does arithmetic on a fixed-width type (`int8`, `uint16`, a byte count, …) ever approach its type's minimum or maximum? There's no automatic overflow check.
+- Is a `uint` (or `uint32`/`uint64`) ever produced by subtracting from `len(...)` or another value that could be `0`? That's the classic underflow-to-huge-number bug.
+- Does the code index a string with `s[i]` or compare `len(s)` against a "number of characters," when the string might contain non-ASCII text?
+- Does an `iota` block start with a plain identifier instead of `_` when the zero-th value should be skipped or treated as "invalid"?
+
+<SpotTheBug code={`func step() (int, error) {
+	return 0, errors.New("boom")
+}
+
+func run() error {
+	var err error
+	if v, err := step(); err != nil {
+		fmt.Println("inner saw:", v, err)
+	}
+	return err
+}`}>
+The `if` statement's `:=` declares a *new* `err`, scoped to the `if` block — it does not assign to the outer `err` declared with `var`. `step()` really does fail, and the `fmt.Println` inside the `if` really does print the error, but `run()` still returns `nil`, because the outer `err` was never reassigned. Fix it by not shadowing: `v, err := step()` using the already-declared `err` requires reusing `=` for `err` and `:=` only where a name is genuinely new, e.g. write `var v int; v, err = step()`, or move the `if` check onto its own line after the assignment.
+</SpotTheBug>
 
 <Callout title="No implicit numeric conversions">
 Go will not silently convert between numeric types. An expression like `int(3) + float64(1.5)` is a **compile error** — mismatched types `int` and `float64`. You must write `float64(3) + 1.5` when you want a float64 result. Converting a numeric *constant* is checked even more strictly: `int(1.5)` is also a compile error (`cannot convert 1.5 (untyped float constant) to type int`), because the constant 1.5 has no exact integer representation. The same conversion on a *variable* is allowed and truncates instead — `f := 1.5; n := 3 + int(f)` compiles and gives `n == 4`. This is stricter than most languages, but it prevents entire classes of subtle precision and overflow bugs that occur when a language silently widens or narrows values for you.
@@ -179,7 +369,8 @@ export const quizVariables = [
       "\"\" (empty string)",
       "undefined"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Every Go type has a zero value that's ready to use without initialisation; for string it's the empty string, not nil."
   },
   {
     q: "Given `const ( A = iota; B; C )`, what is the value of C?",
@@ -189,17 +380,8 @@ export const quizVariables = [
       "2",
       "3"
     ],
-    answer: 2
-  },
-  {
-    q: "Which of the following correctly converts an int to float64 in Go?",
-    options: [
-      "(float64) x",
-      "float64(x)",
-      "x as float64",
-      "cast(x, float64)"
-    ],
-    answer: 1
+    answer: 2,
+    explain: "iota starts at 0 for A and increments by one per line within the block, so B is 1 and C is 2."
   },
   {
     q: "Where can the short declaration operator := NOT be used?",
@@ -209,7 +391,41 @@ export const quizVariables = [
       "At package scope",
       "Inside a function body"
     ],
-    answer: 2
+    answer: 2,
+    explain: ":= is only legal inside function bodies (including their nested blocks) — package-level declarations must use var."
+  },
+  {
+    q: "```go\nfunc run() error {\n    var err error\n    if v, err := step(); err != nil {\n        fmt.Println(v, err)\n    }\n    return err\n}\n```\nIf step() always returns a non-nil error, what does run() return?",
+    options: [
+      "The error returned by step()",
+      "nil, because the if statement's err shadows the outer one",
+      "A compile error: err redeclared in this block",
+      "A compile error: err declared and not used"
+    ],
+    answer: 1,
+    explain: ":= inside the if only needs one new variable (v), so it happily declares a brand-new err scoped to the if block. The outer err is never touched, so run() returns nil even though step() failed.",
+  },
+  {
+    q: "```go\nvar small int8 = 127\nsmall++\nfmt.Println(small)\n```\nWhat does this print?",
+    options: [
+      "128",
+      "-128",
+      "a compile error: constant overflows int8",
+      "a runtime panic: integer overflow"
+    ],
+    answer: 1,
+    explain: "int8's range is -128 to 127. Incrementing past 127 wraps silently to -128 — Go performs no runtime overflow check on ordinary arithmetic."
+  },
+  {
+    q: "```go\nconst big = 1 << 62\nvar v int32 = int32(big)\n```\nDoes this compile?",
+    options: [
+      "Yes, v ends up 0 after truncation",
+      "Yes, v ends up a wrapped negative number",
+      "No — constant 4611686018427387904 overflows int32",
+      "No — 1 << 62 is not a valid constant expression"
+    ],
+    answer: 2,
+    explain: "big is an untyped constant, so the compiler knows its exact value at compile time and rejects the conversion to int32 outright, rather than silently truncating it the way a runtime conversion of a variable would."
   }
 ];
 

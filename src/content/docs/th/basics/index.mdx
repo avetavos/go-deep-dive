@@ -1,6 +1,6 @@
 ---
 title: 'พื้นฐานและ Syntax'
-description: 'ปรัชญาการออกแบบของ Go, สิ่งที่โมดูลนี้ครอบคลุม, และโปรแกรมแรกของคุณ'
+description: 'ปรัชญาการออกแบบของ Go, Go program กลายเป็นอะไร, สิ่งที่โมดูลนี้ครอบคลุม, และโปรแกรมแรกของคุณ'
 sidebar:
   order: 1
 ---
@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ปรัชญาการออกแบบของ Go
 
@@ -22,14 +23,32 @@ Go ถูกออกแบบมาโดยยึดสี่แนวคิ�
 
 **วิธีเดียวที่ชัดเจน (One obvious way)** เครื่องมือของ Go บังคับ code style เดียว (`gofmt`), module system เดียว (`go mod`), และ test runner เดียว (`go test`) การถกเถียงเรื่อง formatting, ลำดับ import, และโครงสร้าง project จึงไม่เกิดขึ้นเลย
 
+```go
+// The compiler rejects unused imports and unused local variables.
+// This keeps every file minimal and every dependency intentional.
+import "fmt"
+
+func greet(name string) string {
+    return "Hello, " + name
+}
+```
+
+## Go Program กลายเป็นอะไร
+
+`go build` compile program ของคุณตรงไปเป็น **native machine-code binary** สำหรับ `GOOS`/`GOARCH` ของคุณ — ไม่มี bytecode และไม่มี virtual machine เข้ามาเกี่ยวข้องตอน runtime เลย ต่างจาก Java หรือ CPython interpreter บนเครื่องนี้ `go build` โปรแกรม "hello world" ไฟล์เดียวจะได้ executable แบบ self-contained ขนาดสองสามเมกะไบต์ (ส่วนใหญ่คือ Go runtime — scheduler กับ garbage collector — ที่ link เข้าไปใน binary โดยตรง) และรันมันต้องการแค่ operating system เท่านั้น: ไม่ต้องติดตั้ง Go ไม่ต้อง ship runtime แยกไปด้วย
+
+`go run` เป็นแค่ตัวห่อความสะดวก ไม่ใช่ execution model คนละแบบ: มัน compile เป็น binary ชั่วคราวเบื้องหลังแล้วรันทันที จากนั้นทิ้ง binary นั้นไป มันเป็นวิธีเร็วที่สุดสำหรับลองอะไรตอนเรียนรู้ — playground ทุกตัวในเว็บนี้ทำงานแบบ `go run` — แต่สำหรับอะไรที่คุณ deploy หรือ benchmark ซ้ำ ๆ ให้ `go build` ครั้งเดียวแล้วรัน binary ที่ได้โดยตรง
+
 ## โมดูลนี้ครอบคลุมอะไร
 
-โมดูล Basics จะพาคุณผ่านรากฐานของภาษา:
+| บทเรียน | หัวข้อ |
+|--------|--------|
+| **Variables และ Types** | `var`, `:=`, zero values, `const`, `iota`, overflow, string ในฐานะ byte |
+| **Control Flow** | `if` พร้อม init, `for` (สามรูปแบบ), labeled break/continue, `switch` |
+| **Functions** | multiple return, `defer`, closure, first-class function, pass-by-value |
+| **Packages และ Imports** | `package`, `import`, ลำดับ initialization, `internal/`, `go.mod` |
 
-- **Packages และ Imports** — วิธีจัดการ code ใน package และ import dependency
-- **Variables และ Types** — การประกาศตัวแปร, zero values, types พื้นฐาน, constants, และ `iota`
-- **Control Flow** — `if`, `for` (loop keyword เดียวของ Go), `switch`, และ `range`
-- **Functions** — multiple return values, `defer`, closures, และ first-class functions
+เมื่อจบโมดูลนี้คุณจะอ่านและเขียน idiomatic Go program แบบสมบูรณ์ตั้งแต่ต้นได้
 
 ## โปรแกรมแรก
 
@@ -81,16 +100,38 @@ func main() {
 | keyword เพียง 25 คำ | เรียนรู้เร็ว, อ่าน code คนอื่นได้ง่าย | feature บางอย่าง (เช่น generics ยุคแรก) ต้องใช้ workaround |
 | fast compile | feedback loop สั้น, iteration เร็ว | ไม่มี REPL ที่สมบูรณ์แบบ |
 | garbage collection | ไม่ต้องจัดการ memory เอง | GC pause ที่ unpredictable ใน latency-critical system |
+| native binary ไม่มี VM | ไม่ต้องติดตั้ง runtime, startup เร็ว, deploy ง่าย (ไฟล์เดียว) | binary ใหญ่กว่า interpreted script; Go runtime ถูก link เข้าไปเสมอ |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
 - **"Go คือ C เวอร์ชันใหม่"** — Go มี GC, goroutine, interface, และ module system ที่แตกต่างจาก C โดยสิ้นเชิง
 - **"Go ไม่มี OOP"** — Go มี struct, method, และ interface ที่ทำ composition ได้ แต่ไม่มี class hierarchy แบบ Java
 - **"Go ใช้ได้แค่ backend server"** — Go ใช้งานได้กับ CLI tools, DevOps tooling, WebAssembly, embedded systems, และ data pipelines
+- **"`go run` คือวิธีที่ Go program ควรถูกรันใน production"** — `go run` เป็นแค่ความสะดวกตอนพัฒนาที่ compile เป็น binary ทิ้งขว้างทุกครั้ง; Go program ที่ deploy จริงจะ build ครั้งเดียวด้วย `go build` แล้ว ship binary ตัวนั้นออกไป
 
 <Callout title="Explicit มากกว่า Implicit">
 Go บังคับให้คุณระบุ type และการแปลงอย่างชัดเจน ไม่มี coercion แบบ implicit เช่น คุณไม่สามารถบวก `int` กับ `float64` ได้โดยตรง ต้องแปลงก่อนเสมอ ทำให้ code อ่านง่ายขึ้นและลด bug ที่เกิดจาก type mismatch ได้อย่างมาก
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+ตลอดทุกบทในโมดูลนี้ การตรวจไม่กี่ข้อเดียวกันนี้จับ bug ของ generated code ได้ส่วนใหญ่ก่อนที่มันจะถูกใช้จริง:
+
+- `:=` ใน `if`/`for` ใช้ชื่อ (มักเป็น `err`) ที่มีอยู่แล้วใน scope ภายนอกซ้ำ หรือแอบประกาศตัวแปรใหม่ที่ shadow มันอยู่?
+- `break` อยู่ใน `switch` (หรือ `select`) ที่ตัวมันเองอยู่ใน `for` หรือเปล่า? มันออกจากแค่ construct ข้างในเท่านั้น ไม่เคยออกจาก loop
+- `defer` อยู่ใน loop หรือเปล่า หรือ `defer f.Close()` ทิ้ง error ที่สำคัญไปหรือเปล่า?
+- function value หรือ struct field ที่เก็บมันอยู่ ถูกเรียกโดยไม่เช็ก `nil` ก่อนหรือเปล่า?
+
+<SpotTheBug code={`type Config struct {
+	OnReady func()
+}
+
+func main() {
+	c := Config{}
+	c.OnReady()
+}`}>
+`OnReady` เป็น field ชนิด function ที่ไม่เคยถูก assign ค่า จึงมี zero value เป็น `nil` การเรียก function value ที่เป็น `nil` จะ panic: `runtime error: invalid memory address or nil pointer dereference` นี่คือ bug ประเภทเดียวกับ nil pointer dereference — วิธีแก้คือเช็ก `if c.OnReady != nil { c.OnReady() }` ก่อนเรียก หรือให้ `Config` มี constructor ที่กำหนด default เป็น no-op function เสมอ
+</SpotTheBug>
 
 export const quizIndex = [
   {
@@ -101,7 +142,8 @@ export const quizIndex = [
       "ทุก file ต้องมี package-level comment",
       "ทุก exported function ต้องมี documentation"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Go ถือว่า unused import หรือ unused local variable เป็น compile error จริง ไม่ใช่แค่ warning — ไม่มีทาง build ผ่านโดยปล่อยไว้ทั้งสองอย่าง"
   },
   {
     q: "อะไรคือ entry point ของทุก executable Go program?",
@@ -111,7 +153,8 @@ export const quizIndex = [
       "func main() ใน package main",
       "func Run() ใน package main"
     ],
-    answer: 2
+    answer: 2,
+    explain: "execution เริ่มที่ func main ใน package main — init function อาจรันก่อนหน้านั้น แต่มีไว้เตรียม state ไม่ใช่ entry point"
   },
   {
     q: "การบังคับ style เดียวของ Go (`gofmt`) หมายความว่าอะไรในทางปฏิบัติ?",
@@ -121,7 +164,41 @@ export const quizIndex = [
       "gofmt เขียน logic ของคุณใหม่ให้เป็น idiomatic มากขึ้น",
       "gofmt ใช้ได้กับ files ใน standard library เท่านั้น"
     ],
-    answer: 1
+    answer: 1,
+    explain: "gofmt จัด format แค่ whitespace และ layout เท่านั้น — ไม่เคยเปลี่ยน logic ของ code — แต่เพราะมันเป็น style เดียวที่ยอมรับ จึงตัดการถกเถียงเรื่อง formatting ออกไปทั้งหมด"
+  },
+  {
+    q: "`go build` ผลิตอะไรออกมาสำหรับ Go program ธรรมดา?",
+    options: [
+      "Bytecode ที่รันบน Go virtual machine",
+      "native machine-code binary สำหรับ GOOS/GOARCH ปัจจุบัน โดยไม่มี VM ตอน runtime",
+      "script ที่ยังต้องใช้คำสั่ง go เพื่อ execute",
+      "source code ที่ตัด type ออก คล้าย transpiler"
+    ],
+    answer: 1,
+    explain: "Go compile ตรงไปเป็น native machine code binary ที่ได้ไม่ต้องติดตั้ง runtime แยกเพื่อรัน — ต่างจากไฟล์ bytecode ของ JVM หรือ interpreted script"
+  },
+  {
+    q: "```go\nvar a int = 3\nvar b float64 = 1.5\nfmt.Println(a + b)\n```\nโค้ดนี้ compile ผ่านไหม?",
+    options: [
+      "ผ่าน print 4.5",
+      "ผ่าน print 4 (b ถูก truncate เป็น int)",
+      "ไม่ผ่าน — mismatched types int and float64",
+      "ผ่าน แต่เพราะ fmt.Println รับ type อะไรก็ได้เท่านั้น"
+    ],
+    answer: 2,
+    explain: "Go ไม่มี implicit numeric conversion แม้แต่ตอนเรียก variadic function อย่าง fmt.Println ก็ตาม a กับ b ต้องถูกแปลงให้เป็น type เดียวกันอย่างชัดเจนก่อน เช่น float64(a) + b ถึงจะบวกกันได้"
+  },
+  {
+    q: "```go\ntype Config struct {\n    OnReady func()\n}\n\nfunc main() {\n    c := Config{}\n    c.OnReady()\n}\n```\nโค้ดนี้จะเกิดอะไรขึ้นตอนรัน?",
+    options: [
+      "ไม่ print อะไรและจบโปรแกรมปกติ",
+      "panic: nil pointer dereference",
+      "compile error: OnReady is not initialized",
+      "OnReady กลายเป็น no-op function โดยอัตโนมัติ"
+    ],
+    answer: 1,
+    explain: "zero value ของ OnReady คือ nil เพราะไม่เคยถูก assign ค่า การเรียก nil function value จะ panic ตอน runtime — Go ไม่มี no-op default ให้โดย implicit"
   }
 ];
 

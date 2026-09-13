@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## แนวคิด polymorphism ของ Go
 
@@ -21,6 +22,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 - **Polymorphism** โดยไม่มีต้นไม้ inheritance
 - **Dependency inversion** โดยไม่ต้องพึ่ง framework — รับ interface, คืน struct
 - **Composition** โดยไม่ต้องใช้ `extends` — embed types เพื่อ promote fields และ methods
+
+ทุกกฎในโมดูลนี้จบลงที่อย่างใดอย่างหนึ่งตอนคุณเขียนโค้ดจริง: compile error ที่ระบุชื่อ method ที่ขาดหรือไม่ตรง หรือ nil surprise ข้างใน interface หรือ embedded pointer การฝึกจำทั้งสองแบบให้ได้ทันทีที่เห็น — ไม่ใช่แค่รู้กฎในเชิงนามธรรม — คือทักษะจริงที่โมดูลนี้สร้าง
 
 ## แผนที่โมดูล
 
@@ -55,10 +58,20 @@ func printArea(s Sizer) {
 \tfmt.Printf("area = %.2f\\n", s.Area())
 }
 
+// Counter shows the other half of the story: a pointer receiver that mutates.
+type Counter struct{ n int }
+
+func (c *Counter) Inc() { c.n++ }
+
 func main() {
 \tr := Rectangle{Width: 4, Height: 3}
 \tfmt.Println(r.Area())
 \tprintArea(r)
+
+\tc := &Counter{}
+\tc.Inc()
+\tc.Inc()
+\tfmt.Println(c.n) // 2 — pointer receiver mutated the original
 }`;
 
 <Playground code={indexCode} />
@@ -84,6 +97,35 @@ func main() {
 >
 > **Kubernetes** ใช้ interface `runtime.Object` (`k8s.io/apimachinery/pkg/runtime`) กับทุก Kubernetes resource — controller เขียนครั้งเดียวทำงานกับ Pod, Deployment, Service ได้ทุก type
 
+## อ่านโค้ดที่ AI เขียน
+
+ในทุกบทของโมดูลนี้ มีเช็กลิสต์กลุ่มเดียวกันที่จับ bug ของโค้ดที่ generate มาได้ส่วนใหญ่ ก่อนที่มันจะถูกส่งใช้จริง:
+
+- ทุก method บน type ใช้ receiver kind เดียวกันหรือเปล่า? การผสมกัน หรือ value receiver บน type ที่ตั้งใจจะ mutate คือสิ่งแรกที่ควรเช็ก
+- concrete value ถูก assign ให้ interface variable ทั้งที่ method ที่ต้องการมี pointer receiver หรือเปล่า? นั่นคือ compile error ไม่ใช่ runtime bug — อ่านข้อความ มันระบุชื่อ method ให้เลย
+- function return typed `nil` pointer ผ่าน interface-typed result (`error` หรือ interface อื่น) หรือเปล่า? การเช็ก `== nil` ของ caller จะผิด
+- single-value type assertion (`v := x.(T)`) รันโดยไม่มี comma-ok guard บน value ที่อาจไม่เก็บ `T` หรือเปล่า?
+- embedded pointer หรือ embedded interface ที่ใช้เป็น partial mock ถูกเรียก promoted method ก่อนที่จะมีอะไรมา assign ค่าจริงให้หรือเปล่า?
+
+<SpotTheBug code={`type Rectangle struct {
+	Width, Height float64
+}
+
+func (r *Rectangle) Area() float64 {
+	return r.Width * r.Height
+}
+
+type Sizer interface {
+	Area() float64
+}
+
+func main() {
+	var s Sizer = Rectangle{Width: 4, Height: 3}
+	_ = s
+}`}>
+`Area` มี receiver แบบ **pointer** ดังนั้น method set ของ `Rectangle` (value type) จึงไม่มี method นี้ — มีแค่ method set ของ `*Rectangle` เท่านั้น การ assign `Rectangle{}` value ธรรมดาให้ interface variable `Sizer` จึง compile ไม่ผ่าน: `cannot use Rectangle{…} (value of struct type Rectangle) as Sizer value in variable declaration: Rectangle does not implement Sizer (method Area has pointer receiver)` ทางแก้คือ `var s Sizer = &Rectangle{Width: 4, Height: 3}`
+</SpotTheBug>
+
 <Callout title="ข้อคิดสำคัญ">
 `Rectangle` ไม่เคยพูดว่า `implements Sizer` — แค่มี method ที่ชื่อและ signature ถูกต้อง นั่นคือทั้งหมดที่ Go ต้องการ ถ้า method set ตรงกัน interface ก็ถูกตอบสนองโดยอัตโนมัติ ณ compile time
 </Callout>
@@ -97,7 +139,30 @@ export const quizMethodsInterfaces = [
       "โดยมี method ที่ถูกต้อง — ไม่ต้องประกาศใด ๆ",
       "โดยลงทะเบียนกับ interface registry ตอน runtime"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Go เช็ก method set แบบ structural ที่ compile time ไม่มีการประกาศ, keyword, หรือขั้นตอนลงทะเบียนใด ๆ เลย — และก็ไม่จำเป็นต้องมีด้วย"
+  },
+  {
+    q: "```go\ntype Rectangle struct{ W, H float64 }\nfunc (r *Rectangle) Area() float64 { return r.W * r.H }\ntype Sizer interface{ Area() float64 }\n\nvar s Sizer = Rectangle{W: 4, H: 3}\n```\nโค้ดนี้ compile ผ่านไหม?",
+    options: [
+      "ผ่าน — Rectangle มี method Area ดังนั้นมันตอบสนอง Sizer",
+      "ไม่ผ่าน — Rectangle ไม่ implement Sizer เพราะ Area มี pointer receiver",
+      "ผ่าน แต่การเรียก s.Area() ทีหลังจะ panic",
+      "ไม่ผ่าน — Sizer ต้องถูก embed ไว้ใน Rectangle ก่อน"
+    ],
+    answer: 1,
+    explain: "Area มี pointer receiver ดังนั้นมีแค่ method set ของ *Rectangle เท่านั้นที่มีมัน การ assign Rectangle{} แบบ value ให้ตัวแปร Sizer จึง compile ไม่ผ่าน โดยข้อความระบุตรง ๆ ว่า method Area has pointer receiver"
+  },
+  {
+    q: "```go\ntype MyErr struct{ msg string }\nfunc (e *MyErr) Error() string { return e.msg }\n\nfunc f() error {\n    var p *MyErr\n    return p\n}\n\nfmt.Println(f() == nil)\n```\nโค้ดนี้ print อะไร และทำไม?",
+    options: [
+      "true — p เป็น nil ดังนั้น error ที่ return ก็เป็น nil ด้วย",
+      "false — error interface เก็บ type descriptor ที่ไม่ nil ล้อมรอบ *MyErr ที่ nil",
+      "นี่คือ compile error — *MyErr ไม่ implement error",
+      "true แต่เฉพาะการเรียกครั้งแรกเท่านั้น"
+    ],
+    answer: 1,
+    explain: "interface คือ (type, data) การ return typed nil *MyErr ผ่าน error-typed return จะได้ (type: *MyErr, data: nil) — ไม่ใช่ (nil, nil) เลย — ดังนั้น == nil จึงเป็น false แม้ pointer เองจะเป็น nil ก็ตาม"
   },
   {
     q: "อะไรที่สามารถมี methods ใน Go ได้?",
@@ -107,7 +172,8 @@ export const quizMethodsInterfaces = [
       "named type ใด ๆ ที่นิยามใน package เดียวกัน ยกเว้น pointer types และ interface types",
       "เฉพาะ types ที่ implement อย่างน้อยหนึ่ง interface"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Methods ผูกกับ named type ใดก็ตามที่คุณประกาศ รวมถึง named function types และ named primitives อย่าง type Celsius float64 — มีแค่ pointer types และ interface types เท่านั้นที่ยกเว้น"
   },
   {
     q: "อะไรคือทางเลือกของ Go แทน class inheritance?",
@@ -117,7 +183,8 @@ export const quizMethodsInterfaces = [
       "Pointer receivers บน base struct",
       "Interface `any`"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Embedding ให้ code reuse โดยไม่มี type hierarchy และ small interfaces ให้ polymorphism โดยไม่ต้อง inheritance — รวมกันแล้วมันแทนที่สิ่งที่ class inheritance ทำในภาษาอื่น โดยไม่มี virtual dispatch"
   }
 ];
 

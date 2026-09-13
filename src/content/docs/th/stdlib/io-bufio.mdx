@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Interface io.Reader และ io.Writer
 
@@ -130,6 +132,196 @@ func main() {
 
 <Playground code={ioBufioCode} />
 
+## Contract ของ io.Reader แบบละเอียด
+
+signature สองบรรทัด `Read(p []byte) (n int, err error)` ซ่อนกฎสามข้อที่ทำให้โค้ดที่ AI เขียนพลาดบ่อยมาก:
+
+1. **`Read` คืน `n > 0` พร้อม `err` ที่ไม่ใช่ nil ในการเรียกครั้งเดียวกันได้** caller ต้อง process byte จำนวน `n` ก่อนที่จะเช็ก `err` — ถ้าทิ้งข้อมูลนั้นไปเพราะ `err != nil` จะทำให้ chunk สุดท้ายหายไปเงียบๆ
+2. **"short read" เป็นเรื่องถูกกฎหมาย** `Read` อาจเติมข้อมูลให้ `p` น้อยกว่า `len(p)` ได้แม้ว่าจะยังมีข้อมูลเหลือและ `err == nil` ห้ามสมมติว่าเรียก `Read` ครั้งเดียวจะเต็ม buffer เสมอ — ต้องวน loop หรือใช้ helper ที่วน loop ให้
+3. **`io.EOF` ไม่ใช่ความล้มเหลว** มันคือสัญญาณปกติว่าไม่มีข้อมูลเหลือแล้ว ให้ปฏิบัติกับ `err == io.EOF` ว่า "หยุด loop ได้ ไม่มี error ต้องรายงาน" — ห้าม `log.Fatal` มันหรือส่งมันขึ้นไปทั้งดุ้นเหมือนมีอะไรพัง
+
+```go
+n, err := r.Read(buf)
+if n > 0 {
+    process(buf[:n]) // always handle n bytes first
+}
+if err != nil {
+    if err == io.EOF {
+        return nil // clean end of stream, not an error
+    }
+    return err
+}
+```
+
+เมื่อต้องการ byte ตามจำนวนที่แน่นอนหรือขั้นต่ำโดยไม่อยากเขียน loop เอง `io.ReadFull(r, buf)` อ่านจนกว่า `buf` จะเต็มหรือคืน `io.ErrUnexpectedEOF` ถ้า stream จบก่อน; `io.ReadAtLeast(r, buf, min)` คือแนวคิดเดียวกันแต่สำหรับความยาวขั้นต่ำแทนที่จะเต็ม buffer
+
+## ขีดจำกัด token 64 KB ของ bufio.Scanner
+
+`bufio.Scanner` จำกัดแต่ละ token (บรรทัด) ไว้ที่ `bufio.MaxScanTokenSize` — 64 KB — โดย default เมื่อบรรทัดยาวเกินนั้น `Scan()` จะคืน `false` และ `Err()` จะคืน `bufio.ErrTooLong` ซึ่งดูเหมือน EOF ที่สะอาดทุกประการถ้าไม่ได้เช็ก `Err()` หลัง loop — input ที่เหลือจะหายไปเงียบๆ
+
+```go
+scanner := bufio.NewScanner(r)
+scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // raise the max to 1 MB
+for scanner.Scan() {
+    process(scanner.Text())
+}
+if err := scanner.Err(); err != nil {
+    log.Fatal(err) // catches ErrTooLong, not just I/O errors
+}
+```
+
+`scanner.Buffer(initial, max)` กำหนดทั้ง buffer เริ่มต้นและเพดานที่มันขยายไปได้ เรียกก่อน `Scan()` ครั้งแรกถ้ามีโอกาสที่บรรทัดเดียวจะยาวเกิน 64 KB จริงๆ (บรรทัด JSON ยาวๆ, base64 blob)
+
+## bufio.Writer, Flush และ error จาก Close
+
+`bufio.Writer` buffer การเขียนไว้ในหน่วยความจำและจะไปถึง `io.Writer` ข้างล่างก็ต่อเมื่อ buffer เต็ม หรือเมื่อเรียก `Flush()` เอง ไม่มีอะไรรับประกันว่าข้อมูลถึง disk หรือ network แล้วจนกว่า `Flush()` จะ return
+
+error จาก `Close()` ก็สำคัญด้วยเหตุผลเดียวกัน: type ที่สร้างบน buffered writer (หรือไฟล์) อาจแสดง write failure ที่ล่าช้า — เช่น disk เต็ม — ได้เฉพาะตอนที่ flush ครั้งสุดท้ายเกิดขึ้นภายใน `Close` เท่านั้น การไม่สนใจ return value ของ `defer f.Close()` จะกลืน failure นั้นไปเงียบๆ
+
+```go
+w := bufio.NewWriter(f)
+fmt.Fprintln(w, "important data")
+if err := w.Flush(); err != nil {
+    return fmt.Errorf("flush: %w", err) // the write may not have failed until now
+}
+if err := f.Close(); err != nil {
+    return fmt.Errorf("close: %w", err) // a writer's Close error is not decorative
+}
+```
+
+## io.Copy, TeeReader, Pipe และ NopCloser
+
+`io.Copy(dst, src)` อ่านจาก `src` แล้วเขียนไปยัง `dst` จนกว่า `src` จะคืน `io.EOF` โดยอาศัย contract ของ `Writer`: `Write` ต้องคืน error ที่ไม่ใช่ nil ถ้าเขียนได้น้อยกว่า `len(p)` byte ดังนั้น `io.Copy` จึงเชื่อได้ว่า error ที่เป็น `nil` หมายความว่า chunk ทั้งหมดถูกเขียนสำเร็จ
+
+helper เล็กๆ อีกสามตัวของ `io` ที่ครบชุดเครื่องมือ:
+
+- **`io.TeeReader(r, w)`** — คืน Reader ที่ mirror ทุก byte ที่มันอ่านไปยัง `w` เป็น side effect (checksum หรือ log stream ระหว่างที่ถูกอ่าน โดยไม่ต้อง buffer ทั้งหมดไว้ในหน่วยความจำก่อน)
+- **`io.Pipe()`** — คู่ `io.Reader`/`io.Writer` ในหน่วยความจำแบบ synchronous ไม่มี buffer; write จะ block จนกว่าจะมี read ที่ตรงกันมาดึงออกไป มีประโยชน์เมื่อจะ stream ข้อมูลจาก goroutine หนึ่งไปอีก goroutine โดยไม่ต้องมี buffer คั่นกลาง
+- **`io.NopCloser(r)`** — ห่อ `io.Reader` ด้วย `Close` ที่ไม่ทำอะไร (no-op) เพื่อให้ตอบสนอง `io.ReadCloser` นี่คือสิ่งที่ `http.Request.Body` ต้องการพอดีใน test หรือสิ่งที่ส่งกลับเมื่อไม่อยากให้ caller ปิด reader ที่ใช้ร่วมกัน
+
+```go
+tee := io.TeeReader(resp.Body, hasher)     // reading tee also feeds hasher
+req.Body = io.NopCloser(bytes.NewReader(replayed)) // satisfy io.ReadCloser in a test
+```
+
+export const ioBufioAdvancedCode = `package main
+
+import (
+\t"bufio"
+\t"bytes"
+\t"fmt"
+\t"io"
+\t"strings"
+)
+
+// shortReader returns at most 3 bytes per Read call, and delivers n>0
+// together with io.EOF on the final call — a legal io.Reader.
+type shortReader struct {
+\tdata []byte
+}
+
+func (r *shortReader) Read(p []byte) (int, error) {
+\tif len(r.data) == 0 {
+\t\treturn 0, io.EOF
+\t}
+\tn := copy(p, r.data[:min(3, len(r.data))])
+\tr.data = r.data[n:]
+\tif len(r.data) == 0 {
+\t\treturn n, io.EOF // n > 0 AND err != nil in the same call
+\t}
+\treturn n, nil
+}
+
+func main() {
+\t// 1. short reads: n>0 with err!=nil on the last call
+\tsr := &shortReader{data: []byte("hello!")}
+\tbuf := make([]byte, 10)
+\tfor {
+\t\tn, err := sr.Read(buf)
+\t\tfmt.Printf("Read: n=%d err=%v data=%q\\n", n, err, buf[:n])
+\t\tif err != nil {
+\t\t\tbreak
+\t\t}
+\t}
+
+\t// 2. io.ReadFull loops for you
+\tsr2 := &shortReader{data: []byte("hello!")}
+\texact := make([]byte, 6)
+\tn, err := io.ReadFull(sr2, exact)
+\tfmt.Printf("ReadFull: n=%d err=%v data=%q\\n", n, err, exact[:n])
+
+\t// io.ReadFull when the stream has fewer bytes than requested
+\tsr3 := &shortReader{data: []byte("hi")}
+\tshort := make([]byte, 6)
+\tn, err = io.ReadFull(sr3, short)
+\tfmt.Printf("ReadFull short: n=%d err=%v\\n", n, err)
+
+\t// 3. bufio.Scanner ErrTooLong when a token exceeds the buffer max
+\tlongLine := strings.Repeat("x", 20)
+\tscanner := bufio.NewScanner(strings.NewReader(longLine + "\\ntail\\n"))
+\tscanner.Buffer(make([]byte, 0, 16), 16) // small max on purpose
+\tfor scanner.Scan() {
+\t\tfmt.Println("scanned:", scanner.Text())
+\t}
+\tfmt.Println("scanner.Err():", scanner.Err())
+
+\t// 4. bufio.Writer needs Flush
+\tvar out bytes.Buffer
+\tw := bufio.NewWriter(&out)
+\tfmt.Fprint(w, "buffered, not flushed yet")
+\tfmt.Println("before Flush, out.Len():", out.Len())
+\tw.Flush()
+\tfmt.Println("after Flush, out.Len():", out.Len())
+
+\t// 5. io.TeeReader mirrors what it reads into a side buffer
+\tvar tee bytes.Buffer
+\ttr := io.TeeReader(strings.NewReader("mirrored"), &tee)
+\tgot, _ := io.ReadAll(tr)
+\tfmt.Printf("TeeReader read=%q sideBuffer=%q\\n", got, tee.String())
+
+\t// 6. io.NopCloser satisfies io.ReadCloser for a plain Reader
+\tvar rc io.ReadCloser = io.NopCloser(strings.NewReader("wrapped"))
+\tdata, _ := io.ReadAll(rc)
+\tfmt.Println("NopCloser Close err:", rc.Close(), "data:", string(data))
+}`;
+
+<Playground code={ioBufioAdvancedCode} />
+
+output จริงจากโปรแกรมนี้บน Go 1.26.5:
+
+```text
+Read: n=3 err=<nil> data="hel"
+Read: n=3 err=EOF data="lo!"
+ReadFull: n=6 err=<nil> data="hello!"
+ReadFull short: n=2 err=unexpected EOF
+scanner.Err(): bufio.Scanner: token too long
+before Flush, out.Len(): 0
+after Flush, out.Len(): 25
+TeeReader read="mirrored" sideBuffer="mirrored"
+NopCloser Close err: <nil> data: wrapped
+```
+
+สังเกต loop ของ scanner ด้านบน: `scanned:` ไม่ถูกพิมพ์เลย เพราะบรรทัดยาว 20 byte เกินเพดาน 16 byte ตั้งแต่ token แรก `Scan()` จึงคืน `false` ทันที และ `Err()` รายงาน `bufio.Scanner: token too long` — บรรทัด `"tail"` ไม่ถูกเห็นเลย
+
+## Pipeline ของ Reader/Writer
+
+export const ioPipelineDiagram = `flowchart LR
+  File["os.File / net.Conn"] --> BR["bufio.Reader"]
+  BR --> Scanner["bufio.Scanner"]
+  Scanner --> App["your code"]
+  App2["your code"] --> BW["bufio.Writer"]
+  BW -- "Flush()" --> Out["os.File / net.Conn"]
+  Src["io.Reader"] -- "io.Copy" --> Dst["io.Writer"]
+  Src -- "io.TeeReader" --> Side["side io.Writer"]`;
+
+<Mermaid code={ioPipelineDiagram} title="อ่านเป็นก้อนผ่าน bufio, เขียนต้อง Flush เอง, TeeReader แยกสำเนาออกไป" />
+
+## bytes.Buffer ห้าม copy
+
+`bytes.Buffer` เก็บข้อมูลไว้ใน slice ภายใน; การ copy `bytes.Buffer` โดยค่า (assign, ส่งเป็น argument โดยค่า, หรือเก็บใน slice ที่จะ append ต่อ) จะ copy แค่ slice header โดยไม่มี mutex หรือ lock ให้ copy ตามไปด้วย — แต่ทั้งสอง copy จะ alias backing array เดียวกันในขณะที่แต่ละตัวติดตาม offset การอ่าน/เขียนของตัวเองแยกกัน ทำให้การเขียนและอ่านบน copy หนึ่งไปทำลายสิ่งที่อีก copy เห็น package doc พูดตรงๆ ไว้เลยว่า *"The zero value for Buffer is an empty buffer ready to use... Do not copy a non-zero Buffer."*
+
+ต่างจาก `sync.Mutex` ตรงที่ไม่มี check แบบ `go vet copylocks` สำหรับกรณีนี้ — `bytes.Buffer` ไม่ได้ embed marker `noCopy` ดังนั้น compiler และ `go vet` จะเงียบ ให้ส่ง `*bytes.Buffer` เสมอ ไม่ใช่ `bytes.Buffer` โดยค่า เมื่อมันมีข้อมูลอยู่แล้ว
+
 ## Mental Model
 
 ```text
@@ -170,6 +362,46 @@ bufio.Writer batching:
 เขียน function ให้รับ `io.Reader` หรือ `io.Writer` แทนที่จะรับ `*os.File` หรือ `*http.Request` นิสัยเดียวนี้ทำให้โค้ด test ได้ทุกที่ — ส่ง `strings.NewReader` ใน test, ไฟล์จริงใน production และ HTTP body ใน handler โดยไม่ต้องแก้ไข function นอกจากนี้ยังหมายความว่า function จะทำงานร่วมกับ ecosystem I/O composition ทั้งหมดของ Go: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader` และอื่นๆ
 </Callout>
 
+## อ่านโค้ดที่ AI เขียน
+
+AI assistant เขียนโค้ด `io`/`bufio` ที่ compile ผ่านและดูสมเหตุสมผลบ่อยกว่าโค้ดที่ถูกต้องจริงๆ ในกรณีขอบเยอะมาก เช็กสิ่งเหล่านี้ก่อนเชื่อว่า review ผ่าน:
+
+- loop ของ `bufio.Scanner` เช็ก `scanner.Err()` หลัง loop หรือถือว่า `false` หมายถึง EOF ที่สะอาดเสมอ?
+- ถ้า input มีโอกาสมีบรรทัดยาวเกิน 64 KB มีการเรียก `scanner.Buffer(...)` เพื่อขยายเพดานหรือไม่ หรือจะถูกตัดทิ้งเงียบๆ?
+- สิ่งที่เขียนผ่าน `bufio.Writer` ถูก `Flush()` ก่อน function จะ return หรือก่อนส่ง response หรือไม่?
+- return value ของ `f.Close()` ถูกเช็กหรือไม่เมื่อ `f` ถูกเขียนลงไป ไม่ใช่แค่ตอนอ่านอย่างเดียว?
+- `Read` ที่เขียนขึ้นเอง สมมติว่า caller จะได้ buffer เต็มเสมอหรือไม่ หรือ caller วน loop / ใช้ `io.ReadFull` อย่างถูกต้อง?
+- `bytes.Buffer` ถูก copy โดยค่า (ส่งเป็น argument, เก็บใน slice, return จาก function) หลังจากมันมีข้อมูลแล้วหรือไม่?
+
+<SpotTheBug code={`func loadConfig(path string) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	cfg := map[string]string{}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		k, v, _ := strings.Cut(scanner.Text(), "=")
+		cfg[k] = v
+	}
+	return cfg, nil
+}`}>
+
+loop ไม่เคยเช็ก `scanner.Err()` เลย ถ้าบรรทัดหนึ่งใน `path` ยาวเกินเพดาน default 64 KB — ค่ายาวๆ, ไฟล์ binary หลุดเข้ามา — `Scan()` จะคืน `false`, loop จบ, และ `loadConfig` จะคืน config ที่**ไม่ครบ**พร้อม error เป็น `nil` เหมือนกับว่าไฟล์ถูกอ่านครบแล้ว แก้ได้โดยเช็ก error หลัง loop:
+
+```go
+if err := scanner.Err(); err != nil {
+    return nil, fmt.Errorf("scan %s: %w", path, err)
+}
+return cfg, nil
+```
+
+ถ้าบรรทัดที่ยาวเกิน 64 KB เป็นเรื่องปกติที่คาดไว้ ให้เรียก `scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)` ก่อน loop แทนที่จะแค่ตรวจจับ failure
+
+</SpotTheBug>
+
 export const quizIoBufio = [
   {
     q: "io.ReadAll(r) คืนค่าอะไร?",
@@ -179,7 +411,8 @@ export const quizIoBufio = [
       "int, error",
       "io.Reader, error"
     ],
-    answer: 1
+    answer: 1,
+    explain: "io.ReadAll อ่านจนถึง EOF และคืนทุกอย่างที่อ่านได้เป็น []byte พร้อม error ใดๆ ที่ไม่ใช่ io.EOF"
   },
   {
     q: "หลังจาก bufio.Scanner.Scan() คืนค่า false ต้องตรวจสอบอะไร?",
@@ -189,7 +422,8 @@ export const quizIoBufio = [
       "scanner.Err() เพื่อแยกแยะ EOF จาก error จริง",
       "ไม่ต้องตรวจสอบอะไร — false หมายถึง EOF ที่สะอาดเสมอ"
     ],
-    answer: 2
+    answer: 2,
+    explain: "false หมายถึง EOF ที่สะอาดหรือ error ก็ได้ (รวมถึง ErrTooLong จาก token ที่เกินเพดาน default 64 KB) — มีแต่ Err() เท่านั้นที่บอกได้ว่าเป็นแบบไหน"
   },
   {
     q: "Type ใดที่ implement ทั้ง io.Reader และ io.Writer?",
@@ -199,7 +433,8 @@ export const quizIoBufio = [
       "bufio.Scanner",
       "io.Discard"
     ],
-    answer: 1
+    answer: 1,
+    explain: "bytes.Buffer มีทั้ง method Read และ Write; strings.Reader อ่านได้อย่างเดียว ส่วน io.Discard เขียนได้อย่างเดียว"
   },
   {
     q: "ทำไมควรรับ io.Reader ใน function แทนที่จะรับ *os.File?",
@@ -209,7 +444,30 @@ export const quizIoBufio = [
       "การรับ io.Reader ทำให้ function ทำงานกับทุกแหล่ง: ไฟล์, buffer, string, network — โดยไม่ต้องเปลี่ยนโค้ด",
       "Go ไม่อนุญาตให้ใช้ *os.File เป็น parameter ของ function"
     ],
-    answer: 2
+    answer: 2,
+    explain: "io.Reader คือ interface ที่เล็กที่สุดสำหรับ byte stream ดังนั้น function ใดที่เขียนขึ้นมาโดยอิงมันจะทำงานกับไฟล์, string ใน test หรือ network connection ได้โดยไม่ต้องแก้ไข"
+  },
+  {
+    q: "\`\`\`go\nsc := bufio.NewScanner(strings.NewReader(strings.Repeat(\"x\", 100000)))\nsc.Scan()\nfmt.Println(sc.Err())\n\`\`\`\nโค้ดนี้พิมพ์อะไร?",
+    options: [
+      "<nil>",
+      "EOF",
+      "bufio.Scanner: token too long",
+      "panic"
+    ],
+    answer: 2,
+    explain: "token เดียวยาว 100,000 byte เกินเพดาน default 64 KB (bufio.MaxScanTokenSize) ทำให้ Scan() คืน false ตั้งแต่ครั้งแรก และ Err() รายงาน bufio.ErrTooLong"
+  },
+  {
+    q: "\`\`\`go\nvar out bytes.Buffer\nw := bufio.NewWriter(&out)\nfmt.Fprint(w, \"hi\")\nfmt.Println(out.Len())\n\`\`\`\nโค้ดนี้พิมพ์อะไร และทำไม?",
+    options: [
+      "2 — bufio.Writer เขียนผ่านทันที",
+      "0 — ไม่มีอะไรถึง out จนกว่าจะเรียก w.Flush()",
+      "compile ไม่ผ่าน — Fprint ต้องการ io.Writer ไม่ใช่ bufio.Writer",
+      "-1 — out ยังไม่ถูกกำหนดจนกว่าจะ Close"
+    ],
+    answer: 1,
+    explain: "bufio.Writer buffer การเขียนไว้ในหน่วยความจำ; out.Len() เป็น 0 จนกว่า Flush() (หรือ buffer เต็ม) จะดัน byte เข้าไปใน bytes.Buffer ข้างใต้จริงๆ"
   }
 ];
 

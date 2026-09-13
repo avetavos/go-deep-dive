@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## การนิยาม struct
 
@@ -27,6 +29,51 @@ type User struct {
 ```
 
 Field ที่ขึ้นต้นด้วยตัวพิมพ์ใหญ่จะถูก **export** (มองเห็นได้จากภายนอก package) ส่วน field ที่ขึ้นต้นด้วยตัวพิมพ์เล็กจะเป็น unexported
+
+## Struct tags
+
+**Struct tag** คือ string literal ธรรมดาที่แนบไว้กับ field เขียนต่อท้าย type ของมันเลย:
+
+```go
+type User struct {
+    Name string `json:"name" db:"user_name"`
+    Age  int    `json:"age,omitempty"`
+}
+```
+
+Compiler ไม่ทำอะไรกับ tag เลยนอกจากเก็บมันไว้เฉย ๆ — มันไม่มีผลต่อการ compile หรือการเข้าถึง field ใด ๆ tag จะมีความหมายก็ต่อเมื่อมีอะไรมาอ่านมันผ่าน reflection ตอน runtime ซึ่งนี่คือสิ่งที่ `encoding/json`, ORM ส่วนใหญ่, และ validation library ทำกัน:
+
+```go
+t := reflect.TypeOf(User{})
+f, _ := t.FieldByName("Name")
+fmt.Println(f.Tag.Get("json")) // name
+fmt.Println(f.Tag.Get("db"))   // user_name
+```
+
+เพราะ tag เป็นแค่ string จนกว่าจะมีอะไรมา parse มัน การพิมพ์ชื่อ key ผิดจึง compile ผ่านสบาย ๆ และไม่มี warning เลย — มันแค่หยุดทำสิ่งที่ตั้งใจไว้แบบเงียบ ๆ:
+
+```go
+type Broken struct {
+    Name string `jso:"name"` // typo: "jso" instead of "json"
+    Age  int    `json:"age"`
+}
+b, _ := json.Marshal(Broken{Name: "Ada", Age: 30})
+fmt.Println(string(b)) // {"Name":"Ada","age":30} — Name fell back to the Go field name
+```
+
+verify บน 1.26.5 แล้ว: compile ผ่าน `go vet ./...` ไม่รายงานอะไรเลย และตอนรันจะ marshal `Name` ด้วยชื่อ Go field ของมัน เพราะ `encoding/json` ไม่เจอ tag ภายใต้ key `"json"` เลย สิ่งที่ `go vet`'s `structtag` check *เช็คได้จริง* คือ tag ที่ไม่ใช่ **syntax** ที่ valid ของ `reflect.StructTag` — เช่นขาด space ระหว่างคู่ `key:"value"`:
+
+```go
+type Bad struct {
+    Name string `json:"name",omitempty`
+}
+```
+
+```text
+main.go:6:2: struct field tag `json:"name",omitempty` not compatible with reflect.StructTag.Get: key:"value" pairs not separated by spaces
+```
+
+ดังนั้น `go vet` ป้องกันได้แค่ tag *syntax* ที่ผิดรูป แต่ป้องกันไม่ได้ถ้า tag ใช้ *ชื่อ key* ผิดสำหรับ library ที่จะมาอ่านมัน — ความผิดพลาดแบบนั้นจับได้ก็ต่อเมื่อรันโค้ด path การ marshal/unmarshal จริง ๆ (test)
 
 ## Struct literals
 
@@ -62,6 +109,36 @@ cfg := struct {
 }{Host: "localhost", Port: 8080}
 ```
 
+## Zero-value-useful design
+
+Struct ที่ออกแบบดีควรทำงานถูกต้องตั้งแต่ declare เสร็จ โดยไม่ต้องเรียก constructor เลย — `var b bytes.Buffer` หรือ `var mu sync.Mutex` พร้อมใช้งานอยู่แล้ว pattern นี้เรียกว่าทำให้ **zero value มีประโยชน์ (useful)** และเป็น idiomatic Go ไม่ใช่เรื่องบังเอิญ: zero value ของ `bytes.Buffer` คือ buffer ว่าง, zero value ของ `sync.Mutex` คือ mutex ที่ยัง unlock อยู่ เทียบกับ type ที่ panic หรือทำงานผิดจนกว่าจะเรียก `Init()` หรือ `New()` ก่อน — caller ทุกคนต้องจำขั้นตอนเพิ่มนี้ และการลืมมันคือ runtime bug ไม่ใช่ compile error
+
+เวลาออกแบบ struct ของตัวเอง ให้เลือก field type ที่ zero value ของมันมีความหมายที่สมเหตุสมผลอยู่แล้ว: slice ที่เป็น nil แต่ append ได้อย่างปลอดภัย, `sync.Mutex` (ไม่ใช่ `*sync.Mutex` ที่ต้อง allocate), `time.Time` ที่ zero value ให้ `IsZero()` เป็น true แทนที่จะเป็น `*time.Time` ที่ต้อง nil check ทุกที่ เก็บ `New`/constructor function ไว้ใช้เฉพาะกรณีที่จำเป็นจริง ๆ (field ที่ required, value ที่ต้อง validate, หรือ field แบบ map ที่รู้อยู่แล้วว่าจะถูกเขียนทันที)
+
+## Empty struct `struct{}`
+
+`struct{}` เป็น type จริง ๆ ที่มีคุณสมบัติพิเศษ: มันใช้พื้นที่ **ศูนย์ byte**
+
+```go
+var s struct{}
+fmt.Println(unsafe.Sizeof(s)) // 0
+```
+
+เพราะไม่มีต้นทุนในการเก็บเลย `struct{}` จึงเป็น value type ที่ idiomatic สำหรับสอง pattern: set (`map[K]struct{}` เมื่อสนใจแค่ว่า key มีอยู่หรือไม่ ไม่สนใจ value ที่ผูกมาด้วย) และ channel แบบ signal-only (`chan struct{}` เมื่อการ send/receive หมายถึง "สิ่งนี้เกิดขึ้นแล้ว" ไม่ใช่ "นี่คือ payload"):
+
+```go
+set := map[string]struct{}{"a": {}, "b": {}}
+_, ok := set["a"]
+fmt.Println(len(set), ok) // 2 true
+
+done := make(chan struct{})
+close(done)
+_, open := <-done
+fmt.Println(open) // false — closed and drained, the classic "done" signal
+```
+
+`map[K]bool` ก็ใช้เป็น set ได้เหมือนกัน แต่ `map[K]struct{}` สื่อเจตนาได้ชัดเจนกว่า (ไม่มี entry ที่เป็น `false` ให้เผลอไปเช็ค) และใช้ memory น้อยกว่าเมื่อข้อมูลเยอะ
+
 ## การเปรียบเทียบ struct
 
 ค่า struct สองค่าสามารถเปรียบเทียบด้วย `==` ได้ ถ้า **ทุก** field เป็น comparable type การเปรียบเทียบจะทำทีละ field:
@@ -72,31 +149,98 @@ b := Point{1, 2}
 fmt.Println(a == b) // true
 ```
 
-Struct ที่มี field เป็น slice, map, หรือ function **ไม่สามารถ** เปรียบเทียบด้วย `==`
+Struct ที่มี field เป็น slice, map, หรือ function **ไม่สามารถ** เปรียบเทียบด้วย `==` — นี่เป็น compile error ไม่ใช่ runtime error ดังนั้น compiler จับได้ทันที มีกับดักเรื่อง comparability ที่ subtle กว่านั้นอีกสองแบบที่เป็น runtime-only:
 
-## Struct embedding (composition)
-
-Go ไม่มี class inheritance แต่ใช้การ **embed** struct type หนึ่งไว้ภายในอีก struct เพื่อ promote field และ method:
+**NaN ไม่เท่ากับตัวมันเองเลย** แม้แต่ตัวแปรเดียวกันเป๊ะ ๆ เพราะการเปรียบเทียบ floating-point เป็นไปตาม IEEE 754 ไม่ใช่ value identity:
 
 ```go
-type Address struct {
-    City    string
-    Country string
+type WithNaN struct{ F float64 }
+w := WithNaN{F: math.NaN()}
+fmt.Println(w == w) // false — NaN != NaN, even the same variable
+```
+
+**Struct field ที่เป็น interface type จะโยนเรื่อง comparability ไปให้สิ่งที่เก็บอยู่ข้างในแทน** struct type-check ผ่านว่า comparable ตอน compile time (interface field comparable แบบ static เสมอ) แต่การเปรียบเทียบจริงยัง **panic ตอน runtime ได้** ถ้า dynamic value ที่มันเก็บอยู่กลายเป็น slice, map, หรือ function:
+
+```go
+var sx, sy any = []int{1}, []int{1}
+s3 := struct{ V any }{V: sx}
+s4 := struct{ V any }{V: sy}
+fmt.Println(s3 == s4) // panics: comparing uncomparable type []int
+```
+
+verify บน 1.26.5 แล้ว:
+
+```text
+panic: runtime error: comparing uncomparable type []int
+```
+
+field `any` ที่เก็บ `int` เทียบกันได้สบาย ๆ แต่ field เดียวกันที่เก็บ `[]int` panic compiler บอกไม่ได้ว่าเราอยู่ใน case ไหน — มันรู้แค่ static type คือ `any` ซึ่ง comparable เสมอ นี่คือความเสี่ยงจริงในทุก struct ที่มี field เป็น `any`/`interface{}` แล้วถูกเอาไปเทียบด้วย `==` หรือใช้เป็น map key
+
+## Unkeyed literal กับ `go vet`
+
+Struct literal แบบ **positional** (unkeyed) — `Point{3, 4}` แทนที่จะเป็น `Point{X: 3, Y: 4}` — เป็น Go ที่ valid แต่จะพังแบบเงียบ ๆ ถ้าผู้เขียน struct นั้นเรียงลำดับหรือแทรก field ใหม่ทีหลัง เพราะค่าถูก match เข้ากับ field ตามตำแหน่ง ไม่ใช่ตามชื่อ `go vet`'s `composites` check จะ flag unkeyed literal ของ struct type ที่มาจาก **package อื่น**:
+
+```go
+r := shapes.Rect{10, 20} // shapes is a different package
+```
+
+verify บน 1.26.5 (`go vet ./...`) แล้ว:
+
+```text
+main.go:10:7: example.com/t09b/shapes.Rect struct literal uses unkeyed fields
+```
+
+มีข้อควรรู้อีกอย่าง: check นี้ยกเว้น type ของ stdlib ที่มั่นคงมานานตามรายการที่ hardcode ไว้ — `image.Point{1, 2}` เป็น Go แบบ idiomatic และ `go vet` ไม่พูดอะไรเลย ทั้งที่เป็น pattern เดียวกันเป๊ะ อย่าถือว่า "go vet เงียบ" คือหลักฐานว่า literal นั้นปลอดภัย ให้ถือว่า unkeyed literal จาก package *ไหนก็ตาม* เป็นนิสัยที่ควรหลีกเลี่ยง ไม่ว่าจะได้รับการยกเว้นจาก vet หรือไม่ก็ตาม ส่วน positional literal ของ struct ที่ declare ใน *ไฟล์เดียวกัน* กับที่กำลังแก้อยู่นั้นพบได้ทั่วไปและไม่มีปัญหา — เพราะจะสังเกตเห็นทันทีถ้ามีการเรียง field ใหม่
+
+## ขนาด, การจัดตำแหน่ง (alignment), และ padding
+
+Go จัดวาง field ของ struct ตามลำดับที่ declare แต่ไม่จำเป็นต้องติดกันเสมอ: แต่ละ field ต้องเริ่มที่ address ที่หารด้วย alignment ของมันลงตัว (`int64` align ที่ 8 byte, `bool` ที่ 1 byte) ดังนั้น compiler จะแทรก padding byte ที่มองไม่เห็นระหว่าง field เมื่อจำเป็น ลำดับ field เปลี่ยนขนาดรวมของ struct ได้:
+
+```go
+type Bad struct {
+    A bool  // 1 byte, then 7 bytes of padding to align B
+    B int64 // 8 bytes
+    C bool  // 1 byte, then 7 bytes of trailing padding (struct size rounds up to 8)
 }
 
-type Person struct {
-    Name    string
-    Age     int
-    Address          // embedded — City and Country are promoted
+type Good struct {
+    B int64 // 8 bytes
+    A bool  // 1 byte
+    C bool  // 1 byte, then 6 bytes of trailing padding
 }
 ```
 
-หลังจาก embed แล้ว `person.City` คือ shorthand ของ `person.Address.City` นี่คือ **composition** ไม่ใช่ inheritance — embedded type ไม่รู้ว่าตัวเองถูก embed และ outer type ไม่ใช่ subtype ของ inner type
+export const paddingDiagram = `flowchart TD
+  subgraph Bad["Bad: 24 bytes"]
+    direction LR
+    BA["A (1B)"] --- BP1["padding (7B)"] --- BB["B (8B)"] --- BC["C (1B)"] --- BP2["padding (7B)"]
+  end
+  subgraph Good["Good: 16 bytes"]
+    direction LR
+    GB["B (8B)"] --- GA["A (1B)"] --- GC["C (1B)"] --- GP["padding (6B)"]
+  end`;
 
+<Mermaid code={paddingDiagram} title="เรียง field จากใหญ่ไปเล็กช่วยลด padding ได้ 8 byte ต่อ struct value" />
+
+verify บน 1.26.5 (`unsafe.Sizeof`/`unsafe.Offsetof`) แล้ว:
+
+```text
+fmt.Println(unsafe.Sizeof(Bad{}), unsafe.Sizeof(Good{}))       // 24 16
+fmt.Println(unsafe.Offsetof(Bad{}.B), unsafe.Offsetof(Good{}.B)) // 8 0
+```
+
+`Bad` และ `Good` มี field ทั้งสามตัวเหมือนกันเป๊ะ — ต่างกันแค่ลำดับ declare แต่มีผลถึง 8 byte ต่อ value กฎง่าย ๆ ที่จำได้: **เรียง field จากใหญ่ไปเล็ก** (หรือจัดกลุ่ม field ขนาดเท่ากันไว้ด้วยกัน) เพื่อลด padding ให้น้อยที่สุด เรื่องนี้สำคัญที่สุดกับ struct ที่ allocate จำนวนมาก — slice ของ `Bad` หนึ่งล้านตัวเสีย memory ไปฟรี ๆ 8 ล้าน byte `unsafe.Sizeof` และ `unsafe.Offsetof` คือเครื่องมือที่ใช้เช็คเรื่องนี้ — หยิบมาใช้เมื่อ struct ใน hot-path มีขนาดใหญ่กว่าที่ผลรวมของ field มันควรจะเป็น
+
+## Struct embedding (composition)
+
+Composition ผ่าน embedding — การ promote field และ method ของ embedded type และเหตุผลว่าทำไมมันคือ composition ไม่ใช่ inheritance — อธิบายไว้ละเอียดใน [Embedding](/go/th/methods-interfaces/embedding/)
 
 export const structsCode = `package main
 
-import "fmt"
+import (
+\t"fmt"
+\t"math"
+)
 
 type Address struct {
 \tCity    string
@@ -106,19 +250,14 @@ type Address struct {
 type Person struct {
 \tName    string
 \tAge     int
-\tAddress // embedded struct
 }
+
+type WithNaN struct{ F float64 }
 
 func main() {
 \t// Named-field literal
-\tp1 := Person{
-\t\tName: "Alice",
-\t\tAge:  30,
-\t\tAddress: Address{City: "Bangkok", Country: "Thailand"},
-\t}
+\tp1 := Person{Name: "Alice", Age: 30}
 \tfmt.Println(p1.Name, p1.Age)
-\tfmt.Println(p1.City)    // promoted from Address
-\tfmt.Println(p1.Country) // promoted from Address
 
 \t// Struct copy: p2 is an independent value
 \tp2 := p1
@@ -136,6 +275,15 @@ func main() {
 \ta1 := Address{City: "Bangkok", Country: "Thailand"}
 \ta2 := Address{City: "Bangkok", Country: "Thailand"}
 \tfmt.Println(a1 == a2) // true
+
+\t// Unkeyed vs keyed literal: same value, but unkeyed breaks silently on reorder
+\tunkeyed := Address{"Bangkok", "Thailand"}
+\tkeyed := Address{City: "Bangkok", Country: "Thailand"}
+\tfmt.Println(unkeyed == keyed) // true
+
+\t// NaN never equals itself, even the same variable
+\tw := WithNaN{F: math.NaN()}
+\tfmt.Println(w == w) // false
 }`;
 
 <Playground code={structsCode} />
@@ -145,24 +293,49 @@ func main() {
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | value semantics | predictable behavior, ไม่มี aliasing | copy cost สำหรับ struct ขนาดใหญ่ |
-| embedding (composition) | reuse field และ method โดยไม่ต้อง inheritance | field shadowing อาจสับสนเมื่อ embedded type มี field ชื่อเดียวกัน |
-| struct tags | metadata สำหรับ JSON/DB/validation แบบ declarative | runtime-only — ไม่มี compile-time check ว่า tag ถูกต้อง |
+| zero-value-useful design | ไม่ต้องเรียก constructor, nil check น้อยลง | ไม่ใช่ทุก type จะมี zero value ที่มีความหมายได้ (เช่น type ที่มี required field) |
+| struct tags | metadata สำหรับ JSON/DB/validation แบบ declarative | runtime-only — ไม่มี compile-time check ว่าชื่อ key ของ tag ถูกต้อง |
+| เรียง field ตามขนาด (คำนึงถึง padding) | struct เล็กลง ใช้ memory น้อยลงเมื่อข้อมูลเยอะ | อ่านยากกว่าการจัดกลุ่ม field ตาม "ความหมาย" เล็กน้อย |
 | exported vs unexported fields | control API surface ได้ชัดเจน | refactoring ที่ expose field ใหม่เป็น breaking change |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **struct embedding = inheritance** — Go ไม่มี inheritance — `Person` ที่ embed `Address` ไม่ใช่ subtype ของ `Address`
 - **struct copy เสมอแพง** — struct เล็ก (2-4 fields) copy เร็วกว่าการใช้ pointer ที่ต้อง dereference และอาจทำให้ object escape to heap
 - **unexported field = private ใน type** — unexported หมายถึง package-level visibility — code ใน package เดียวกันเข้าถึงได้ทั้งหมด
-- **struct tags มีผลตอน compile** — struct tags เป็น string literal ที่ reflection อ่านตอน runtime — typo ใน tag จะไม่มี compile error
+- **struct tags มีผลตอน compile** — struct tags เป็น string literal ที่ reflection อ่านตอน runtime — typo ในชื่อ key ของ tag compile ผ่านสบาย ๆ และ `go vet` ก็จับไม่ได้ด้วย จับได้ก็ต่อเมื่อรันโค้ด path ที่อ่าน tag นั้นจริง ๆ
+- **`go vet` จับความเสี่ยงเรื่อง unkeyed literal ได้ทุกกรณี** — มันจับได้แค่ unkeyed literal ของ type จาก package *อื่น* เท่านั้น และยกเว้น type ของ stdlib ที่มั่นคงตามรายการที่ hardcode ไว้อย่าง `image.Point`
+- **struct value ที่หน้าตาเท่ากันสองตัวเทียบเท่ากันเสมอ** — จริงแบบ field-by-field ยกเว้น field `float64` ที่เป็น `NaN` ซึ่งไม่เท่ากับตัวมันเองเลย และ field ที่เป็น `any`/interface ซึ่ง panic ตอน runtime ได้ถ้า dynamic type ของมันเป็น slice, map, หรือ function
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **`bufio.ReadWriter`** (stdlib) เป็น struct ที่ embed `*Reader` และ `*Writer` เข้าด้วยกัน — ได้ method ของทั้งสองมาโดยไม่ต้อง implement เอง และ satisfy `io.ReadWriter` ทันที
+> **`bytes.Buffer`** (stdlib) มี zero value ที่มีประโยชน์ — `var b bytes.Buffer` พร้อม `Write` และ `Read` ได้ทันทีโดยไม่ต้องเรียก constructor เลย ตรงตาม pattern zero-value-useful ที่บทนี้แนะนำพอดี
 
 <Callout title="Struct เป็น value type — การ assign จะ copy">
 การเขียน `p2 := p1` จะสร้าง copy ของ struct ที่เป็นอิสระอย่างสมบูรณ์ ทุก field ถูก copy การแก้ไข `p2.Name` ไม่กระทบ `p1` เลย นี่แตกต่างจาก slice และ map ที่การ assign จะ copy เฉพาะ header เท่านั้น ทำให้ตัวแปรทั้งสองแชร์ข้อมูลชุดเดียวกัน หากต้องการแชร์ struct ข้ามหลาย goroutine หรือหลีกเลี่ยงการ copy struct ขนาดใหญ่ ให้ใช้ pointer (`*Person`)
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+Bug ที่เกี่ยวกับ struct มักซ่อนอยู่ในสิ่งที่ดูเหมือน boilerplate เช็คสิ่งเหล่านี้:
+
+- struct field ใช้ tag key ที่ไม่ตรงกับที่ library ต้องการจริง ๆ หรือเปล่า (`jso:"name"` แทนที่จะเป็น `json:"name"`, field ที่ doc ของ ORM เรียกชื่ออื่น)? แบบนี้ compile ผ่านและมักจะ "ทำงานได้ครึ่งหนึ่ง" — บาง field serialize ได้ บาง field ไม่ได้แบบเงียบ ๆ
+- literal แบบ positional (unkeyed) ถูกใช้กับ struct ที่ declare ใน package หรือไฟล์ *อื่น* ที่ผู้เขียนไม่ได้เพิ่งเขียนเองหรือเปล่า? การเรียง field ใหม่จากต้นทางจะทำให้ค่าสลับกันแบบเงียบ ๆ
+- มีอะไรเทียบ struct สองตัวด้วย `==` หรือใช้ struct เป็น map key ทั้งที่ field หนึ่งเป็น `any`/`interface{}` หรือเปล่า? นั่นคือ panic ที่ซ่อนรอ slice หรือ map value ตัวแรกที่ไหลผ่านมัน
+- field ของ struct ถูกเรียงตามความอ่านง่ายโดยไม่คิดเรื่องขนาดเลยหรือเปล่า — field เล็ก (bool, int8) กระจายอยู่ระหว่าง field ใหญ่ (int64, pointer, string)? ไม่ใช่ bug แต่ควร flag ไว้ถ้าเป็น type ใน hot-path หรือถูก allocate จำนวนมาก
+- type ต้องเรียก `New()`/`Init()` ก่อนถึงจะใช้ได้อย่างปลอดภัยหรือเปล่า ทั้งที่ zero value ของมันน่าจะทำให้ใช้ได้เลยได้? caller ทุกคนที่ลืมเรียกจะมี bug แฝงอยู่ และไม่มีอะไรบังคับให้เรียกตอน compile time เลย
+
+<SpotTheBug code={`type Metrics struct {
+	Name  string \`json:"name"\`
+	Count int    \`jso:"count"\`
+}
+
+func main() {
+	m := Metrics{Name: "requests", Count: 42}
+	b, _ := json.Marshal(m)
+	fmt.Println(string(b))
+}`}>
+Tag ของ field ที่สองพิมพ์ผิด: `` `jso:"count"` `` แทนที่จะเป็น `` `json:"count"` `` นี่เป็น tag *syntax* ที่ valid — `go vet ./...` ไม่รายงานอะไรเลย เพราะ `structtag` check ตรวจแค่ grammar ของ `key:"value"` ไม่ได้ตรวจว่า `"jso"` เป็น key ที่ `encoding/json` รู้จักหรือเปล่า struct นี้ compile และรันได้ปกติ แต่ `Count` จะ marshal ด้วยชื่อ Go field ของมันแทนที่จะเป็น key ที่ตั้งใจ: `{"name":"requests","Count":42}` ไม่มีอะไรจับความผิดพลาดนี้ได้เลยนอกจาก test ที่ assert รูปร่าง JSON ตรง ๆ — มันจะไม่ทำให้ build พัง, lint พัง, หรือแม้แต่มองเผิน ๆ ที่ตัว struct ก็ไม่เห็น
+</SpotTheBug>
 
 export const quizStructs = [
   {
@@ -173,7 +346,8 @@ export const quizStructs = [
       "เป็น empty string — การ copy จะ zero ทุก field",
       "Compile error — struct ไม่สามารถ assign โดยตรงได้"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Struct เป็น value type ใน Go เสมอ — ทุก field ถูก copy ตอน assign p2 เป็นค่าที่เป็นอิสระอย่างสมบูรณ์ตั้งแต่ `p2 := p1` ทำงานเสร็จ ดังนั้นการแก้ p2.Name จึงกระทบ p1.Name ไม่ได้เลย"
   },
   {
     q: "รูปแบบ struct literal แบบใดที่เป็น idiomatic Go?",
@@ -183,27 +357,41 @@ export const quizStructs = [
       "ทั้งสองแบบมีความเป็น idiomatic เท่ากัน",
       "ควรสร้าง struct ด้วย `new(Point)` เสมอ"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Named-field literal อธิบายตัวเองได้และไม่พังแบบเงียบ ๆ ถ้า field ของ struct ถูกเรียงใหม่ทีหลัง — go vet's composites check flag positional literal ของ type จาก package อื่นด้วยเหตุผลนี้เป๊ะ ๆ"
   },
   {
-    q: "การ embed `Address` ไว้ใน `Person` ให้ประโยชน์อะไร?",
+    q: "โค้ดนี้ print อะไร?\n\ntype User struct {\n    Name string `jso:\"name\"`\n}\nb, _ := json.Marshal(User{Name: \"Ada\"})\nfmt.Println(string(b))",
     options: [
-      "Person สืบทอดจาก Address; Person คือ subtype ของ Address",
-      "Field และ method ของ Address ถูก promote ขึ้นมาใน Person เข้าถึงได้ด้วย person.City เป็นต้น",
-      "Compile error — Go ไม่รองรับ embedding",
-      "Person และ Address แชร์ memory layout เดียวกัน"
+      "Compile error — jso ไม่ใช่ tag key ที่ valid",
+      "{\"name\":\"Ada\"} — Go แก้ typo ให้อัตโนมัติ",
+      "{\"Name\":\"Ada\"} — encoding/json ใช้ชื่อ Go field แทน",
+      "{} — tag ที่ผิดรูปทำให้ field ถูกตัดทิ้ง"
     ],
-    answer: 1
+    answer: 2,
+    explain: "`jso:\"name\"` เป็น struct tag ที่ syntax ถูกต้องสมบูรณ์ — แค่ไม่ใช่ key \"json\" ที่ encoding/json มองหา verify บน 1.26.5 แล้ว: field นี้ marshal ด้วยชื่อ Go field ที่ export ของมันคือ Name และ go vet ไม่รายงานอะไรเลยเพราะ grammar ของ tag ถูกต้อง"
   },
   {
-    q: "สามารถเปรียบเทียบ struct `User` สองตัวด้วย `==` ได้หรือไม่ ถ้า User มี field เป็น `[]string`?",
+    q: "`unsafe.Sizeof` รายงานอะไรสำหรับสอง struct นี้ และทำไมถึงต่างกัน?\n\ntype Bad struct { A bool; B int64; C bool }\ntype Good struct { B int64; A bool; C bool }",
     options: [
-      "ได้ — Go เปรียบเทียบ slice ทีละ element",
-      "ได้ — แต่เฉพาะเมื่อ slice มีความยาวเท่ากัน",
-      "ไม่ได้ — struct ที่มี field เป็น slice ไม่สามารถเปรียบเทียบด้วย == ได้",
-      "ได้ — การเปรียบเทียบจะข้าม field ที่เป็น slice"
+      "ทั้งคู่ 10 byte — Go pack field แน่นเสมอ",
+      "Bad คือ 24 byte, Good คือ 16 byte — padding เพื่อให้ตรง alignment 8-byte ของ int64 มีต้นทุนสูงขึ้นเมื่อ field เล็กล้อมรอบมันอยู่",
+      "ทั้งคู่ 24 byte — ลำดับ field ไม่มีผลต่อขนาด struct ใน Go เลย",
+      "Bad คือ 16 byte, Good คือ 24 byte — compiler optimize ลำดับ declare ให้อัตโนมัติ"
     ],
-    answer: 2
+    answer: 1,
+    explain: "verify บน 1.26.5 ด้วย unsafe.Sizeof แล้ว: Bad คือ 24 byte, Good คือ 16 byte int64 ต้องการ alignment 8-byte ดังนั้นใน Bad compiler แทรก padding 7 byte หลัง bool ตัวแรก แล้วอีก 7 byte หลัง bool ตัวสุดท้าย Good จัดกลุ่ม field 8-byte ไว้ก่อน แล้ว field 1-byte สองตัวไว้ด้วยกันทีหลัง ต้องการ trailing padding แค่ 6 byte"
+  },
+  {
+    q: "โค้ดนี้ compile ผ่านไหม และถ้าผ่าน print อะไร?\n\nvar x, y any = []int{1}, []int{1}\ns1 := struct{ V any }{V: x}\ns2 := struct{ V any }{V: y}\nfmt.Println(s1 == s2)",
+    options: [
+      "Compile error — struct ที่มี field any เทียบกันไม่ได้เลย",
+      "Compile ผ่าน print true — slice ทั้งสองมีเนื้อหาเหมือนกัน",
+      "Compile ผ่าน panic ตอน runtime: comparing uncomparable type []int",
+      "Compile ผ่าน print false — slice header ที่ต่างกันไม่เท่ากันเสมอ"
+    ],
+    answer: 2,
+    explain: "Struct ที่มี field เป็น any type-check ผ่านว่า comparable ตอน compile time — compiler เห็นแค่ static type any ซึ่ง comparable เสมอ panic จะเกิดตอน runtime เท่านั้น เมื่อ dynamic type จริง ([]int ซึ่งไม่ comparable) ถูกตรวจสอบ verify บน 1.26.5 แล้ว: panic: runtime error: comparing uncomparable type []int"
   }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## The Go concurrency model
 
@@ -24,6 +26,19 @@ In practice this means:
 
 This design makes concurrent programs easier to reason about. When data flows through channels, ownership is clear: the sender had it, now the receiver has it. No mutex needed for that transfer.
 
+export const csModelDiagram = `flowchart LR
+  subgraph SharedMemory["Shared-memory style (most languages)"]
+    T1["Thread A"] -.Lock/Unlock.-> Mu["mutex"]
+    T2["Thread B"] -.Lock/Unlock.-> Mu
+    Mu --> Data["shared variable"]
+  end
+  subgraph CSP["Go's CSP style"]
+    G1["Goroutine A"] -->|send| Ch["channel"]
+    Ch -->|receive| G2["Goroutine B"]
+  end`;
+
+<Mermaid code={csModelDiagram} title="Shared memory under a lock vs CSP: a channel moves the data itself, so there is nothing left to lock" />
+
 ## What this module covers
 
 | Lesson | Topic |
@@ -38,7 +53,7 @@ This design makes concurrent programs easier to reason about. When data flows th
 
 ## Your first concurrent Go program
 
-The snippet below launches three goroutines in parallel. Each goroutine writes its result into a pre-allocated slice indexed by its own id, so output is always in order. `sync.WaitGroup` blocks `main` until all three are finished.
+The snippet below launches three goroutines in parallel. Each goroutine writes its result into a pre-allocated slice indexed by its own id, so output is always in order. `sync.WaitGroup` blocks `main` until all three are finished — the Goroutines lesson covers `WaitGroup` itself in depth (including the classic `wg.Add` placement bug); this page only needs it to keep `main` alive long enough to see the output.
 
 export const indexCode = `package main
 
@@ -82,6 +97,36 @@ func main() {
 - **Concurrent means parallel** — concurrent means juggling multiple tasks; parallel means actually running at the same time on multiple cores
 - **Channels are always better than mutexes** — a mutex fits simple shared state; a channel fits data flow
 
+## Reading AI-generated code
+
+Every lesson in this module ends with its own detailed version of this section; here is the survey-level version worth checking on sight, before diving into a generated snippet's details:
+
+- Does `main` (or the calling goroutine) wait for every goroutine it starts — with a `WaitGroup`, a channel, or by returning a channel the caller drains — or can it return while goroutines are still running?
+- Does every goroutine have a way to stop, and does anything protect state that more than one goroutine touches?
+- If the snippet is presented as deterministic, is the printed order actually forced (sorted, or read back through an indexed slice), or could two runs legitimately print in a different order?
+
+<SpotTheBug code={`func main() {
+	for i := 0; i < 3; i++ {
+		go func(id int) {
+			fmt.Println("goroutine", id, "says hello")
+		}(i)
+	}
+	fmt.Println("main exits")
+}`}>
+Nothing here waits for the three goroutines to run before `main` returns. The Go runtime does not keep a process alive for background goroutines — the instant `main` returns, the process exits, whether or not any goroutine has been scheduled yet. Real captured output from two separate runs of this exact program:
+
+```text
+main exits
+```
+
+```text
+main exits
+goroutine 0 says hello
+```
+
+Both are legitimate outcomes of the same binary — sometimes zero goroutines get a chance to run, sometimes one or two do, entirely depending on scheduling. The fix is the `sync.WaitGroup` this page's own runnable example uses: `main` must not return until it has confirmed every goroutine it started has finished.
+</SpotTheBug>
+
 <Callout title="Key point: loop variables are per-iteration since Go 1.22">
 Since Go 1.22 (for modules with `go 1.22` or newer) every iteration of a `for` loop gets its own `i`, so `go func() { use(i) }()` captures the value you expect. Before 1.22 the variable was shared and every goroutine could see the final value — that is why older code passes it explicitly, `go func(id int) { ... }(i)`, or copies it with `i := i` (a copy `go fix` now removes). Passing the value as an argument is still fine and makes the dependency visible; just know the bug it once guarded against is gone on Go 1.27.
 </Callout>
@@ -95,7 +140,8 @@ export const quizIndex = [
       "Avoid all shared state by running goroutines in separate processes",
       "Use sync.Map for every shared variable"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A channel send physically hands a value from one goroutine to another -- the sender does not keep using it afterward. That handoff replaces the need for a lock around a variable both goroutines would otherwise touch."
   },
   {
     q: "What does GOMAXPROCS control?",
@@ -105,7 +151,8 @@ export const quizIndex = [
       "How many goroutines can execute Go code at the same time — the number of Ps",
       "The number of CPU cores the OS reserves exclusively for the process"
     ],
-    answer: 2
+    answer: 2,
+    explain: "GOMAXPROCS is the number of Ps -- the scheduling contexts a goroutine needs to actually run Go code. It bounds parallelism, not how many goroutines you can create (which is limited only by memory)."
   },
   {
     q: "Why is `wg.Add(1)` called BEFORE `go func()`?",
@@ -115,7 +162,30 @@ export const quizIndex = [
       "go func() blocks until Add is called",
       "sync.WaitGroup requires Add to be called from the main goroutine"
     ],
-    answer: 1
+    answer: 1,
+    explain: "wg.Wait() only blocks while the counter is above zero. If Add hasn't run yet when Wait is checked, the counter can still be zero, and Wait returns immediately even though the goroutine hasn't started."
+  },
+  {
+    q: "```go\nfunc main() {\n    for i := 0; i < 3; i++ {\n        go func(id int) {\n            fmt.Println(\"goroutine\", id, \"says hello\")\n        }(i)\n    }\n    fmt.Println(\"main exits\")\n}\n```\nWhat can this program print?",
+    options: [
+      "Always all three \"goroutine N says hello\" lines, then \"main exits\"",
+      "Always just \"main exits\", with no goroutine output",
+      "\"main exits\" plus anywhere from zero to three goroutine lines, depending on scheduling",
+      "A compile error, because main returns before the goroutines finish"
+    ],
+    answer: 2,
+    explain: "Nothing synchronizes main with the three goroutines, so the process can exit before any, some, or all of them get scheduled. This compiles and runs fine -- it just does not reliably do what it looks like it does."
+  },
+  {
+    q: "Which statement about goroutines vs OS threads is accurate?",
+    options: [
+      "A goroutine is implemented as one dedicated OS thread",
+      "A goroutine starts with a small, growable stack and many of them are multiplexed onto a smaller number of OS threads",
+      "Goroutines and OS threads are two names for the same runtime concept in Go",
+      "A goroutine always consumes more memory than an OS thread"
+    ],
+    answer: 1,
+    explain: "This M:N relationship -- many goroutines (G) scheduled onto a handful of OS threads (M) via a P -- is exactly why Go programs can have hundreds of thousands of goroutines without hundreds of thousands of OS threads."
   }
 ];
 

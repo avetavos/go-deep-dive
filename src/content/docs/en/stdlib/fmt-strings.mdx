@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## fmt — formatted I/O
 
@@ -40,6 +42,57 @@ fmt.Printf("%#v\n", p)   // main.Person{Name:"Alice", Age:30}
 fmt.Printf("%T\n",  p)   // main.Person
 ```
 
+### %v calls String() — and can recurse into it
+
+When a value implements `fmt.Stringer` (`String() string`) or `error`, `%v` (and `%s`, `Println`, and every verb that falls back to the default representation) calls that method instead of printing the struct's fields. This is convenient — until the `String()` method itself formats the receiver with `%v`:
+
+```go
+type Point struct{ X, Y int }
+
+func (p Point) String() string {
+    return fmt.Sprintf("%v", p) // BUG: %v on a Stringer calls String() again
+}
+```
+
+`go vet` catches this specific shape at compile time — it is common enough in AI-generated code to have its own analyzer:
+
+```text
+main.go:8:22: fmt.Sprintf format %v with arg p causes recursive (command-line-arguments.Point).String method call
+```
+
+The fix is to format the underlying fields, or a converted type that does not carry the method: `fmt.Sprintf("(%d, %d)", p.X, p.Y)`, or `fmt.Sprintf("%v", struct{ X, Y int }(p))`.
+
+### Width and padding verbs
+
+Every verb accepts a width and, for floats, a precision, written before the verb letter:
+
+```go
+fmt.Printf("%08b\n", 5)      // 00000101 — zero-padded to 8 digits
+fmt.Printf("[%6.2f]\n", 3.14159) // [  3.14] — width 6, 2 decimal places
+fmt.Printf("%x\n", 255)      // ff — lowercase hex
+```
+
+A negative width left-aligns instead of right-aligning (`%-8s`); the same width syntax works for `%d`, `%s`, `%q`, and every other verb.
+
+## %w is only valid inside fmt.Errorf
+
+`%w` is not a general formatting verb — it is a signal to `fmt.Errorf` specifically, telling it to wrap the given error so `errors.Is`/`errors.As`/`errors.Unwrap` can see through it later. Every other `fmt` function treats `%w` as an error and refuses to compile with `go vet`:
+
+```go
+baseErr := errors.New("disk full")
+wrapped := fmt.Errorf("save failed: %w", baseErr) // OK — Errorf understands %w
+```
+
+```go
+notWrapped := fmt.Sprintf("save failed: %w", baseErr) // go vet error
+```
+
+```text
+main.go:17:42: fmt.Sprintf does not support error-wrapping directive %w
+```
+
+`go vet` (part of `go build`'s default checks since Go 1.10 for a subset of analyzers, and always run by `go test`) rejects this at compile-check time, so the mistake rarely reaches production — but it is worth recognising when reading a diff, because AI-generated code sometimes copies a `%w`-bearing format string into a `Sprintf` or `Println` call by habit.
+
 ## strings — text manipulation
 
 The `strings` package provides functions for searching, splitting, joining, and transforming strings. Strings in Go are immutable UTF-8 byte sequences; these functions return new strings rather than modifying in place.
@@ -55,17 +108,46 @@ strings.ToUpper(s)                   // "HELLO, WORLD"
 strings.TrimSpace("  hi  ")          // "hi"
 ```
 
+### Strings are bytes; range walks runes
+
+A Go string is an immutable sequence of bytes, usually holding UTF-8 text. `len(s)` counts **bytes**, and `s[i]` indexes a single **byte** — not a character. `for range` over a string, by contrast, decodes UTF-8 and gives you the **rune** (a Unicode code point, `int32`) at each position, together with the byte offset it started at:
+
+```go
+s := "café" // é is 2 bytes in UTF-8
+fmt.Println(len(s), utf8.RuneCountInString(s)) // 5 4 — byte count vs rune count differ
+for i, r := range s {
+    fmt.Printf("byte %d: rune %q\n", i, r)
+}
+fmt.Println(s[3]) // 195 — a raw UTF-8 continuation byte, not a printable rune
+```
+
+Indexing `s[i]` with an arithmetic offset (rather than iterating with `range` or converting to `[]rune`) is only safe for pure-ASCII strings; any non-ASCII input silently slices into the middle of a multi-byte character.
+
+### TrimPrefix vs TrimLeft: the cutset trap
+
+`strings.TrimPrefix(s, prefix)` removes `prefix` only if `s` starts with that exact string, once. `strings.TrimLeft(s, cutset)` looks completely different: it treats `cutset` as a **set of individual bytes**, and strips every leading byte that appears anywhere in that set — not a prefix string:
+
+```go
+strings.TrimPrefix("aardvark", "ar") // "aardvark" — does not start with "ar"
+strings.TrimLeft("aardvark", "ar")   // "dvark"    — strips every leading 'a' or 'r'
+```
+
+AI-generated code that reaches for `TrimLeft` expecting prefix-string behaviour produces a plausible-looking but wrong result on any input where the cutset characters repeat or appear in the wrong order — use `TrimPrefix` (or `CutPrefix`) whenever the intent is "remove this exact prefix."
+
 ### strings.Builder — efficient concatenation
 
 When building a string from many pieces in a loop, use `strings.Builder` instead of `+=`. The `+=` operator allocates a new string on every iteration; `Builder` writes into a growing buffer and only allocates the final string once.
 
 ```go
 var b strings.Builder
+b.Grow(64) // pre-size the buffer when you know roughly how much you'll write
 for i := 0; i < 5; i++ {
     fmt.Fprintf(&b, "item%d ", i)
 }
 result := strings.TrimSpace(b.String()) // "item0 item1 item2 item3 item4"
 ```
+
+`Builder` is not safe to copy once it holds data — like `bytes.Buffer`, but `strings.Builder` actively enforces it. Copying a non-zero `Builder` by value and then writing to the copy panics at runtime with `strings: illegal use of non-zero Builder copied by value`, because the copy carries a pointer back to the original's buffer that the runtime detects has moved.
 
 ### Cut, CutLast, and iterator helpers
 
@@ -101,6 +183,19 @@ b, err   := strconv.ParseBool("true")   // string → bool
 ```
 
 `Atoi` and `ParseFloat` return `(value, error)` because the input might not be a valid number. Always check the error before using the value.
+
+`ParseInt(s, base, bitSize)` handles other bases (`strconv.ParseInt("2A", 16, 64)` → `42`), and `strconv.Quote` produces a Go-syntax-quoted string with escapes made visible — useful for logging a value that might contain control characters.
+
+### strconv vs fmt.Sprint for numbers
+
+`strconv.Itoa(n)` and `fmt.Sprint(n)` produce the same string for an int, but they are not equally cheap. `fmt.Sprint` boxes its argument into an `any`, then uses reflection to discover it is an integer before formatting it; `strconv.Itoa` converts directly with no boxing or reflection. Benchmarked on this machine:
+
+```text
+BenchmarkItoa-11      92186020    12.60 ns/op    8 B/op    1 allocs/op
+BenchmarkSprint-11    35726424    34.59 ns/op    8 B/op    1 allocs/op
+```
+
+Same allocation count, but `fmt.Sprint` costs roughly 2.7x more CPU time per call — reflection is not free even when it does not allocate more. Prefer `strconv` in a hot path where you know the concrete type; reach for `fmt.Sprintf` when you need to interpolate several values into a template.
 
 export const fmtStringsCode = `package main
 
@@ -160,6 +255,110 @@ func main() {
 
 <Playground code={fmtStringsCode} />
 
+export const fmtStringsAdvancedCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+\t"strconv"
+\t"strings"
+\t"testing"
+\t"unicode/utf8"
+)
+
+func main() {
+\t// 1. %w is only meaningful in fmt.Errorf — elsewhere it prints a literal error marker
+\tbaseErr := errors.New("disk full")
+\twrapped := fmt.Errorf("save failed: %w", baseErr)
+\tfmt.Println("Errorf %w:", wrapped, "| Unwrap:", errors.Unwrap(wrapped))
+
+\t// 2. strings are bytes; range walks runes; len() and s[i] are byte-oriented
+\ts := "café" // é is 2 bytes in UTF-8
+\tfmt.Println("len(s):", len(s), "utf8.RuneCountInString(s):", utf8.RuneCountInString(s))
+\tfor i, r := range s {
+\t\tfmt.Printf("  byte offset %d: rune %q (%d)\\n", i, r, r)
+\t}
+\tfmt.Println("s[3]:", s[3], "(a raw byte, not a rune)")
+
+\t// 3. strconv vs fmt.Sprint — allocation count via testing.AllocsPerRun
+\tn := 123456
+\tallocsStrconv := testing.AllocsPerRun(1000, func() { _ = strconv.Itoa(n) })
+\tallocsSprint := testing.AllocsPerRun(1000, func() { _ = fmt.Sprint(n) })
+\tfmt.Printf("allocs/op strconv.Itoa: %.0f  fmt.Sprint: %.0f\\n", allocsStrconv, allocsSprint)
+
+\t// strconv.ParseInt and Quote
+\tv, err := strconv.ParseInt("2A", 16, 64)
+\tfmt.Println("ParseInt base16:", v, err)
+\tfmt.Println("Quote:", strconv.Quote("line\\tbreak\\n"))
+
+\t// 4. TrimPrefix (exact string) vs TrimLeft (cutset of individual bytes)
+\tfmt.Println("TrimPrefix:", strings.TrimPrefix("aardvark", "ar"))
+\tfmt.Println("TrimLeft cutset trap:", strings.TrimLeft("aardvark", "ar"))
+
+\t// EqualFold and Fields
+\tfmt.Println("EqualFold:", strings.EqualFold("Go", "GO"))
+\tfmt.Println("Fields:", strings.Fields("  many   spaces   here "))
+
+\t// 5. width and padding verbs
+\tfmt.Printf("%%08b: %08b\\n", 5)
+\tfmt.Printf("%%6.2f: [%6.2f]\\n", 3.14159)
+\tfmt.Printf("%%x: %x\\n", 255)
+
+\t// 6. strings.Builder — Grow then write, then show the copy panic
+\tvar b strings.Builder
+\tb.Grow(64)
+\tb.WriteString("hello")
+\tfmt.Println("Builder:", b.String(), "Cap:", b.Cap() >= 64)
+
+\tfunc() {
+\t\tdefer func() {
+\t\t\tif r := recover(); r != nil {
+\t\t\t\tfmt.Println("copy panic recovered:", r)
+\t\t\t}
+\t\t}()
+\t\tb2 := b // copying a non-zero Builder by value
+\t\tb2.WriteString(" world")
+\t}()
+}`;
+
+<Playground code={fmtStringsAdvancedCode} />
+
+Real output from this program on Go 1.26.5:
+
+```text
+Errorf %w: save failed: disk full | Unwrap: disk full
+len(s): 5 utf8.RuneCountInString(s): 4
+  byte offset 0: rune 'c' (99)
+  byte offset 1: rune 'a' (97)
+  byte offset 2: rune 'f' (102)
+  byte offset 3: rune 'é' (233)
+s[3]: 195 (a raw byte, not a rune)
+allocs/op strconv.Itoa: 1  fmt.Sprint: 1
+ParseInt base16: 42 <nil>
+Quote: "line\tbreak\n"
+TrimPrefix: aardvark
+TrimLeft cutset trap: dvark
+EqualFold: true
+Fields: [many spaces here]
+%08b: 00000101
+%6.2f: [  3.14]
+%x: ff
+Builder: hello Cap: true
+copy panic recovered: strings: illegal use of non-zero Builder copied by value
+```
+
+The `range` loop over `"café"` visits 4 runes at byte offsets 0, 1, 2, 3 — the 4-byte-wide `é` occupies offsets 3 and 4, which is why `len(s)` is 5 while `utf8.RuneCountInString(s)` is 4, and `s[3]` yields a lone continuation byte (195), not `'é'`.
+
+## The %v dispatch path
+
+export const fmtDispatchDiagram = `flowchart LR
+  Value["value passed to %v"] --> Check{"implements Stringer or error?"}
+  Check -- "yes" --> Call["call String() / Error()"]
+  Check -- "no" --> Reflect["reflect: walk struct fields"]
+  Call -- "calls %v on itself" --> Loop["infinite recursion — go vet catches this"]`;
+
+<Mermaid code={fmtDispatchDiagram} title="%v checks for Stringer/error first — a String() method that formats itself with %v recurses" />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -175,6 +374,8 @@ func main() {
 - **String concatenation with + is faster than fmt.Sprintf** — it depends on how many concatenations there are; `strings.Builder` is fastest for many pieces in a loop.
 - **%d and %v are very different** — `%d` is explicit for integers, `%v` is generic but produces the same output for an int; they differ for structs.
 - **rune and byte are the same thing** — a `byte` is a `uint8` (1 byte); a `rune` is an `int32` (1-4 bytes for a Unicode code point).
+- **TrimLeft(s, "prefix") removes the prefix "prefix"** — it removes leading bytes found anywhere in the cutset, not a prefix string; use `TrimPrefix` for that.
+- **%w works anywhere you'd use %v for an error** — `%w` is meaningful only inside `fmt.Errorf`; every other `fmt` function rejects it at `go vet` time.
 
 > 💡 Real-world example
 >
@@ -186,6 +387,44 @@ func main() {
 When you are unsure what is inside a struct, reach for `%+v` first — it prints field names alongside values so you can immediately see which field holds which data. Use `%#v` when you want a copy-pasteable Go literal (useful for writing test fixtures). For production logs, prefer structured logging (`log/slog`) over `fmt.Printf`, but in development and tests `%+v` saves a lot of time.
 </Callout>
 
+## Reading AI-generated code
+
+`fmt`/`strings`/`strconv` code compiles almost regardless of whether it is correct, which makes it easy to skim past a subtle bug. Check for these:
+
+- Does a `String()` method format the receiver with `%v` (or `%s`, or `fmt.Sprint`) instead of its individual fields — a recursion `go vet` flags but is easy to miss in review?
+- Does `%w` appear in any `fmt` call other than `Errorf`? It is a silent no-op error there that `go vet` also catches, but only if it runs.
+- Does code call `strings.TrimLeft`/`TrimRight` expecting prefix/suffix-string removal? Those take a cutset of bytes, not a substring — `TrimPrefix`/`TrimSuffix` are what "remove this exact string" means.
+- Does code index a string by byte offset (`s[i]`, `s[i:j]`) when the input might contain non-ASCII text? That can slice into the middle of a multi-byte rune.
+- Is `strconv` skipped in favour of `fmt.Sprintf`/`fmt.Sprint` for a simple number-to-string conversion in a hot path, paying for reflection that buys nothing?
+- Is a `strings.Builder` (or `bytes.Buffer`) copied by value after it has been written to, instead of passed by pointer?
+
+<SpotTheBug code={`type Point struct{ X, Y int }
+
+func (p Point) String() string {
+	return fmt.Sprintf("%v", p)
+}
+
+func main() {
+	p := Point{1, 2}
+	fmt.Println(p)
+}`}>
+
+`%v` on a value that implements `fmt.Stringer` calls `String()` — but `String()` here formats `p` with `%v` again, calling itself forever. `go vet` catches this exact shape at build time, before the program ever runs:
+
+```text
+main.go:8:22: fmt.Sprintf format %v with arg p causes recursive (command-line-arguments.Point).String method call
+```
+
+Fix it by formatting the underlying fields instead of the receiver itself:
+
+```go
+func (p Point) String() string {
+    return fmt.Sprintf("(%d, %d)", p.X, p.Y)
+}
+```
+
+</SpotTheBug>
+
 export const quizFmtStrings = [
   {
     q: "Which format verb prints a struct with its field names?",
@@ -195,17 +434,30 @@ export const quizFmtStrings = [
       "%+v",
       "%T"
     ],
-    answer: 2
+    answer: 2,
+    explain: "%v prints the default representation without field names; %+v adds them. %s expects a string-like value and %T prints only the type."
   },
   {
-    q: "What does strings.ReplaceAll(\"aabbcc\", \"b\", \"x\") return?",
+    q: "\`\`\`go\ntype P struct{ X int }\nfunc (p P) String() string { return fmt.Sprintf(\"%v\", p) }\nfmt.Println(P{1})\n\`\`\`\nWhat happens when this runs?",
     options: [
-      "\"aaxbcc\"",
-      "\"aaxxcc\"",
-      "\"aabbxx\"",
-      "\"xxbbcc\""
+      "Prints {1}",
+      "Prints P{X:1}",
+      "go vet reports a recursive String method call, and if run anyway it recurses until the stack overflows",
+      "Prints an empty string"
     ],
-    answer: 1
+    answer: 2,
+    explain: "%v on a Stringer calls String(), and this String() formats the receiver with %v again — go vet's own analyzer catches this exact pattern before you even run the program."
+  },
+  {
+    q: "\`\`\`go\nfmt.Println(strings.TrimLeft(\"aardvark\", \"ar\"))\n\`\`\`\nWhat does this print, and why?",
+    options: [
+      "\"aardvark\" — \"ar\" is not a prefix in that order",
+      "\"dvark\" — TrimLeft strips every leading byte that is 'a' or 'r'",
+      "\"rdvark\" — it removes only the first matching byte",
+      "It panics because \"ar\" is not a valid prefix"
+    ],
+    answer: 1,
+    explain: "TrimLeft treats its second argument as a cutset of individual bytes, not a prefix string, so it strips every leading 'a' or 'r' — here that consumes \"aar\" and leaves \"dvark\". TrimPrefix would leave the string unchanged since it does not start with the exact string \"ar\"."
   },
   {
     q: "Why is strings.Builder preferred over += for building strings in a loop?",
@@ -215,7 +467,8 @@ export const quizFmtStrings = [
       "Builder provides thread safety automatically",
       "+= panics when the string is longer than 1024 bytes"
     ],
-    answer: 1
+    answer: 1,
+    explain: "+= allocates a brand-new string on every iteration because strings are immutable; Builder writes into a growing internal buffer and only produces the final string once."
   },
   {
     q: "strconv.Atoi(\"42\") returns which types?",
@@ -225,7 +478,19 @@ export const quizFmtStrings = [
       "int, error",
       "int64, error"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Atoi is shorthand for ParseInt(s, 10, 0) converted to int; it returns (int, error) so you can check whether the input was a valid decimal integer."
+  },
+  {
+    q: "What is wrong with \`fmt.Sprintf(\"result: %w\", err)\`?",
+    options: [
+      "Nothing — it wraps err just like fmt.Errorf would",
+      "%w is only meaningful inside fmt.Errorf; Sprintf does not support it, and go vet rejects the call",
+      "It should be %v instead of %w for errors",
+      "Sprintf cannot take an error as an argument"
+    ],
+    answer: 1,
+    explain: "%w is a directive fmt.Errorf uses to build a wrapped error; every other fmt function, including Sprintf, does not implement wrapping and go vet flags the call with \"does not support error-wrapping directive %w\"."
   }
 ];
 

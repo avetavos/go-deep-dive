@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ทำไมต้อง Wrap Error?
 
@@ -23,6 +25,13 @@ if err != nil {
 ```
 
 `%w` คือกุญแจสำคัญ เพราะ wrap error เดิมไว้ภายใน error ใหม่ รักษา chain ทั้งหมดไว้สำหรับ caller ที่ต้องการตรวจสอบ
+
+export const wrapChainDiagram = `flowchart LR
+  A["ErrNotFound (sentinel)"] -->|wrapped by queryDB| B["queryDB: %w"]
+  B -->|wrapped by getUser| C["getUser: %w"]
+  C -->|"errors.Is(err, ErrNotFound)"| D["true -- walks the whole chain"]`;
+
+<Mermaid code={wrapChainDiagram} title="ทุก %w เพิ่มลิงก์หนึ่งขั้น -- errors.Is เดินไปทุกลิงก์เพื่อหาตัวที่ตรงกัน" />
 
 ## fmt.Errorf และ %w
 
@@ -113,6 +122,166 @@ func (e *AppError) Unwrap() error  { return e.Err }
 
 เมื่อมี `Unwrap` แล้ว `errors.Is` และ `errors.As` สามารถมองผ่าน `AppError` เพื่อไปถึง error ที่ครอบอยู่ข้างใน
 
+## errors.As ต้องการ pointer ไปยัง concrete type
+
+argument ตัวที่สองของ `errors.As(err, target)` ต้องเป็น non-nil pointer ไปยังตัวแปรที่ type ของมัน implement `error` หรือเป็น interface ถ้าผิดพลาดตรงนี้ `errors.As` จะ panic แทนที่จะคืน `false` — เป็นการออกแบบที่ตั้งใจ เพราะ target ที่ผิดมักเป็นความผิดพลาดของโปรแกรมเมอร์ ไม่ใช่เงื่อนไข runtime ที่ควรถูกกลืนไปเงียบ ๆ
+
+ความผิดพลาดที่พบบ่อยที่สุดคือการส่งตัวแปร pointer เองแทนที่จะส่ง address ของมัน:
+
+```go
+var ve *VErr
+errors.As(err, ve) // BUG: passing ve, not &ve
+```
+
+ตรวจสอบแล้วบน 1.26.5 โค้ดนี้ panic:
+
+```
+panic: errors: target must be a non-nil pointer
+```
+
+`ve` เป็น nil `*VErr` การส่งมันตรง ๆ ทำให้ `errors.As` ได้ pointer ที่ "ชนิด" ถูกต้องแต่ไม่มีที่เก็บข้อมูลที่ addressable — `errors.As` ต้องการ `&ve` (ซึ่งเป็น `**VErr`) เพื่อให้มีที่เก็บผลลัพธ์ ส่วน target ที่ type ที่ pointer ชี้ไปไม่ได้ implement `error` เลยจะ panic ด้วยข้อความอื่นที่จริงเช่นกัน:
+
+```go
+var n int
+errors.As(err, &n) // BUG: *int does not implement error
+```
+```
+panic: errors: *target must be interface or implement error
+```
+
+## errors.Join และ %w หลายตัว
+
+`errors.Join` (Go 1.20) รวม error หลายตัวเข้าเป็นค่าเดียวที่มี method `Unwrap() []error` เปิดเผย error ทั้งหมด `errors.Is` และ `errors.As` จะเดินทุกสาขา ดังนั้นการเรียก `errors.Is` ครั้งเดียวสามารถ match error ที่ join ไว้ตัวใดก็ได้:
+
+```go
+joined := errors.Join(ErrDisk, ErrNet)
+fmt.Println(errors.Is(joined, ErrDisk)) // true
+fmt.Println(errors.Is(joined, ErrNet))  // true
+```
+
+`fmt.Errorf` รองรับ `%w` มากกว่าหนึ่งตัวในการเรียกเดียวกันด้วยเช่นกัน ตั้งแต่ Go 1.20 ซึ่งให้ chain แบบหลาย error เหมือนกัน:
+
+```go
+err := fmt.Errorf("save failed: %w, %w", ErrDisk, ErrNet)
+```
+
+ทั้งสองรูปแบบทำให้ `errors.Unwrap(err)` — ซึ่งเข้าใจแค่รูปแบบ error เดียว `Unwrap() error` — คืน `nil` สำหรับมัน ใช้ `errors.Is`/`errors.As` ในการตรวจสอบ error ที่ join หรือ wrap หลายตัว อย่าคิดว่า `errors.Unwrap` ตัวเดียวจะไปถึงทุกสาขาได้
+
+## Custom Is และ As methods
+
+`errors.Is` และ `errors.As` จะตรวจหา method `Is(target error) bool` หรือ `As(target any) bool` บน error แต่ละตัวใน chain ก่อนจะกลับไปใช้การตรวจสอบ identity/type แบบ default สิ่งนี้ทำให้ type สามารถกำหนดเองได้ว่าอะไรถือว่า match:
+
+```go
+// Is lets errors.Is treat every ValueErr as equal, regardless of msg --
+// useful when the exact message varies but the caller only cares
+// "was it this kind of error?"
+func (e ValueErr) Is(target error) bool {
+	_, ok := target.(ValueErr)
+	return ok
+}
+```
+
+เมื่อมี method นี้แล้ว `errors.Is(err, ValueErr{msg: "anything"})` จะรายงาน `true` สำหรับ `ValueErr` *ใดก็ตาม* ใน chain ไม่ใช่แค่ตัวที่มี field `msg` ตรงกันเป๊ะ ให้กำหนด `As` เองในลักษณะเดียวกันเมื่อการเทียบ type แบบ default ยังไม่ละเอียดพอ — เช่น การ match กับ error code ที่เก็บไว้ใน field แทนที่จะเป็น type ของ wrapper เอง
+
+## Receiver choice มีผลต่อ errors.As
+
+concrete type ที่ลงเอยอยู่ใน error chain คือ type ที่ implement `error` จริง ๆ — และนั่นขึ้นอยู่กับ receiver ที่เลือกใช้ pointer receiver หมายความว่ามีแค่ `*T` เท่านั้นที่ implement `error` ดังนั้น chain จะเก็บ `*T` และ `errors.As` ต้องการ target เป็น `**T` ส่วน value receiver หมายความว่า `T` implement `error` โดยตรง และการ wrap ค่า `T` (ไม่ใช่ `&T{}`) จะใส่ `T` ลงใน chain — `errors.As` ที่ใช้ target เป็น `**T` จะไม่เจออะไรเลย:
+
+```go
+perr := fmt.Errorf("op: %w", &PtrErr{Code: 7}) // *PtrErr in the chain
+var asPtr *PtrErr
+errors.As(perr, &asPtr) // true
+
+err := fmt.Errorf("op: %w", ValueErr{msg: "x"}) // ValueErr in the chain
+var asValuePtr *ValueErr
+errors.As(err, &asValuePtr) // false -- chain holds ValueErr, not *ValueErr
+var asValue ValueErr
+errors.As(err, &asValue) // true -- matches the value type
+```
+
+การเลือก receiver แบบใดแบบหนึ่งไม่ใช่เรื่องผิดในตัวมันเอง bug อยู่ที่การเขียน target ของ `errors.As` ราวกับว่า error ถูก wrap เป็น pointer ทั้งที่จริงถูก wrap เป็น value หรือในทางกลับกัน
+
+## %w กับ nil error
+
+การ wrap nil error เป็นสิ่งที่ทำได้ตามกฎ — `fmt.Errorf` ไม่ panic — แต่จะได้ message ที่แทบจะไม่ใช่สิ่งที่ตั้งใจ:
+
+```go
+var inner error // nil
+err := fmt.Errorf("op failed: %w", inner)
+fmt.Println(err) // op failed: %!w(<nil>)
+```
+
+`%w` ต้องการ argument `error` ที่ไม่ใช่ nil เพื่อบันทึกไว้ เมื่อได้รับ `nil` `fmt` จะ fallback ไปใช้ format แบบ bad-verb ตามปกติและฝัง `%!w(<nil>)` ไว้ใน message การตรวจสอบ `printf` ของ `go vet` ตรวจกรณีนี้ไม่ได้ — type แบบ static ของ `inner` คือ `error` และ vet ไม่มีทางรู้ว่าค่าจริงเป็น `nil` ตอน compile time ป้องกันด้วย `if err != nil` ก่อน wrap เสมอ เหมือนวินัยที่ใช้ทุกที่
+
+## ไม่มี stack trace
+
+standard `errors` package ไม่เคยบันทึกว่า error ถูกสร้างที่ไหนหรือ goroutine ไหนแตะต้องมันบ้าง — `Error()` คืนแค่ string และนั่นคือ contract ทั้งหมด การ wrap ด้วย `%w` สร้าง chain ของ *message และสาเหตุ* ไม่ใช่ call stack เมื่อต้องการข้อมูลตำแหน่ง ต้องเพิ่มเองอย่างชัดเจน: จับ `runtime.Caller` หรือ `runtime/debug.Stack()` ตอนสร้าง error แล้วเก็บไว้เป็น field หรือใช้ third-party package ที่ออกแบบมาสำหรับเรื่องนี้ (`github.com/pkg/errors` ทำให้ `errors.WithStack` เป็นที่นิยม ก่อนที่ `errors.Is`/`errors.As` จะเข้ามาอยู่ใน standard library) นี่เป็น trade-off ที่ตั้งใจ — error ที่ถูกและ compose ได้ ไม่มีต้นทุนจนกว่าจะต้องการมากกว่านั้น
+
+export const wrapDepthCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+)
+
+var ErrDisk = errors.New("disk full")
+var ErrNet = errors.New("network unreachable")
+
+// PtrErr uses a pointer receiver -- the chain holds *PtrErr.
+type PtrErr struct{ Code int }
+
+func (e *PtrErr) Error() string { return fmt.Sprintf("code %d", e.Code) }
+
+// ValueErr uses a value receiver -- the chain holds ValueErr, not *ValueErr.
+type ValueErr struct{ msg string }
+
+func (e ValueErr) Error() string { return e.msg }
+
+// Is lets errors.Is treat every ValueErr as equal, regardless of msg --
+// useful when the exact message varies but the caller only cares "was it
+// this kind of error?"
+func (e ValueErr) Is(target error) bool {
+\t_, ok := target.(ValueErr)
+\treturn ok
+}
+
+func main() {
+\t// errors.Join combines independent failures into one error whose
+\t// Unwrap() []error exposes both -- errors.Is finds either one.
+\tjoined := errors.Join(ErrDisk, ErrNet)
+\tfmt.Println(joined)
+\tfmt.Println("joined is ErrDisk:", errors.Is(joined, ErrDisk))
+\tfmt.Println("joined is ErrNet:", errors.Is(joined, ErrNet))
+
+\t// fmt.Errorf accepts more than one %w since Go 1.20.
+\tmulti := fmt.Errorf("save failed: %w, %w", ErrDisk, ErrNet)
+\tfmt.Println(multi)
+\t// errors.Unwrap only understands Unwrap() error -- a multi-%w error
+\t// implements Unwrap() []error instead, so this is nil.
+\tfmt.Println("errors.Unwrap(multi):", errors.Unwrap(multi))
+\tfmt.Println("multi is ErrNet:", errors.Is(multi, ErrNet))
+
+\t// A custom Is method changes what errors.Is considers a match.
+\terr := fmt.Errorf("op: %w", ValueErr{msg: "specific detail"})
+\tfmt.Println("custom Is match:", errors.Is(err, ValueErr{msg: "different detail"}))
+
+\t// Receiver choice decides which pointer-ness errors.As must ask for.
+\tperr := fmt.Errorf("op: %w", &PtrErr{Code: 7})
+\tvar asPtr *PtrErr
+\tfmt.Println("errors.As *PtrErr:", errors.As(perr, &asPtr))
+
+\tvar asValuePtr *ValueErr
+\tfmt.Println("errors.As *ValueErr on value-receiver chain:", errors.As(err, &asValuePtr))
+\tvar asValue ValueErr
+\tfmt.Println("errors.As ValueErr on value-receiver chain:", errors.As(err, &asValue))
+
+\t// %w with a nil error is a vet-flagged formatting mistake, not a crash.
+\tvar nilErr error
+\tfmt.Println(fmt.Errorf("wrapped: %w", nilErr))
+}`;
+
+<Playground code={wrapDepthCode} />
+
 export const wrappingCode = `package main
 
 import (
@@ -175,6 +344,33 @@ func main() {
 
 <Playground code={wrappingCode} />
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ AI generate เรียก `errors.As` หรือ wrap error หลายตัว ให้มองหาสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- `errors.As` ถูกเรียกด้วยตัวแปร pointer เองตรง ๆ (`errors.As(err, ve)`) แทนที่จะเป็น address ของมัน (`errors.As(err, &ve)`) หรือเปล่า? รูปแบบแรก panic ตอน runtime ไม่ใช่แค่คืน `false`
+- โค้ดเรียก `errors.Unwrap(err)` โดยคาดว่าจะไปถึงทุก error ข้างใน `errors.Join` หรือผลลัพธ์ multi-`%w` หรือเปล่า? `Unwrap() []error` เป็นรูปแบบที่ต่างออกไป — มีแค่ `errors.Is`/`errors.As` เท่านั้นที่เดินมันได้
+- receiver (value หรือ pointer) ของ custom error type ตรงกับความเป็น pointer ของ target ที่ `errors.As` ใช้เทียบกับมันในที่อื่น ๆ ของโค้ดหรือเปล่า?
+- `fmt.Errorf("...: %w", err)` มีโอกาส run ตอน `err` เป็น `nil` หรือเปล่า? ต้องเช็กที่ caller ไม่ใช่แค่บรรทัดนี้บรรทัดเดียว — `go vet` จะไม่จับกรณีนี้ให้
+- โค้ดสมมติว่า error มี stack trace หรือเลขบรรทัดมาให้โดย default หรือเปล่า? standard library ไม่เคยแนบมาให้เลย
+
+<SpotTheBug code={`type NetErr struct{ Op string }
+
+func (e *NetErr) Error() string { return e.Op + ": timeout" }
+
+func handle(err error) {
+	var ne *NetErr
+	if errors.As(err, ne) {
+		fmt.Println("net error on", ne.Op)
+	}
+}
+
+func main() {
+	handle(fmt.Errorf("dial: %w", &NetErr{Op: "dial"}))
+}`}>
+`ne` ถูกประกาศเป็น `var ne *NetErr` — nil `*NetErr` — แล้วส่งให้ `errors.As` ตรง ๆ แทนที่จะเป็น `&ne` `errors.As` ต้องการ *address* ของตัวแปร target เพื่อเขียนผลการ match ลงไป เมื่อได้รับ nil pointer เองก็ไม่มีที่ให้เขียน ตรวจสอบแล้วบน 1.26.5 โค้ดนี้ panic: `panic: errors: target must be a non-nil pointer` ทางแก้คือ `errors.As(err, &ne)`
+</SpotTheBug>
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -204,7 +400,8 @@ export const quizWrapping = [
       "ทั้งสองเหมือนกัน",
       "%w ใช้ได้กับ sentinel errors เท่านั้น"
     ],
-    answer: 1
+    answer: 1,
+    explain: "%w บันทึก error เดิมไว้ทำให้ errors.Is/errors.As ยังเข้าถึงมันได้ด้วยโปรแกรม ส่วน %v format แค่ message text แล้วทิ้ง error value เดิมไป"
   },
   {
     q: "errors.Is(err, ErrNotFound) คืนค่า true เมื่อ:",
@@ -214,17 +411,41 @@ export const quizWrapping = [
       "error ใด ๆ ใน unwrap chain ของ err ตรงกับ ErrNotFound",
       "ErrNotFound เป็น nil"
     ],
-    answer: 2
+    answer: 2,
+    explain: "errors.Is เดินทั้ง chain — จาก error เป้าหมายไปจนถึงทุกอย่างที่มันครอบอยู่ข้างใน — เช็ก identity (หรือ custom Is method) ทีละขั้น ไม่ใช่เนื้อหา string"
   },
   {
-    q: "errors.As(err, &target) ทำอะไร?",
+    q: "```go\nvar ve *VErr\nerrors.As(err, ve) // note: not &ve\n```\nโค้ดนี้จะเกิดอะไรขึ้นตอนรัน?",
     options: [
-      "เปรียบเทียบ err กับ target ตามค่า",
-      "เดิน error chain และ assign error แรกที่ type ตรงกับ target",
-      "แปลง err เป็น string",
-      "panic ถ้าไม่พบ match"
+      "คืน false เพราะ ve เป็น nil",
+      "panic: errors: target must be a non-nil pointer",
+      "compile ผ่านแต่ ve ยังเป็น nil อยู่ดี",
+      "คืน true ถ้า err เป็น nil ด้วย"
     ],
-    answer: 1
+    answer: 1,
+    explain: "errors.As ต้องการ address ของตัวแปร target เพื่อเขียนผลการ match ลงไป การส่ง ve เองทำให้ได้ nil *VErr ที่ไม่มีที่เก็บผล errors.As จึงถือว่าเป็น bug ของผู้เรียกและ panic — ตรวจสอบแล้วบน 1.26.5"
+  },
+  {
+    q: "```go\nmulti := fmt.Errorf(\"save failed: %w, %w\", ErrDisk, ErrNet)\nfmt.Println(errors.Unwrap(multi))\n```\nโค้ดนี้พิมพ์อะไร?",
+    options: [
+      "ErrDisk",
+      "ErrNet",
+      "<nil>",
+      "compile error — %w ใช้ซ้ำสองครั้งไม่ได้"
+    ],
+    answer: 2,
+    explain: "ตั้งแต่ Go 1.20 fmt.Errorf รองรับ %w มากกว่าหนึ่งตัว ทำให้ได้ error ที่มี Unwrap() []error เปิดเผยทั้งคู่ errors.Unwrap เข้าใจแค่รูปแบบ error เดียว Unwrap() error จึงคืน nil ตรงนี้ — ใช้ errors.Is/errors.As เพื่อเข้าถึงสาขาใดสาขาหนึ่ง"
+  },
+  {
+    q: "type หนึ่งมี method Error() แบบ pointer receiver: func (e *VErr) Error() string. target ของ errors.As ต้องเป็นอะไรถึงจะ match ได้?",
+    options: [
+      "*VErr โดยส่งเป็น &target ที่ target เป็น *VErr (argument จึงเป็น **VErr)",
+      "ค่า VErr",
+      "VErr หรือ *VErr ก็ได้ — receiver ไม่มีผลต่อ errors.As",
+      "target แบบ interface{}"
+    ],
+    answer: 0,
+    explain: "มีแค่ *VErr เท่านั้นที่ implement error เมื่อ Error() เป็น pointer receiver ดังนั้น *VErr คือ concrete type ที่เก็บอยู่ใน chain errors.As ต้องการ pointer ไปยัง type นั้นเป๊ะ ๆ คือ argument แบบ **VErr ที่ได้จากการเอา address ของตัวแปร *VErr"
   },
   {
     q: "เพื่อให้ custom error type สามารถ unwrap ได้ ต้อง implement:",
@@ -234,7 +455,8 @@ export const quizWrapping = [
       "errors.Register(myErr)",
       "interface fmt.Stringer"
     ],
-    answer: 0
+    answer: 0,
+    explain: "Unwrap() error คือ method ที่ errors.Is, errors.As และ errors.Unwrap มองหาเพื่อไปยัง error ถัดไปใน chain standard library ไม่มี method Wrap หรือขั้นตอน registration ใด ๆ"
   }
 ];
 

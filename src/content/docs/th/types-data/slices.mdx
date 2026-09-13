@@ -10,6 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Array: รากฐาน
 
@@ -21,6 +22,13 @@ fmt.Println(len(arr)) // 3 — always
 ```
 
 Array เป็น value type: การ assign `a2 := a1` จะ copy ทุก element มีประโยชน์สำหรับข้อมูลขนาดคงที่ แต่ยืดหยุ่นน้อยเกินไปสำหรับงานส่วนใหญ่
+
+ไม่ต้องนับ element เองก็ได้ — `[...]T{...}` ให้ compiler คำนวณขนาด array จาก literal แทน:
+
+```go
+a := [...]int{1, 2, 3, 4}
+fmt.Printf("%T %d\n", a, len(a)) // [4]int 4 — still a genuine array, size fixed at compile time
+```
 
 ## Slice: มุมมองแบบ dynamic
 
@@ -60,6 +68,46 @@ s = append(s, 4, 5, 6)
 
 เมื่อ `len == cap`, `append` จะ allocate backing array ใหม่ที่ใหญ่กว่า copy element ที่มีอยู่ แล้วคืน slice ที่ชี้ไป array ใหม่ slice เดิมไม่ถูกกระทบ **ควร reassign ผลลัพธ์ของ append เสมอ** — `s = append(s, ...)`
 
+## นโยบายการเติบโต
+
+เวลา `append` ต้องการ backing array ใหม่ Go ไม่ได้สุ่มขนาดขึ้นมาเฉย ๆ — มันมีนโยบายการเติบโตเพื่อให้การ append ทีละ element `n` ครั้งยังมีต้นทุนรวม `O(n)` ไม่ใช่ `O(n²)` บน Go 1.26.5 นโยบายคือ **double capacity ไปเรื่อย ๆ ตอนที่ยังเล็ก (ต่ำกว่า 256) แล้วค่อยโตประมาณ 1.25×** และสุดท้ายปัดขึ้นไปยัง size class ที่ runtime มีให้เลือกไว้ตายตัว การปัดขึ้นขั้นสุดท้ายนี่แหละที่ทำให้ตัวเลขไม่ใช่ยกกำลังสองพอดีหรือ ×1.25 พอดี — allocator มี bucket ขนาดจำกัดให้เลือก แล้วปัดขึ้นไปยัง bucket ที่ใกล้ที่สุดเสมอ
+
+นี่คือที่มาของ `6 10` ใน playground ด้านล่างพอดี: `make([]int, 3, 5)` เริ่มที่ cap 5 พอ append เพิ่มอีก 3 element ต้องการ cap ≥ 6 การเติบโตจึง double 5 → 10 (ยังอยู่ในโซน "double")
+
+การ append ทีละ element แล้ว print `cap(s)` เฉพาะตอนที่มันเปลี่ยน แสดงนโยบายนี้ได้ตรง ๆ (`go run` บน 1.26.5):
+
+```go
+s := make([]int, 0)
+prevCap := cap(s)
+for i := 0; i < 2100; i++ {
+    s = append(s, i)
+    if cap(s) != prevCap {
+        fmt.Println(len(s), cap(s))
+        prevCap = cap(s)
+    }
+}
+// 1 4
+// 5 8
+// 9 16
+// 17 32
+// 33 64
+// 65 128
+// 129 256
+// 257 512    <- still doubling exactly at the 256 boundary
+// 513 848    <- now ~1.25x + size-class rounding, not a clean double
+// 849 1280
+// 1281 1792
+// 1793 2560
+```
+
+ห้ามพึ่งพาตัวเลขการเติบโตที่แม่นยำในโค้ดของตัวเองเด็ดขาด — มันเป็นรายละเอียด implementation ของ runtime และเคยเปลี่ยนแปลงมาแล้วข้าม Go version สิ่งที่พึ่งพาได้คือต้นทุนแบบ amortized `O(1)` ต่อ `append` หนึ่งครั้ง ถ้ารู้ล่วงหน้าคร่าว ๆ ว่าจะเก็บ element กี่ตัว ให้ pre-size ด้วย `make([]T, 0, n)` หรือขยายตรง ๆ ด้วย `slices.Grow(s, n)` (Go 1.21+) เพื่อข้ามขั้นตอน reallocation ไปเลย — `slices.Grow` รับประกัน capacity สำหรับอย่างน้อย `n` element เพิ่มเติม โดยไม่แตะ `len`:
+
+```go
+s := make([]int, 2, 2)
+s = slices.Grow(s, 10)
+fmt.Println(len(s), cap(s)) // 2 12 — len unchanged, cap rounded up by the same size classes
+```
+
 ## Slicing expression และ backing array ที่แชร์
 
 `a[low:high]` สร้าง slice header ใหม่ที่แชร์ backing array เดียวกัน:
@@ -74,6 +122,46 @@ fmt.Println(b[0]) // 99 — mutation visible through b too
 
 นี่คือพลัง (sub-slicing แบบ zero-copy) แต่อันตรายถ้าลืมเรื่องนี้
 
+## Aliasing: `append` เขียนทับข้อมูลของ slice อื่นได้
+
+จุดที่อันตรายจริง ๆ ไม่ใช่ `a[0] = 99` — นั่นคือ mutation ที่มองเห็นได้ชัดเจนอยู่แล้ว จุดที่อันตรายคือ `append` เพราะมันดูเหมือนจะกระทบแค่ `a` เท่านั้น แต่ถ้า `a` ยังมี capacity เหลือใน backing array ของ `base` `append` จะเขียนตรงลงไปในหน่วยความจำที่ `base` ยังถือว่าเป็น "ของตัวเอง":
+
+```go
+base := []int{1, 2, 3, 4, 5}
+a := base[1:3] // len=2, cap=4 — a has 2 elements of spare capacity inside base
+a = append(a, 99)
+fmt.Println(base) // [1 2 3 99 5] — base[3] silently overwritten, base never touched directly
+```
+
+`a` มี `cap == 4` (นับจาก index 1 ไปจนสุด `base`) การ append หนึ่ง element จึงพอดีในพื้นที่ array เดิม — ไม่มี reallocation ไม่มีการเตือน มีแค่การเขียนลงไปที่ `base[3]` นี่คือหนึ่งใน bug ที่ AI เขียน Go แล้วพลาดบ่อยที่สุด — โค้ดที่ตัด sub-slice ออกมา "เก็บไว้ดูทีหลัง" หรือ "เก็บ tail ไว้เผื่อใช้" แล้วไป append ที่ sub-slice หรือ slice เดิม จนทำให้อีกฝั่งเสียหายแบบเงียบ ๆ
+
+**Three-index slice expression** `base[low:high:max]` แก้ปัญหานี้ได้โดยจำกัด capacity ของ slice ใหม่ให้เท่ากับ `max` ทำให้ไม่มีที่ว่างเหลือ และบังคับให้ `append` ต้อง allocate backing array ใหม่แทนที่จะย้อนกลับไปแตะ `base`:
+
+```go
+c := base[1:3:3] // len=2, cap=2 — no spare capacity, "full slice expression"
+c = append(c, 77)
+fmt.Println(base, c) // base unchanged; c now has its own independent backing array
+```
+
+ใช้ `base[low:high:high]` (จำกัด `max` เท่ากับ `high`) ทุกครั้งที่ส่ง sub-slice ออกไปให้คนอื่นและไม่ต้องการให้ `append` ของฝั่งนั้นย้อนกลับมาแตะ array ของเรา
+
+## Slice เป็น function argument
+
+Slice header ถูก copy by value เข้าไปในฟังก์ชัน เหมือนทุกอย่างใน Go — แต่ copy นั้นยังชี้ไปยัง backing array เดียวกัน สิ่งนี้ทำให้ slice ที่เป็น argument มีพฤติกรรมสองบุคลิก:
+
+```go
+func appendElem(s []int) {
+    s[0] = -1          // writes through the shared backing array — visible to the caller
+    s = append(s, 999) // only reassigns this function's local copy of the header — invisible to the caller
+}
+
+nums := []int{1, 2, 3}
+appendElem(nums)
+fmt.Println(nums) // [-1 2 3] — the element write stuck, the append did not
+```
+
+การเขียน element (`s[i] = x`) มองเห็นได้จาก caller เสมอเพราะเดินผ่าน pointer ที่แชร์กัน ส่วน `append` จะมองเห็นได้จาก caller **ก็ต่อเมื่อฟังก์ชัน return slice ใหม่กลับมาและ caller assign มันกลับ** — `nums = appendElem(nums)` ฟังก์ชันที่ AI เขียนแล้ว append เข้า parameter โดยคาดหวังว่า caller จะเห็นการเติบโตโดยไม่ return อะไรกลับเลย คือ bug ที่ compile ผ่านแต่ผิดแบบเงียบ ๆ
+
 ## `copy` เพื่อ slice ที่เป็นอิสระ
 
 ใช้ built-in `copy(dst, src)` เพื่อตัดการแชร์ โดย copy `min(len(dst), len(src))` element และคืนจำนวนที่ copy:
@@ -87,6 +175,44 @@ fmt.Println(fresh[0], dst[0]) // 10 0 — independent
 ```
 
 `slices.Clone(a)` และ `append([]int(nil), a...)` ให้ผลเดียวกับการ `copy` ลง slice ใหม่ — ทั้งสามวิธีได้ backing array ที่เป็นอิสระ
+
+## nil กับ empty slice
+
+slice ที่เป็น `nil` กับ slice ที่ว่างเปล่า (ความยาวศูนย์ แต่ไม่ใช่ nil) ทั้งคู่มี `len == 0` และการทำงานส่วนใหญ่ปฏิบัติกับมันเหมือนกัน — แต่มันไม่ใช่ค่าเดียวกัน และโค้ดที่สมมติว่าเหมือนกันจะพังใน 2 จุด:
+
+```go
+var n []int   // nil slice: no backing array at all
+e := []int{}  // empty slice: has a backing array, just zero elements
+
+fmt.Println(n == nil, e == nil) // true false
+fmt.Println(len(n), len(e))     // 0 0 — both report zero length
+```
+
+`==` กับ `nil` เป็นการเปรียบเทียบเดียวที่ slice รองรับ (slice ที่ไม่ใช่ nil สองตัวเทียบกันด้วย `==` ตรง ๆ ไม่ได้เลย — เป็น compile error) และนี่คือจุดเดียวที่ `nil` กับ `[]int{}` ต่างกันจริง ๆ อีกจุดคือ JSON: `encoding/json` แปลง slice ที่เป็น `nil` เป็น `null` แต่แปลง slice ว่างเป็น `[]` ถ้า API contract สัญญาว่า array field จะไม่เป็น `null` เด็ดขาด ให้ initialize ด้วย `make([]T, 0)` หรือ `[]T{}` ไม่ใช่ `var s []T`
+
+แทบไม่ต้องสร้าง `nil` slice เองโดยตั้งใจ — `var s []T` เป็น zero value ที่เป็น `nil` อยู่แล้ว และ `append` ใส่มันได้อย่างปลอดภัย (append จะ allocate ให้เองตอนใช้ครั้งแรก) เก็บ `[]T{}` ไว้ใช้เฉพาะกรณีที่ array ว่างแต่ "มีอยู่" มีความหมายต่างจากการไม่มีจริง ๆ
+
+## Memory retention จากการ sub-slice buffer ก้อนใหญ่
+
+เพราะ sub-slice แชร์ backing array กับ slice ต้นทาง การเก็บ sub-slice เล็ก ๆ ไว้จึงทำให้ backing array **ทั้งก้อน** ของต้นทางยังมีชีวิตอยู่ด้วย — garbage collector เก็บกวาดส่วนไหนไม่ได้เลยตราบใดที่ยังมี slice header ตัวใดตัวหนึ่งชี้เข้าไปในนั้น จุดนี้พลาดง่ายมากเวลาโค้ดมี pattern แบบ "อ่าน buffer ก้อนใหญ่ แล้วเก็บชิ้นเล็ก ๆ ที่สนใจไว้":
+
+```go
+// bigBuf might be a 64 KB read buffer from a network connection or bufio.Reader
+bigBuf := make([]byte, 65536)
+// ... fill bigBuf ...
+header := bigBuf[:16] // "just the first 16 bytes" — but header.cap reaches to the end of bigBuf
+store(header)         // if store() keeps header around, all 65536 bytes stay alive
+```
+
+วิธีแก้ก็คือเครื่องมือเดิมที่ใช้ตัด aliasing ไปแล้วก่อนหน้านี้: `copy` ส่วนที่สนใจลงไปยัง slice ที่ allocate ใหม่ในขนาดที่พอดี ก่อนจะปล่อยการอ้างอิงไปยัง buffer ก้อนใหญ่ เพื่อให้เหลือแค่ชิ้นเล็ก ๆ รอดอยู่:
+
+```go
+headerCopy := make([]byte, 16)
+copy(headerCopy, bigBuf[:16])
+store(headerCopy) // bigBuf can now be garbage-collected once it goes out of scope
+```
+
+ให้ระวัง pattern นี้ทุกครั้งที่ slice ที่มีอายุยืนถูกสร้างจากการ slice (ไม่ใช่ copy) buffer ก้อนใหญ่ที่มีอายุสั้น — `bufio.Scanner.Bytes()` เขียนไว้ตรง ๆ ถึงอันตรายแบบเดียวกันนี้: slice ที่ return กลับมาใช้ได้แค่จนกว่าจะเรียก `Scan()` ครั้งถัดไป เพราะมันแชร์ buffer ภายในของ scanner นั่นเอง
 
 ## `min`, `max`, `clear` และ package `slices`
 
@@ -145,6 +271,51 @@ func main() {
 
 <Playground code={slicesCode} />
 
+Playground ถัดไปเน้นเฉพาะหัวข้อเชิงลึกด้านบน: aliasing ผ่าน `append`, three-index slice expression, slice เป็น function argument, nil เทียบกับ empty, และ range ที่ copy element
+
+export const sliceAliasingCode = `package main
+
+import "fmt"
+
+// appendElem writes through the shared backing array, but growing via append
+// only updates this function's local copy of the slice header.
+func appendElem(s []int) {
+\ts[0] = -1          // visible to the caller
+\ts = append(s, 999) // invisible to the caller
+}
+
+func main() {
+\t// Aliasing: append can silently overwrite a sibling slice's data
+\tbase := []int{1, 2, 3, 4, 5}
+\ta := base[1:3] // len=2 cap=4 -- spare capacity inside base
+\ta = append(a, 99)
+\tfmt.Println(base) // [1 2 3 99 5] -- base[3] overwritten
+
+\t// The three-index slice expression removes the spare capacity
+\tc := base[1:3:3] // len=2 cap=2 -- no room left
+\tc = append(c, 77)
+\tfmt.Println(base, c) // base untouched, c has its own backing array
+
+\t// Slices as function arguments
+\tnums := []int{1, 2, 3}
+\tappendElem(nums)
+\tfmt.Println(nums) // [-1 2 3]
+
+\t// nil vs empty
+\tvar n []int
+\te := []int{}
+\tfmt.Println(n == nil, e == nil, len(n), len(e)) // true false 0 0
+
+\t// range copies each element into v
+\tvals := []int{1, 2, 3}
+\tfor _, v := range vals {
+\t\tv *= 10
+\t}
+\tfmt.Println(vals) // [1 2 3] -- unchanged
+}`;
+
+<Playground code={sliceAliasingCode} />
+
 ## Mental Model
 
 ```text
@@ -181,6 +352,35 @@ append เกิน cap:
 มีกฎสำคัญสองข้อที่ต้องจำ ข้อแรก: `append` คืน slice header ใหม่เสมอ แต่จะได้ backing array ใหม่จริง ๆ ก็ต่อเมื่อ `len == cap` และเกิด reallocation เท่านั้น — ถ้ายังไม่เกิน cap `append` เขียนต่อท้าย backing array เดิม อย่าเพิกเฉยต่อค่าที่คืนมาไม่ว่ากรณีใด ข้อสอง: `a[low:high]` ไม่ได้ copy ข้อมูล ทั้งสอง slice แชร์ backing array เดียวกัน การเขียนผ่านตัวหนึ่งจะมองเห็นได้จากอีกตัวด้วย ใช้ `copy` เมื่อต้องการ slice ที่เป็นอิสระจริง ๆ
 </Callout>
 
+## อ่านโค้ดที่ AI เขียน
+
+เวลาอ่านฟังก์ชันที่เกี่ยวกับ slice ที่ AI เขียนให้ (หรือแม้แต่ที่เขียนเองแบบเร่ง ๆ) ให้เช็คสิ่งเหล่านี้ก่อนเชื่อ:
+
+- มันเอา parameter หรือ struct field ไป slice (`x[a:b]`) แล้วส่งผลลัพธ์ไปให้อะไรที่อายุยืนหรือเปล่า? sub-slice นั้นจะทำให้ backing array **ทั้งก้อน** ของต้นทางมีชีวิตอยู่ต่อ และถ้าต้นทางถูก mutate หรือ append ทีหลัง sub-slice อาจเห็นการเขียนที่ไม่ควรเห็น
+- มัน `append` เข้า slice ที่สร้างจากการ slice slice อื่น (`sub := big[i:j]`) โดยไม่ใช้ three-index expression หรือเปล่า? ถ้า `sub` ยังมี capacity เหลือใน `big` การ append นั้นอาจเขียนทับข้อมูลของ `big` เกิน index `j` แบบเงียบ ๆ
+- ฟังก์ชัน `append` เข้า slice parameter แล้วคาดหวังให้ caller เห็น element ใหม่โดยไม่ return slice กลับหรือเปล่า? มีแค่การเขียน element (`s[i] = x`) เท่านั้นที่รับประกันว่า caller เห็น — การเติบโตไม่ใช่
+- มันเทียบ slice กับ `nil` ทั้งที่จริง ๆ ต้องการเช็คว่า "ว่างหรือเปล่า" หรือกลับกันหรือเปล่า (เช่น พึ่งพา JSON `null` เทียบกับ `[]` โดยไม่เช็คว่า code path ไหนสร้างอันไหน)?
+- มี loop แบบ `for _, v := range s { v = ... }` แล้วคาดหวังให้ `s` เปลี่ยนหรือเปล่า? `v` เป็น copy มีแค่ `s[i] = ...` (หรือ `for i := range s`) เท่านั้นที่ mutate ต้นทางจริง ๆ
+
+<SpotTheBug code={`func dedupe(nums []int) []int {
+	out := nums[:0]
+	for i, n := range nums {
+		if i == 0 || n != nums[i-1] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func main() {
+	data := []int{1, 1, 2, 3, 3}
+	backup := data[2:] // keep the tail "just in case"
+	result := dedupe(data)
+	fmt.Println(result, backup)
+}`}>
+`out := nums[:0]` ใช้ backing array ของ `nums` เองเป็นปลายทาง — เป็นเทคนิค dedupe แบบ in-place ที่ปกติแล้วถูกต้อง แต่ `backup := data[2:]` แชร์ array *เดียวกัน* นั้น เริ่มจาก index 2 พอ `dedupe` เขียนค่าที่ dedupe แล้วไล่ไปข้างหน้า (`1, 2, 3` ไปตกที่ index 0, 1, 2) มันจึงเขียนทับ index 2 ซึ่งเป็นจุดเริ่มต้นของ `backup` พอดี ผลลัพธ์จริงที่ verify บน 1.26.5: `[1 2 3] [3 3 3]` — `backup` ถูกทำลายแบบเงียบ ๆ จากการเขียน in-place ของ `dedupe` ทั้งที่ `dedupe` ไม่เคยแตะตัวแปรชื่อ `backup` เลย วิธีแก้: ไม่เขียน in-place (`out := make([]int, 0, len(nums))`) หรือทำให้ `backup` เป็น copy ที่เป็นอิสระ (`backup := slices.Clone(data[2:])`) ก่อนเรียกอะไรก็ตามที่อาจ mutate backing array ของ `data` แบบ in-place
+</SpotTheBug>
+
 export const quizSlices = [
   {
     q: "คุณเขียน `s = append(s, 1)` เมื่อ `len(s) == cap(s)` Go ทำอะไร?",
@@ -190,17 +390,8 @@ export const quizSlices = [
       "Go allocate backing array ใหม่ที่ใหญ่กว่า copy element เดิม แล้วคืน slice ที่ชี้ไป array ใหม่",
       "Go ขยาย array เดิมใน place"
     ],
-    answer: 2
-  },
-  {
-    q: "คุณมี `base := []int{1, 2, 3}` และ `a := base[0:2]` แล้วกำหนด `a[0] = 99` ค่าของ `base[0]` คืออะไร?",
-    options: [
-      "1 — a คือ copy ที่เป็นอิสระ",
-      "99 — a และ base แชร์ backing array เดียวกัน",
-      "0 — slice header ถูก zero หลัง slicing",
-      "Panic — ไม่สามารถ mutate slice ที่สร้างจาก slice อื่นได้"
-    ],
-    answer: 1
+    answer: 2,
+    explain: "Go ไม่มี panic แบบ capacity คงที่ — append เกิน cap จะ reallocate เสมอ: สร้าง backing array ใหม่ที่ใหญ่กว่า copy element เดิมเข้าไป แล้ว append คืน slice header ที่ชี้ไป array ใหม่ backing array เดิมไม่ถูกแตะแต่ slice นี้เลิกใช้มันแล้ว"
   },
   {
     q: "`make([]string, 4, 10)` สร้างอะไร?",
@@ -210,7 +401,8 @@ export const quizSlices = [
       "Array ของ string 10 ตัวที่ fill ข้อมูล 4 ตัว",
       "Compile error — make รับ argument ขนาดเดียวสำหรับ slice"
     ],
-    answer: 1
+    answer: 1,
+    explain: "argument ของ make สำหรับ slice คือ (type, len, cap) ตามลำดับ — len=4 คือ element ที่ใช้ได้ค่า zero-value 4 ตัว หนุนด้วย array ที่มีที่ว่างถึง 10 ก่อนจะ reallocate ครั้งถัดไป"
   },
   {
     q: "วิธี idiomatic ที่ทำให้ slice สองตัวไม่แชร์ backing array คืออะไร?",
@@ -222,6 +414,39 @@ export const quizSlices = [
     ],
     answer: 1,
     explain: "`a[:]` และ `b := a` copy แค่ slice header — backing array ยังแชร์กันอยู่ ส่วน `copy(dst, src)`, `slices.Clone(a)`, และ `append([]T(nil), a...)` ล้วนเป็นวิธีที่ถูกต้องในการได้ backing array ที่เป็นอิสระ — ตัวเลือก D ผิดเพราะคำอธิบายเกี่ยวกับ `slices.Clone` ไม่ตรงกับความจริง (มันไม่ได้ copy แค่ header)"
+  },
+  {
+    q: "โค้ดนี้ print อะไร?\n\nbase1 := []int{1, 2, 3}\na := base1[:2]\na = append(a, 99)\nfmt.Println(base1)",
+    options: [
+      "[1 2 3]",
+      "[1 2 99]",
+      "panic: index out of range",
+      "[1 2 3 99]"
+    ],
+    answer: 1,
+    explain: "base1[:2] มี len=2 แต่ cap=3 (มันยาวไปถึงท้าย array 3 element ของ base1) ดังนั้นการ append หนึ่ง element จึงพอดีในพื้นที่ array เดิมที่ index 2 — เขียนทับ base1[2] (ค่า 3) ด้วย 99 verify บน 1.26.5 แล้ว: print [1 2 99] ตัว base1 เองไม่ได้ยาวขึ้น ดังนั้นตัวเลือก D (ที่สมมติว่าความยาวของ base1 เปลี่ยน) ก็ผิดเช่นกัน"
+  },
+  {
+    q: "setup เดิม แต่คราวนี้ slice ด้วย three-index expression — โค้ดนี้ print อะไร?\n\nbase2 := []int{1, 2, 3}\nc := base2[:2:2]\nc = append(c, 99)\nfmt.Println(base2)",
+    options: [
+      "[1 2 99]",
+      "[1 2 3]",
+      "Compile error — three-index slicing ใช้แบบนี้ไม่ได้",
+      "[99 2 3]"
+    ],
+    answer: 1,
+    explain: "base2[:2:2] จำกัด capacity ของ c ไว้ที่ 2 เท่ากับความยาวพอดี — ไม่มีที่ว่างเหลือใน array ของ base2 เลย append จึงถูกบังคับให้ allocate backing array ใหม่ทั้งหมดให้ c ทำให้ base2 ไม่ถูกแตะต้องเลย verify บน 1.26.5 แล้ว: print [1 2 3]"
+  },
+  {
+    q: "โค้ดนี้ print อะไร?\n\nfunc f(s []int) {\n    s[0] = 100\n    s = append(s, 1)\n}\n\nnums := []int{1, 2, 3}\nf(nums)\nfmt.Println(nums)",
+    options: [
+      "[1 2 3] — f แก้แค่ copy ของตัวเองเท่านั้น",
+      "[100 2 3] — การเขียน element มองเห็นได้ แต่ append มองไม่เห็น",
+      "[100 2 3 1] — ทั้งการเขียนและ append มองเห็นได้ทั้งคู่",
+      "Compile error — ส่ง slice เข้าฟังก์ชันแบบ pass by value ไม่ได้"
+    ],
+    answer: 1,
+    explain: "s[0] = 100 เขียนผ่าน backing array ที่แชร์กัน caller จึงเห็น ส่วน s = append(s, 1) แค่ reassign copy ของ slice header ที่อยู่ใน f เท่านั้น — nums ใน main ไม่ได้รับ header ใหม่นั้นเลย ค่า 1 จึงไปไม่ถึงที่ที่ caller มองเห็น verify บน 1.26.5 แล้ว: print [100 2 3]"
   }
 ];
 
