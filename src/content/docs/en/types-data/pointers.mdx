@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is a pointer?
 
@@ -49,7 +51,37 @@ fmt.Println(x) // 10
 
 **2. Large structs.** Copying a large struct on every call is wasteful. Pass `*Config` instead of `Config` when the struct has many fields.
 
-**3. Optional values.** A `*T` can be `nil` to represent "not set", similar to `null` in other languages.
+**3. Optional values.** A `*T` can be `nil` to represent "not set", similar to `null` in other languages. This is the classic use for something like `*bool` (three states: true, false, unset) — though when the type you would otherwise wrap is itself a struct or a `time.Time`, a dedicated "is this present" convention like `encoding/json`'s `omitzero` (Go 1.24) can avoid the pointer and its nil checks entirely; see the [stdlib module](/go/en/stdlib/encoding-json/) for that comparison.
+
+## Escape analysis: why a pointer isn't always faster
+
+"Pass a pointer to avoid a copy" is true, but it trades one cost for a different one: a value that a pointer points to has to live somewhere that outlives the function call if the pointer escapes the function — and that "somewhere" is the heap, which the garbage collector then has to track. The compiler decides this automatically with **escape analysis**: if it can prove a value never outlives its function, it stays on the stack (free to allocate, free to reclaim); if not, it "escapes" to the heap.
+
+```go
+type Config struct{ Workers int }
+
+// newConfig returns a pointer to a local variable — it must escape to the heap
+func newConfig() *Config {
+    c := Config{Workers: 4}
+    return &c
+}
+```
+
+`go build -gcflags=-m` prints the compiler's own reasoning. Verified on 1.26.5:
+
+```text
+./main.go:8:6: can inline newConfig
+./main.go:13:6: can inline sum
+./main.go:18:18: inlining call to newConfig
+./main.go:19:30: inlining call to sum
+./main.go:19:13: inlining call to fmt.Println
+./main.go:9:2: moved to heap: c
+./main.go:19:13: ... argument does not escape
+./main.go:19:17: cfg.Workers escapes to heap
+./main.go:19:30: ~r0 escapes to heap
+```
+
+The line that matters is `moved to heap: c` — the compiler is telling you exactly why `newConfig` cannot keep `c` on the stack: its address is returned, so it must outlive the function. This is why "return `&T{}` everywhere, just in case" — a pattern AI-generated Go leans on heavily because it looks defensively safe — is not free: every one of those pointers is a heap allocation and GC-tracked object, even when the caller only ever reads one field once and discards it. Returning a value (`Config`, not `*Config`) when the struct is small and the caller does not need to mutate the original lets the compiler keep it on the stack.
 
 ## Struct pointer shorthand
 
@@ -86,6 +118,22 @@ p := Person{Name: "Ada", Age: new(36)}               // *int pointing to 36
 q := Person{Name: "Bob", Age: new(yearsSince(born))} // any expression works
 ```
 
+### Three ways to get a zero-valued pointer
+
+`&T{}`, `new(T)`, and `var t T; &t` all produce a pointer to an equivalent zero value — but they are two distinct allocations if you compare them by identity:
+
+```go
+p1 := &Config{}
+p2 := new(Config)
+var v Config
+p3 := &v
+
+fmt.Println(*p1 == *p2, *p2 == *p3) // true true — all zero-valued
+fmt.Println(p1 == p2)               // false — two distinct allocations
+```
+
+Verified on 1.26.5: `*p1 == *p2` and `*p2 == *p3` are both `true` (dereferenced, they're equal zero values), but `p1 == p2` is `false` (they are different addresses — `new` and `&T{}` never return the same pointer). Style-wise, `&T{}` is the idiomatic choice when you also want to set some fields inline (`&Config{Workers: 4}`); `new(T)` reads slightly clearer when you truly want only the zero value and nothing else. Both escape to the heap under the same rules as any other pointer — see escape analysis above.
+
 ## Nil pointers
 
 The zero value of any pointer type is `nil`. Dereferencing a nil pointer causes a runtime panic:
@@ -97,6 +145,82 @@ fmt.Println(p == nil) // true
 ```
 
 Always check a pointer for `nil` before dereferencing when it might not have been set.
+
+## Nil pointer receivers are legal Go
+
+Calling a method on a nil pointer receiver does **not** panic by itself — Go only panics the moment the method body actually dereferences the receiver. A method that checks for `nil` first and returns early is completely legal, and this is a common, idiomatic pattern for recursive structures like linked lists and trees:
+
+```go
+type List struct {
+    Val  int
+    Next *List
+}
+
+// Sum works on a nil *List receiver — no field is dereferenced when l == nil
+func (l *List) Sum() int {
+    if l == nil {
+        return 0
+    }
+    return l.Val + l.Next.Sum()
+}
+
+var l *List
+fmt.Println(l.Sum()) // 0 — calling a method on a nil pointer is legal
+
+l = &List{Val: 1, Next: &List{Val: 2}}
+fmt.Println(l.Sum()) // 3
+```
+
+Do not confuse this with the **typed-nil interface trap**: a nil `*List` stored in an `interface{}`/`error`/other interface value is a *non-nil interface* holding a nil concrete pointer, and `iface == nil` is `false` even though the pointer inside it is `nil`. That trap is covered in depth in [Error Values](/go/en/errors-generics/error-values/#the-typed-nil-interface-trap) — the rule here about calling methods on a nil receiver being legal is a completely different, narrower point about pointers, not interfaces.
+
+## `&s[i]` after `append` can go stale
+
+A pointer into a slice's backing array is only valid as long as that backing array is the one the slice still uses. If `append` triggers a reallocation, the old pointer keeps pointing at the abandoned array:
+
+```go
+s := make([]int, 3, 3) // len == cap: no room to grow in place
+s[0], s[1], s[2] = 1, 2, 3
+p := &s[1] // points at index 1 of the current backing array
+
+s = append(s, 4) // len(3) == cap(3) -> reallocates to a new backing array
+s[1] = 99         // written to the NEW backing array
+
+fmt.Println(*p, s) // p still points at the OLD backing array
+```
+
+Verified on 1.26.5, this prints `2 [1 99 3 4]` — `*p` still reads `2`, the value from before the reallocation, even though `s[1]` is now `99`. `&s[i]` is only safe to hold onto across an `append` call if you know for certain the slice will not grow past its capacity. This is the pointer-shaped mirror of the slice-aliasing hazard from the [Slices](/go/en/types-data/slices/) lesson — and `&m[k]` for a map is not even legal to write in the first place, because map values can be relocated by a rehash at any time (see [Maps](/go/en/types-data/maps/)).
+
+## Pointer to a loop variable: before and after Go 1.22
+
+Before Go 1.22, a `for` loop's index/range variable was a single variable shared by every iteration — a closure created inside the loop body captured that one variable, not a per-iteration snapshot. The classic bug: launching a goroutine or storing a closure per iteration, then having all of them observe the loop's *final* value once the loop finished, because they all shared the same variable.
+
+Since Go 1.22, each iteration gets its **own** copy of the loop variable, which is what the following prints on any current toolchain:
+
+```go
+funcs := make([]func() int, 0, 3)
+for i := 0; i < 3; i++ {
+    funcs = append(funcs, func() int { return i })
+}
+got := make([]int, 0, 3)
+for _, f := range funcs {
+    got = append(got, f())
+}
+fmt.Println(got) // [0 1 2] — each closure captured its own i
+```
+
+The change was originally gated by the `go` line in `go.mod` — a module declaring `go 1.21` or earlier was supposed to keep the old, shared-variable behavior so existing code wouldn't silently change meaning. **Verified on 1.26.5: this is no longer true in practice.** Building the exact snippet above inside modules declaring `go 1.21` and even `go 1.16` both still print `[0 1 2]` — the per-iteration behavior applies unconditionally on this toolchain, regardless of the module's declared language version. Do not rely on an old `go.mod` version to reproduce or preserve the pre-1.22 aliasing behavior on a modern toolchain — if you need to understand old code that depended on the shared-variable behavior, read it as a historical fact about the language, not as something you can still opt back into.
+
+## `%p` and `uintptr` are not the same thing
+
+`fmt.Printf("%p", p)` formats a pointer's address as hex, which is useful for logging and debugging:
+
+```go
+x := 42
+p := &x
+fmt.Printf("%p\n", p) // 0x... — the actual runtime address, format only
+```
+
+`uintptr` looks similar (it is, structurally, just an integer holding an address) but it is **not** a pointer as far as the garbage collector is concerned. The GC only tracks and updates values of pointer types when it moves memory; a `uintptr` is invisible to it. Converting a pointer to `uintptr`, doing arithmetic, and converting back is exactly the kind of `unsafe` operation that can end up pointing at freed or moved memory — the `unsafe` package's own documentation requires very specific patterns (used immediately, never stored) for this to be safe. Application code essentially never needs `uintptr`; it exists for the runtime and for narrow FFI/interop cases.
 
 ## No pointer arithmetic
 
@@ -148,6 +272,56 @@ func main() {
 
 <Playground code={pointersCode} />
 
+The second playground focuses on the depth topics above: the three ways to get a zero-valued pointer, nil pointer receivers, and a stale pointer after `append` reallocates.
+
+export const pointersAdvancedCode = `package main
+
+import "fmt"
+
+type Config struct{ Workers int }
+
+type List struct {
+\tVal  int
+\tNext *List
+}
+
+// Sum works on a nil *List receiver — no field is dereferenced when l == nil
+func (l *List) Sum() int {
+\tif l == nil {
+\t\treturn 0
+\t}
+\treturn l.Val + l.Next.Sum()
+}
+
+func main() {
+\t// &T{}, new(T), and var t T; &t all produce an equivalent zero value
+\tp1 := &Config{}
+\tp2 := new(Config)
+\tvar v Config
+\tp3 := &v
+\tfmt.Println(*p1 == *p2, *p2 == *p3) // true true
+\tfmt.Println(p1 == p2)               // false — two distinct allocations
+
+\t// Calling a method on a nil pointer receiver is legal Go
+\tvar l *List
+\tfmt.Println(l.Sum()) // 0
+
+\tl = &List{Val: 1, Next: &List{Val: 2}}
+\tfmt.Println(l.Sum()) // 3
+
+\t// &s[i] after append can point at a stale backing array
+\ts := make([]int, 3, 3) // len == cap: no room to grow in place
+\ts[0], s[1], s[2] = 1, 2, 3
+\told := &s[1]
+
+\ts = append(s, 4) // reallocates: s now points at a new backing array
+\ts[1] = 99        // written to the NEW array only
+
+\tfmt.Println(*old, s) // old still reads from the abandoned array
+}`;
+
+<Playground code={pointersAdvancedCode} />
+
 ## Mental Model
 
 ```text
@@ -164,6 +338,19 @@ heap allocation:  the GC has to manage it, adding a little latency
 Escape analysis decides whether a variable lives on the stack or the heap
 ```
 
+export const escapeDiagram = `flowchart LR
+  subgraph Stack["Stack (per-goroutine, freed on return)"]
+    x["x := 42"]
+    p["p := &x"]
+  end
+  subgraph Heap["Heap (GC-managed)"]
+    c["Config{Workers: 4}"]
+  end
+  p -.->|"&x: does not escape, stays on stack"| x
+  newConfig["newConfig() returns &c"] -->|"c escapes: outlives the function"| c`;
+
+<Mermaid code={escapeDiagram} title="A pointer only forces a heap allocation when escape analysis proves the value must outlive its function" />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -175,9 +362,11 @@ Escape analysis decides whether a variable lives on the stack or the heap
 
 ## Common Misconceptions
 
-- **Pointers in Go are as dangerous as in C** — Go has no pointer arithmetic and the GC manages lifetime for you — use-after-free is impossible. But a pointer that still points at an old element after `append` reallocates the backing array is still a real bug (see [Slices](/go/en/types-data/slices/)).
-- **A pointer is always faster than a value** — a pointer can make a variable escape to the heap → more work for the GC → higher latency.
-- **A nil pointer is the same problem as a NullPointerException in Java** — Go's panic carries a clear stack trace, and nil is trivial to check for with `if p == nil`.
+- **Pointers in Go are as dangerous as in C** — Go has no pointer arithmetic and the GC manages lifetime for you — use-after-free is impossible. But a pointer that still points at an old element after `append` reallocates the backing array is still a real bug (see "`&s[i]` after append can go stale" above).
+- **A pointer is always faster than a value** — a pointer can make a variable escape to the heap → more work for the GC → higher latency; `go build -gcflags=-m` shows you exactly when this happens.
+- **A nil pointer is the same problem as a NullPointerException in Java** — Go's panic carries a clear stack trace, and nil is trivial to check for with `if p == nil`. Calling a method on a nil pointer receiver does not even panic by itself — only dereferencing a field through it does.
+- **Setting `go 1.21` in `go.mod` restores the old shared loop-variable behavior on a current toolchain** — verified false on 1.26.5; the per-iteration (Go 1.22+) semantics apply unconditionally regardless of the declared module version.
+- **`uintptr` is just another name for a pointer** — it is a plain integer as far as the garbage collector is concerned; the GC does not update `uintptr` values when it moves memory, which is exactly why raw `uintptr` arithmetic is `unsafe`.
 
 > 💡 Real-world example
 >
@@ -186,6 +375,40 @@ Escape analysis decides whether a variable lives on the stack or the heap
 <Callout title="Go has pointers but no pointer arithmetic">
 Go gives you full pointer capability — take addresses, dereference, pass pointers to functions — but deliberately removes pointer arithmetic. You cannot add an integer to a pointer to step through memory. No pointer arithmetic keeps pointers always pointing at a real Go value; the garbage collector rules out use-after-free and bounds checks rule out buffer overflows. If you need low-level memory operations, the `unsafe` package exists, but it should be reserved for FFI and runtime-level work.
 </Callout>
+
+## Reading AI-generated code
+
+Pointer-related bugs are rarely a crash right where the mistake was made — they surface somewhere else entirely. Check for these:
+
+- Does a function return `&LocalStruct{...}` from every code path "just in case the caller needs to mutate it," when most callers only read one field? That is a heap allocation on every call — check with `go build -gcflags=-m` if this function is ever a hot path.
+- Does a method with a pointer receiver dereference a field before checking the receiver for `nil`? A nil-receiver check has to come first, and it has to actually `return`/`continue` before touching any field.
+- Does anything hold onto `&slice[i]` or a sub-slice across a call that might `append` to the same slice? Reallocation silently detaches that pointer from the slice's current backing array.
+- Does a closure created inside a loop assume it needs Go-1.21-style workarounds (`i := i` inside the loop body) on a codebase whose `go.mod` already declares `go 1.22` or later? That workaround is dead code on a modern language version — harmless, but a sign the author (or the AI) didn't know the fix already shipped.
+- Does any code compare or format a `uintptr` as if the garbage collector still knows where it points? A `uintptr` obtained from a pointer is only valid for the instant it was taken — the object underneath can move before the next line runs.
+
+<SpotTheBug code={`type Cache struct {
+	mu   sync.Mutex
+	data map[string]int
+}
+
+func (c *Cache) Get(key string) (int, bool) {
+	if c == nil {
+		return 0, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.data[key]
+	return v, ok
+}
+
+var globalCache *Cache
+
+func main() {
+	v, ok := globalCache.Get("x")
+	fmt.Println(v, ok)
+}`}>
+This one is actually correct, and that is the point of the exercise — `Get`'s nil check comes first and returns before touching `c.mu` or `c.data`, so calling it on a nil `*Cache` (as `main` does with the zero-valued `globalCache`) is completely legal and prints `0 false`. The bug-pattern to watch for is the same shape with the check in the wrong place, or missing: if `c.mu.Lock()` ran before the `nil` check, the exact same call would panic with `nil pointer dereference` because `Lock()` needs to read `c.mu`'s address, which requires `c` to be non-nil first. When reviewing generated code with a nil-receiver guard, confirm the guard is the very first statement in the method — not just present somewhere in the function.
+</SpotTheBug>
 
 export const quizPointers = [
   {
@@ -196,17 +419,8 @@ export const quizPointers = [
       "A compile error — you must pass &x",
       "x becomes 0 — function arguments are zeroed"
     ],
-    answer: 1
-  },
-  {
-    q: "What does `&x` produce?",
-    options: [
-      "A copy of x",
-      "The value stored at x",
-      "A pointer (*T) holding the memory address of x",
-      "A bitwise AND of x with itself"
-    ],
-    answer: 2
+    answer: 1,
+    explain: "Go always passes arguments by value, pointers included — n inside add is an independent copy of x. Mutating n can never affect the caller's x."
   },
   {
     q: "What happens if you dereference a nil pointer in Go?",
@@ -216,17 +430,41 @@ export const quizPointers = [
       "A runtime panic: nil pointer dereference",
       "You get undefined behavior, like C"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Dereferencing nil (*p, or a field access through a nil pointer) always panics with a specific, catchable message — never undefined behavior. Calling a method on a nil receiver, by contrast, is legal as long as the method itself never dereferences the receiver."
   },
   {
-    q: "Given `cfg := &Config{Workers: 4}`, how do you set the Debug field?",
+    q: "What does this print?\n\nfunc newConfig() *Config {\n    c := Config{Workers: 4}\n    return &c\n}\n\nfmt.Println(newConfig().Workers)",
     options: [
-      "cfg->Debug = true (C-style arrow operator)",
-      "(*cfg).Debug = true, or equivalently cfg.Debug = true",
-      "cfg[Debug] = true",
-      "deref(cfg).Debug = true"
+      "A compile error — you cannot return the address of a local variable",
+      "Undefined behavior — c is destroyed when newConfig returns",
+      "4 — escape analysis moves c to the heap so it outlives the call",
+      "0 — c is reset to its zero value once newConfig returns"
     ],
-    answer: 1
+    answer: 2,
+    explain: "Unlike C, returning the address of a local variable is completely safe in Go — the compiler's escape analysis detects that &c outlives the function and allocates c on the heap instead of the stack. Verified on 1.26.5 with go build -gcflags=-m: ./main.go:9:2: moved to heap: c. It prints 4."
+  },
+  {
+    q: "What does this print?\n\ns := make([]int, 3, 3)\ns[0], s[1], s[2] = 1, 2, 3\np := &s[1]\ns = append(s, 4)\ns[1] = 99\nfmt.Println(*p, s)",
+    options: [
+      "99 [1 99 3 4] — p and s[1] always refer to the same memory",
+      "2 [1 99 3 4] — append reallocated, so p still points at the old array",
+      "A compile error — taking the address of a slice element is not allowed",
+      "2 [1 2 3 4] — s[1] = 99 silently fails after append"
+    ],
+    answer: 1,
+    explain: "s had len == cap == 3, so append(s, 4) had no room to grow in place and allocated a brand-new backing array. p still points into the OLD array (where index 1 is still 2); s[1] = 99 only touches the NEW array. Verified on 1.26.5: prints 2 [1 99 3 4]."
+  },
+  {
+    q: "A module's go.mod declares `go 1.21`. On a Go 1.26.5 toolchain, what does this print?\n\nfuncs := make([]func() int, 0, 3)\nfor i := 0; i < 3; i++ {\n    funcs = append(funcs, func() int { return i })\n}\ngot := make([]int, 0, 3)\nfor _, f := range funcs {\n    got = append(got, f())\n}\nsort.Ints(got)\nfmt.Println(got)",
+    options: [
+      "[3 3 3] — go 1.21 in go.mod restores the old shared loop-variable behavior",
+      "[0 1 2] — the per-iteration behavior applies regardless of the declared go.mod version on this toolchain",
+      "A compile error — closures cannot capture loop variables",
+      "[0 0 0] — closures always capture the loop variable's initial value"
+    ],
+    answer: 1,
+    explain: "This was verified directly on 1.26.5 by building the identical program under go.mod files declaring go 1.21 and even go 1.16 — both printed [0 1 2], the same as a go 1.26 module. The pre-1.22 compatibility path that go.mod version was supposed to preserve does not restore the old behavior on this toolchain; do not rely on an old go directive to reproduce it."
   }
 ];
 

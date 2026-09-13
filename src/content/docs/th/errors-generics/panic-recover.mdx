@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## panic คืออะไร?
 
@@ -58,6 +60,93 @@ func safeCall(fn func()) (err error) {
     return nil
 }
 ```
+
+`safeCall` ทำงานได้เพราะ `err` เป็น **named** return value เท่านั้น `recover()` รันอยู่ข้างใน deferred function ซึ่งเป็น closure แยกต่างหากจาก `safeCall` เอง — ทางเดียวที่มันจะมีผลต่อสิ่งที่ `safeCall` คืนค่าคือการ assign ให้ตัวแปรที่เป็นส่วนหนึ่งของ return signature อยู่แล้ว deferred function ไม่สามารถใช้ `return err` ของตัวเองแบบธรรมดาได้ การ assign ให้ named result คือช่องทางเดียวที่กลับไปหา caller
+
+export const deferRecoverDiagram = `flowchart TD
+  P["panic() called"] --> D3["deferred #3 runs (LIFO)"]
+  D3 --> D2["deferred #2 runs"]
+  D2 --> D1["deferred #1 runs -- calls recover() directly"]
+  D1 --> R["recover() intercepts -- unwinding stops"]
+  R --> Return["function returns normally to its caller"]`;
+
+<Mermaid code={deferRecoverDiagram} title="defer ยังรันแบบ LIFO ระหว่าง panic; recover() ใน defer ที่ถูกต้องจะหยุดการ unwind" />
+
+## recover ต้องถูกเรียกโดยตรงจาก deferred function
+
+`recover()` จะดักจับ panic ได้ก็ต่อเมื่อถูกเรียก**โดยตรง**ข้างใน function ที่เป็น deferred เท่านั้น การเรียกมันห่างออกไปหนึ่งชั้น — จาก helper function ที่ deferred function เรียกอีกที — จะไม่ทำอะไรเลย: `recover()` คืน `nil` และ panic ก็ยังคลายต่อไปเหมือนไม่เคยเรียก `recover()` เลย
+
+```go
+// tryRecover calls recover(), but not directly from a deferred function --
+// it is one level too deep, so recover() returns nil here.
+func tryRecover() any {
+	return recover()
+}
+
+func riskyOp() {
+	defer func() {
+		r := tryRecover() // BUG: recover() is not called directly by this deferred func
+		fmt.Println("recovered:", r)
+	}()
+	panic("boom")
+}
+```
+
+ตรวจสอบแล้วบน 1.26.5 การเรียก `riskyOp()` จะพิมพ์ `recovered: <nil>` แล้วโปรแกรมก็ยัง crash ด้วย `panic: boom` — `fmt.Println` ทำงานจริง (พิสูจน์ว่า deferred function เองทำงาน) แต่การเรียก `recover()` ใน `tryRecover` ห่างจาก panic เกินไปที่จะดักได้ panic จึงยัง propagate ต่อไป มีแค่ `recover()` ที่เขียนไว้ตรง ๆ ข้างใน body ของ `defer func() { ... }()` เท่านั้นที่ทำงานได้
+
+## panic ใน goroutine ฆ่าทั้ง process
+
+unrecovered panic ใน goroutine ใดก็ตาม — ไม่ใช่แค่ `main` — จะ crash โปรแกรมทั้งหมด และไม่มี `recover()` ที่ไหนช่วยหยุดมันได้เลย คู่ `defer`/`recover` ใน `main` ไม่ได้ป้องกัน panic ใน goroutine ที่มันสร้างขึ้นมา:
+
+```go
+func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("main recovered:", r) // never reached
+		}
+	}()
+	go func() {
+		panic("boom in goroutine")
+	}()
+	time.Sleep(100 * time.Millisecond)
+	fmt.Println("never printed")
+}
+```
+
+ตรวจสอบแล้วบน 1.26.5 โค้ดนี้ crash ทั้ง process — `recover()` ของ `main` ไม่ทำงานเลย และทั้ง `"main recovered"` กับ `"never printed"` ไม่ปรากฏเลย:
+
+```
+panic: boom in goroutine
+
+goroutine 19 [running]:
+main.main.func1()
+	.../main.go:10 +0x2c
+created by main.main in goroutine 1
+	.../main.go:9 +0x24
+exit status 2
+```
+
+ทุก goroutine ที่อาจ panic ได้ต้องมี `defer`/`recover` **ของตัวเอง**ที่ระดับบนสุด การ recover ไม่ข้าม goroutine boundary ไปในทิศทางไหนเลย
+
+## log.Fatal และ os.Exit ข้าม defer
+
+`os.Exit` (และ `log.Fatal` ซึ่งเรียก `os.Exit` ข้างใน) ยุติ process ทันที — มันไม่คลาย stack และไม่รัน deferred function ที่ค้างอยู่เลย แม้จะลงทะเบียนไว้ก่อนหน้าใน function เดียวกันก็ตาม:
+
+```go
+func work() {
+	defer fmt.Println("deferred cleanup ran") // BUG: never runs
+	fmt.Println("doing work")
+	os.Exit(1)
+}
+```
+
+ตรวจสอบแล้วบน 1.26.5 โค้ดนี้พิมพ์แค่ `doing work` — `"deferred cleanup ran"` ไม่ปรากฏเลย เพราะ `os.Exit` ข้าม `defer` ไปเลยแทนที่จะทำ unwinding ตามปกติ สงวน `os.Exit`/`log.Fatal` ไว้สำหรับ `main` (หรือใกล้ ๆ กับมันมาก) หลังจาก cleanup ที่สำคัญได้ทำผ่าน control flow ปกติแล้วเท่านั้น — อย่าใช้ข้างใน function ที่โค้ดอื่นคาดหวังว่าจะ cleanup ให้ตัวเองผ่าน `defer`
+
+## แนวทาง Must*
+
+function ที่ชื่อ `MustX` (หรือ `mustX` ถ้าเป็น unexported) คือข้อยกเว้นที่ตั้งใจของ "คืน error อย่า panic": มันทำงานของ `X` แต่ panic แทนที่จะคืน error เมื่อล้มเหลว convention นี้บอก trade-off ไว้ในชื่อเลย ทำให้ caller เห็นตั้งแต่ call site ว่าความล้มเหลวตรงนี้กู้คืนไม่ได้
+
+`regexp.MustCompile` คือตัวอย่างมาตรฐาน: pattern จาก string คงที่ตอน package init นั้นถูกต้องเสมอหรือไม่ก็โปรแกรมมี bug ดังนั้นการ panic ตอน startup จึงเป็น failure mode ที่มีประโยชน์ `mustPositive` ใน playground ด้านล่างก็ตามรูปแบบเดียวกันสำหรับ input ที่ caller ควบคุมทั้งหมด ใช้ `Must*` เฉพาะเมื่อความล้มเหลวหมายถึง "caller เขียนโปรแกรมผิด ไม่ใช่เงื่อนไข runtime" เท่านั้น — อย่าใช้กับ `MustX` ที่ครอบ I/O, network call หรืออะไรก็ตามที่ขึ้นกับ input จากภายนอก
 
 ## เมื่อไหร่ควรใช้ panic
 
@@ -128,6 +217,118 @@ func main() {
 
 <Playground code={panicRecoverCode} />
 
+## Re-panicking, runtime.Error, และ panic(nil)
+
+deferred function สามารถตรวจดูสิ่งที่มัน recover มาแล้วตัดสินใจว่าไม่ใช่หน้าที่ของมัน — log มันไว้ แล้วเรียก `panic(r)` ซ้ำด้วยค่าเดิมเพื่อให้มันคลายต่อไปเกินจุดนี้:
+
+```go
+defer func() {
+	if r := recover(); r != nil {
+		if _, ok := r.(runtime.Error); ok {
+			fmt.Println("runtime error, re-panicking:", r)
+			panic(r) // re-panic: preserve the original value and type
+		}
+	}
+}()
+```
+
+`runtime.Error` คือ interface ที่ panic ทุกตัวที่*ตัว runtime เองสร้างขึ้น*จะ satisfy — index out of range, nil dereference, type assertion ที่ล้มเหลว และอื่น ๆ ที่คล้ายกัน การเช็คมันช่วยแยกว่า "โปรแกรมเจอสถานะที่เป็นไปไม่ได้" กับ "มีใครตั้งใจเรียก `panic(someValue)`" ก่อนตัดสินใจว่าจะ re-panic, log ให้มากขึ้น หรือจัดการต่างออกไป
+
+`panic(nil)` ได้รับการปฏิบัติพิเศษ: ตั้งแต่ Go 1.21 การ recover มันจะไม่ได้ `nil` เปล่า ๆ (ซึ่งจะแยกไม่ออกจาก "ไม่มี panic เลย") แต่จะได้ `*runtime.PanicNilError` แทน:
+
+```go
+defer func() {
+	r := recover()
+	fmt.Printf("%v\n%T\n", r, r)
+}()
+panic(nil)
+```
+
+ตรวจสอบแล้วบน 1.26.5 โค้ดนี้พิมพ์ `panic called with nil argument` และ `*runtime.PanicNilError` ก่อน Go 1.21 `recover()` หลัง `panic(nil)` จะคืน `nil` เปล่า ๆ ทำให้บอกไม่ได้ว่า "deferred function นี้รันเพราะเกิด panic" ต่างจาก "deferred function นี้รันตามปกติ" — type `*runtime.PanicNilError` ปิดช่องโหว่นี้
+
+export const panicDepthCode = `package main
+
+import (
+\t"fmt"
+\t"os"
+\t"runtime"
+)
+
+// mightRepanic recovers a runtime.Error just long enough to log it, then
+// re-panics with the same value so the caller still sees the failure.
+func mightRepanic() {
+\tdefer func() {
+\t\tif r := recover(); r != nil {
+\t\t\tif _, ok := r.(runtime.Error); ok {
+\t\t\t\tfmt.Println("runtime error, re-panicking:", r)
+\t\t\t\tpanic(r) // re-panic: preserve the original value and type
+\t\t\t}
+\t\t\tfmt.Println("recovered non-runtime panic:", r)
+\t\t}
+\t}()
+\tvar s []int
+\t_ = s[5] // triggers a runtime.Error: index out of range
+}
+
+func demoRepanic() {
+\tdefer func() {
+\t\tr := recover()
+\t\tfmt.Println("demoRepanic recovered:", r)
+\t\tif _, ok := r.(runtime.Error); ok {
+\t\t\tfmt.Println("still a runtime.Error after re-panic")
+\t\t}
+\t}()
+\tmightRepanic()
+}
+
+func demoPanicNil() {
+\tdefer func() {
+\t\tr := recover()
+\t\tfmt.Printf("panic(nil) recovers as: %v (%T)\\n", r, r)
+\t}()
+\tpanic(nil)
+}
+
+func main() {
+\tdemoRepanic()
+\tdemoPanicNil()
+
+\tdefer fmt.Println("this defer never runs -- os.Exit skips it")
+\tfmt.Println("about to exit")
+\tos.Exit(0)
+}`;
+
+<Playground code={panicDepthCode} />
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ AI generate ใช้ panic/recover ให้มองหาสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- `recover()` ถูกเรียกจาก helper function แทนที่จะเขียนไว้ตรง ๆ ข้างใน body ของ `defer func() { ... }()` หรือเปล่า? แค่ระดับความห่างชั้นเดียวก็เพียงพอที่จะทำให้มันคืน `nil` เสมอ
+- goroutine ที่เริ่มด้วย `go func() { ... }()` มี `defer`/`recover` ของตัวเองหรือเปล่า? `recover()` ใน `main` หรือ goroutine ต้นทางไม่ได้ป้องกันมัน
+- function ที่ recover ใช้ **named** return value หรือเปล่า? การ assign ให้ `err` ที่ไม่มีชื่อข้างใน deferred closure ไม่มีผลอะไรต่อสิ่งที่ function คืนค่าจริง
+- `os.Exit` หรือ `log.Fatal` ปรากฏข้างใน function ที่โค้ดอื่นพึ่งพาให้ cleanup ผ่าน `defer` หรือเปล่า? ทั้งคู่ไม่รัน defer ที่ค้างอยู่
+- function `MustX` ถูกเรียกด้วย input ที่มาจากผู้ใช้ ไฟล์ หรือ network แทนที่จะเป็นค่าคงที่ที่รู้ตอน compile/init หรือเปล่า?
+
+<SpotTheBug code={`func tryRecover() any {
+	return recover()
+}
+
+func riskyOp() {
+	defer func() {
+		r := tryRecover()
+		fmt.Println("recovered:", r)
+	}()
+	panic("boom")
+}
+
+func main() {
+	riskyOp()
+	fmt.Println("reached after riskyOp")
+}`}>
+`recover()` ทำงานได้ก็ต่อเมื่อการเรียกเขียนไว้ตรง ๆ ข้างใน deferred function เท่านั้น — ที่นี่มันถูกเรียกห่างออกไปหนึ่งชั้น ข้างใน `tryRecover` ซึ่ง deferred function ของ `riskyOp` แค่เรียกมันอีกที ตรวจสอบแล้วบน 1.26.5: โค้ดนี้พิมพ์ `recovered: <nil>` แล้วโปรแกรมก็ยัง crash ด้วย `panic: boom` — `"reached after riskyOp"` ไม่พิมพ์เลย ทางแก้คือเรียกตรง ๆ: `r := recover()` ข้างในตัว `defer func() { ... }()` เอง
+</SpotTheBug>
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -163,17 +364,30 @@ export const quizPanicRecover = [
       "error",
       "เกิด panic ซ้ำ"
     ],
-    answer: 1
+    answer: 1,
+    explain: "recover() จะดักจับ panic ได้ก็ต่อเมื่อเรียกโดยตรงข้างใน deferred function เท่านั้น ที่อื่นทั้งหมด รวมถึงโค้ดปกติที่ไม่มี panic เกิดขึ้น มันจะคืน nil เฉย ๆ"
   },
   {
-    q: "หลังจาก recover() ดักจับ panic ใน deferred function แล้ว จะเกิดอะไรขึ้น?",
+    q: "```go\nfunc tryRecover() any {\n    return recover()\n}\n\nfunc riskyOp() {\n    defer func() {\n        r := tryRecover()\n        fmt.Println(\"recovered:\", r)\n    }()\n    panic(\"boom\")\n}\n```\nเมื่อ riskyOp() ทำงาน จะเกิดอะไรขึ้น?",
     options: [
-      "การทำงานกลับไปที่บรรทัดที่เรียก panic()",
-      "deferred function ทำงานจนจบ แล้ว function ที่ panic คืนค่าปกติ",
-      "โปรแกรมออกด้วย status 1",
-      "goroutine ถูกยกเลิกเงียบ ๆ"
+      "พิมพ์ \"recovered: boom\" แล้ว return ปกติ",
+      "พิมพ์ \"recovered: <nil>\" แล้วโปรแกรมก็ยัง crash ด้วย panic: boom",
+      "compile ผ่านแต่ recover() panic เพราะถูกเรียกสองครั้ง",
+      "ไม่มีอะไรพิมพ์ panic ถูกทิ้งไปเงียบ ๆ"
     ],
-    answer: 1
+    answer: 1,
+    explain: "recover() ต้องถูกเรียกตรง ๆ ข้างใน deferred function เพื่อดักจับ panic ที่นี่มันถูกเรียกห่างออกไปหนึ่งชั้น ข้างใน tryRecover จึงคืน nil และ panic เดิมก็ยังคลายต่อไป — ตรวจสอบแล้วบน 1.26.5: Println ทำงานจริง แล้ว process ก็ยัง crash"
+  },
+  {
+    q: "```go\nfunc main() {\n    go func() {\n        panic(\"boom in goroutine\")\n    }()\n    time.Sleep(100 * time.Millisecond)\n    fmt.Println(\"done\")\n}\n```\nจะเกิดอะไรขึ้น?",
+    options: [
+      "พิมพ์ \"done\" แล้ว panic ของ goroutine ถูกเพิกเฉย",
+      "ทั้ง process crash; \"done\" ไม่ถูกพิมพ์เลย",
+      "มีแค่ goroutine ตายไป main ทำงานต่อปกติ",
+      "โค้ดนี้ deadlock"
+    ],
+    answer: 1,
+    explain: "unrecovered panic ใน goroutine ใดก็ตามจะ crash ทั้ง process ทันที ไม่ว่า goroutine อื่น (รวมถึง main) กำลังทำอะไรอยู่ ไม่มี recover() ที่ไหนช่วยป้องกัน panic ใน goroutine อื่นได้เลย — ตรวจสอบแล้วบน 1.26.5"
   },
   {
     q: "กรณีใดที่เหมาะสมในการใช้ panic?",
@@ -183,7 +397,8 @@ export const quizPanicRecover = [
       "database query ไม่พบ row",
       "network request หมดเวลา"
     ],
-    answer: 1
+    answer: 1,
+    explain: "config ที่จำเป็นขาดหายตอน startup หมายความว่าโปรแกรมทำงานถูกต้องไม่ได้เลย — นั่นคือ programmer/deployment error ไม่ใช่เงื่อนไขที่ caller จัดการเองได้อย่างมีความหมาย อีกสามข้อคือผลลัพธ์ runtime ปกติที่คาดเดาได้ ควรคืน error"
   },
   {
     q: "deferred functions ทำงานตามลำดับใด?",
@@ -193,7 +408,19 @@ export const quizPanicRecover = [
       "ลำดับสุ่ม",
       "defer ทุกอันทำงานพร้อมกัน"
     ],
-    answer: 1
+    answer: 1,
+    explain: "deferred call จะถูก push เข้า stack และทำงานย้อนลำดับการลงทะเบียน — last in, first out — ไม่ว่า function จะ return ตามปกติหรือกำลัง unwind จาก panic"
+  },
+  {
+    q: "function หนึ่งเรียก os.Exit(1) กลางทาง หลังจากลงทะเบียน defer ไว้ก่อนหน้าใน function เดียวกัน จะเกิดอะไรกับ defer นั้น?",
+    options: [
+      "มันทำงานก่อน process จะออก เหมือน return แบบอื่น ๆ",
+      "มันไม่ทำงานเลย — os.Exit ยุติทันทีโดยไม่ unwind",
+      "มันทำงาน แต่ panic ข้างในถูกเพิกเฉย",
+      "มันทำงานเฉพาะเมื่อ exit code เป็น 0"
+    ],
+    answer: 1,
+    explain: "os.Exit (และ log.Fatal ซึ่งเรียกมันข้างใน) ยุติ process ทันทีโดยไม่รัน deferred function ที่ค้างอยู่ — ตรวจสอบแล้วบน 1.26.5: fmt.Println ที่ defer ไว้ก่อน os.Exit(1) ไม่พิมพ์เลย"
   }
 ];
 

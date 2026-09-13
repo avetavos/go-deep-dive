@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## การสร้าง map
 
@@ -56,6 +58,24 @@ if !ok {
 }
 ```
 
+## Nil map: อ่านได้ แต่เขียนไม่ได้
+
+Zero value ของ map type คือ `nil` — ไม่ใช่ map ว่างที่พร้อมใช้งาน `nil` map ทำตัวเหมือน map ว่างสำหรับ operation **อ่าน** ทุกแบบ แต่จะ panic ตอนเขียน:
+
+```go
+var m map[string]int
+fmt.Println(m["a"], len(m)) // 0 0 — reading a nil map is completely safe
+m["a"] = 1                  // panic: assignment to entry in nil map
+```
+
+verify บน 1.26.5 แล้ว panic คือ:
+
+```text
+panic: assignment to entry in nil map
+```
+
+นี่คือหนึ่งใน bug ที่ AI เขียน Go แล้วพลาดบ่อยที่สุด — struct field ที่ declare เป็น `map[string]int` โดยไม่ initialize อะไรเลย ดูเหมือน zero value ปกติ และ compile ผ่านสบาย ๆ จนกว่าจะเขียนครั้งแรก initialize map ที่ตั้งใจจะเขียนเสมอ — `make(map[string]int)` หรือ composite literal ไม่ว่าจะตอน declare หรือใน constructor
+
 ## Map เป็น reference type
 
 การ assign map จะ copy แค่ header ไม่ใช่ข้อมูล ตัวแปรทั้งสองชี้ไปยัง hash table เดียวกัน:
@@ -65,6 +85,110 @@ a := map[string]int{"x": 1}
 b := a
 b["x"] = 99
 fmt.Println(a["x"]) // 99 — a and b share the same map
+```
+
+## Map เป็น function argument
+
+เพราะ map value จริง ๆ ก็คือ pointer ไปยัง hash table ของ runtime การส่ง map เข้าฟังก์ชันคือการส่ง pointer นั้นแบบ by value — ฟังก์ชันได้ copy ของ header เป็นของตัวเอง แต่ header ทั้งสองยังชี้ไปยัง table เดียวกัน ไม่มีทางป้องกันไม่ให้ฟังก์ชันแก้ map ที่เราส่งเข้าไป และก็ไม่จำเป็นต้อง return มันกลับด้วย — caller เห็นทุกการเปลี่ยนแปลงอยู่แล้ว:
+
+```go
+func setAll(m map[string]int, v int) {
+    for k := range m {
+        m[k] = v
+    }
+}
+
+scores := map[string]int{"a": 1, "b": 2}
+setAll(scores, 9)
+fmt.Println(scores["a"], scores["b"]) // 9 9 — the caller's map was mutated directly
+```
+
+## Concurrent map write คือ crash ที่กู้คืนไม่ได้
+
+Map ของ Go **ไม่** ปลอดภัยสำหรับการเข้าถึงพร้อมกัน goroutine สองตัวที่เขียน map เดียวกันพร้อมกันจะไม่ race กันแบบเงียบ ๆ — runtime ตรวจจับได้และ crash ทั้งโปรเซสทันที และ crash แบบนี้ `recover()` จับไม่ได้:
+
+```go
+m := make(map[int]int)
+var wg sync.WaitGroup
+for i := 0; i < 20; i++ {
+    wg.Add(1)
+    go func(n int) {
+        defer wg.Done()
+        for j := 0; j < 10000; j++ {
+            m[n] = j
+        }
+    }(i)
+}
+wg.Wait()
+```
+
+verify บน 1.26.5 (`go run`) แล้ว จบด้วยข้อความนี้เสมอ:
+
+```text
+fatal error: concurrent map writes
+
+goroutine 27 [running]:
+internal/runtime/maps.fatal(...)
+...
+```
+
+`fatal error` (ไม่ใช่ `panic:`) คือสัญญาณของ Go ว่า "นี่ไม่ใช่ application error ที่กู้คืนได้ นี่คือการละเมิดความสมบูรณ์ของ runtime" — อยู่ในหมวดเดียวกับการถูก kill เพราะ out-of-memory หรือ stack overflow ถ้าหลาย goroutine ต้องอ่านและเขียน map เดียวกัน ให้ป้องกันทุกการเข้าถึงด้วย `sync.RWMutex` (`RLock`/`RUnlock` สำหรับอ่าน, `Lock`/`Unlock` สำหรับเขียน) หรือใช้ `sync.Map` เมื่อ pattern การเข้าถึงเป็นแบบ key แยกกันต่อ goroutine เป็นส่วนใหญ่ หรือมี key จำนวนน้อยที่ถูกแย่งใช้หนัก ๆ `sync.RWMutex` คลุม map ธรรมดามักเป็นตัวเลือกที่ดีกว่าโดย default — `sync.Map` ถูกออกแบบมาสำหรับ workload ที่แคบกว่าและเสีย type safety ไป (API ของมันรับและคืนค่าเป็น `any`)
+
+## Map value ไม่ addressable
+
+เอา address ของ map element ไม่ได้ และเรียก method แบบ pointer-receiver หรือ assign field ของ struct ที่เก็บตรง ๆ ใน map ก็ไม่ได้:
+
+```go
+type Point struct{ X, Y int }
+m := map[string]Point{"origin": {0, 0}}
+m["origin"].X = 5 // compile error
+```
+
+verify บน 1.26.5 (`go build`) แล้ว:
+
+```text
+./main.go:7:2: cannot assign to struct field m["origin"].X in map
+```
+
+`&` ก็เหมือนกัน:
+
+```go
+mm := map[string]int{"a": 1}
+p := &mm["a"] // compile error
+```
+
+```text
+./main.go:5:8: invalid operation: cannot take address of m["a"] (map index expression of type int)
+```
+
+เหตุผลเป็นเรื่องโครงสร้าง ไม่ใช่กฎที่ตั้งขึ้นมาลอย ๆ: map สามารถ rehash แล้วย้ายทุก entry ไป bucket layout ใหม่ได้ทุกเมื่อ (ตอน grow หรือด้วย Swiss-table implementation ที่ใช้ตั้งแต่ Go 1.24) pointer เข้าไปใน bucket เก่าจะชี้ไปยัง memory ที่ค้างหรือถูกใช้ซ้ำแบบเงียบ ๆ หลัง rehash ดังนั้น compiler จึงปฏิเสธที่จะสร้าง pointer แบบนั้นตั้งแต่แรก แก้ด้วย pattern copy-modify-store หรือเปลี่ยนไปเก็บ pointer แทน:
+
+```go
+p := m["origin"] // load a copy
+p.X = 5
+m["origin"] = p  // store it back
+
+// or: map[string]*Point avoids the copy round-trip entirely
+m2 := map[string]*Point{"origin": {0, 0}}
+m2["origin"].X = 5 // fine — *Point is addressable through the pointer already stored in the map
+```
+
+## การ mutate map ระหว่าง range
+
+การลบ key ปัจจุบันระหว่าง `range` เป็นเรื่องปลอดภัยและถูกกำหนดไว้ชัดเจน — key ที่ถูกลบจะไม่ถูกส่งออกมาใน iteration ถัดไปเลย แต่การเพิ่ม key ใหม่ระหว่าง `range` เป็นอีกเรื่อง — spec ของภาษาปล่อยให้ **ไม่ระบุ (unspecified)** ว่า key ที่เพิ่งเพิ่มเข้าไปจะถูก visit ใน loop เดียวกันนั้นหรือไม่ อย่าเขียน loop ที่ความถูกต้องขึ้นอยู่กับการเห็น (หรือไม่เห็น) key ที่เพิ่ง insert เข้าไปเอง
+
+## Composite key
+
+Type ที่ comparable ทุกตัวใช้เป็น map key ได้ รวมถึง struct ด้วย นี่เป็นวิธี idiomatic ทั่วไปในการสร้าง lookup แบบหลายส่วน (พิกัด 2D, คู่ (userID, resourceID)) โดยไม่ต้องต่อ string เข้าด้วยกัน:
+
+```go
+type Coord struct{ X, Y int }
+
+grid := map[Coord]string{
+    {0, 0}: "origin",
+    {1, 1}: "diag",
+}
+fmt.Println(grid[Coord{0, 0}]) // origin
 ```
 
 ## ลำดับ iteration แบบสุ่ม
@@ -95,6 +219,17 @@ for _, k := range slices.Sorted(maps.Keys(scores)) {
 ```
 
 helper สมัยใหม่อีกสองตัว: `clear(m)` (Go 1.21) ลบทุก entry และ `maps.Clone`/`maps.Copy` ใช้แทน loop copy ที่เขียนเอง
+
+## กำหนดขนาด map ล่วงหน้า
+
+`make(map[K]V, hint)` pre-size พื้นที่เก็บข้อมูลภายในของ map ไว้ล่วงหน้าสำหรับประมาณ `hint` entry ช่วยหลีกเลี่ยงการโตแบบค่อยเป็นค่อยไป (และการ rehash) ที่เกิดขึ้นเมื่อ map ที่สร้างด้วย `make(map[K]V)` เต็มขึ้นเรื่อย ๆ `hint` เป็นแค่คำแนะนำ ไม่ใช่ขีดจำกัดตายตัว — map ยังโตเกินมันได้ถ้าจำเป็น:
+
+```go
+big := make(map[int]bool, 100)
+fmt.Println(len(big)) // 0 — hint pre-sizes storage; it does not create entries
+```
+
+ตั้งแต่ Go 1.24 การ implement map ของ runtime เป็นแบบ Swiss-table (open addressing ที่ใช้ metadata แบบ SIMD-friendly) แทน bucket-and-overflow-chain layout แบบเดิม — เร็วขึ้นและใช้ memory น้อยลง แต่ contract ระดับภาษาที่เรียนมาในบทนี้ (ไม่มีลำดับ, ไม่ addressable, ไม่ปลอดภัยสำหรับ concurrency) ไม่เปลี่ยนแปลงเลย
 
 export const mapsCode = `package main
 
@@ -133,6 +268,63 @@ func main() {
 
 <Playground code={mapsCode} />
 
+Playground ตัวที่สองเน้นหัวข้อเชิงลึกด้านบน: map เป็น function argument, pattern copy-modify-store สำหรับ map value, การลบระหว่าง range แบบปลอดภัย, และการกำหนดขนาดด้วย hint
+
+export const mapsAdvancedCode = `package main
+
+import "fmt"
+
+type Point struct{ X, Y int }
+
+func setAll(m map[string]int, v int) {
+\tfor k := range m {
+\t\tm[k] = v
+\t}
+}
+
+func main() {
+\t// Maps as function arguments: the callee mutates the caller's map directly
+\tm := map[string]int{"a": 1, "b": 2}
+\tsetAll(m, 9)
+\tfmt.Println(m["a"], m["b"])
+
+\t// Map values are not addressable: load, modify, store back
+\tpoints := map[string]Point{"origin": {X: 0, Y: 0}}
+\tp := points["origin"]
+\tp.X = 5
+\tpoints["origin"] = p
+\tfmt.Println(points["origin"])
+
+\t// Deleting the CURRENT key during range is safe and specified
+\tscores := map[string]int{"a": 1, "b": 2, "c": 3}
+\tfor k := range scores {
+\t\tif k == "b" {
+\t\t\tdelete(scores, "b")
+\t\t}
+\t}
+\tfmt.Println(len(scores))
+
+\t// make with a size hint pre-sizes storage; it does not create entries
+\tbig := make(map[int]bool, 100)
+\tfmt.Println(len(big))
+}`;
+
+<Playground code={mapsAdvancedCode} />
+
+## Mental Model
+
+export const mapBucketDiagram = `flowchart LR
+  H["hash(key)"] --> B0["bucket 0"]
+  H --> B1["bucket 1"]
+  H --> B2["bucket 2 (probed on collision)"]
+  B0 --> E0["key/value slots"]
+  B1 --> E1["key/value slots"]
+  B2 --> E2["key/value slots"]`;
+
+<Mermaid code={mapBucketDiagram} title="Go map hash key ไปยัง bucket; key ที่ชนกันจะ probe ไป bucket ถัดไป" />
+
+Map คือ hash table: `hash(key)` เลือก bucket และ entry อยู่ใน slot หนึ่งของ bucket นั้น (หรือ bucket ข้างเคียง ถ้า bucket แรกเต็มแล้ว — เรียกว่า "probing") ภาพเดียวนี้อธิบายกฎสามข้อในบทนี้พร้อมกัน: lookup/insert/delete เป็น `O(1)` โดยเฉลี่ยเพราะการ hash กระโดดตรงไปยัง bucket เลย; ลำดับ iteration สุ่มเพราะไม่มีเหตุผลที่ต้อง visit bucket ตามลำดับใดลำดับหนึ่ง; และ value ที่เก็บใน bucket slot ไม่ addressable เพราะการ grow/rehash สามารถย้ายมันไปยัง bucket คนละตัวได้ทุกเมื่อ
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -157,6 +349,32 @@ func main() {
 Go จงใจสุ่มลำดับ map iteration ทุกครั้งที่รันโปรแกรม เพื่อป้องกันบั๊กที่พึ่งพา hash ordering แบบเงียบๆ ถ้าต้องการ output ที่คงที่ — สำหรับ test, log, หรือ user-facing data — ให้รวบรวม key ลงใน `[]string` แล้วเรียก `sort.Strings` แล้วค่อย range ผ่าน slice ที่เรียงแล้ว อย่าพึ่งพาลำดับของ `for k, v := range myMap`
 </Callout>
 
+## อ่านโค้ดที่ AI เขียน
+
+Map เป็นจุดที่โค้ดที่ generate มา compile ผ่านฉลุยแต่ยังผิดได้ง่ายที่สุดจุดหนึ่ง เช็คสิ่งเหล่านี้:
+
+- struct field ชนิด map เคยถูกเขียนโดยไม่เช็คว่า initialize แล้วหรือยังหรือเปล่า (`make` ใน constructor หรือ check-and-init ตอนใช้ครั้งแรก)? field ชนิด map ที่เป็น zero value คือ `nil` และการเขียนครั้งแรกจะ panic
+- มีโค้ดที่พยายาม assign เข้า field หรือ index ของ map value ตรง ๆ หรือเปล่า (`m[k].Field = x`, `m[k][i] = x`)? ทั้งคู่เป็น compile error — map value ไม่ addressable
+- มี goroutine เขียน map ที่แชร์กันโดยไม่มี `sync.RWMutex` หรือ `sync.Map` ที่ไหนเลยหรือเปล่า? โค้ดแบบนี้ compile ผ่านและมักจะ "ใช้งานได้" ตอน test แล้วค่อย crash ทั้งโปรเซสตอน production ภายใต้ concurrency จริง
+- loop เพิ่ม key ใหม่เข้า map ที่กำลัง range อยู่ โดยคาดหวังผลลัพธ์ที่ deterministic เฉพาะเจาะจงหรือเปล่า? spec ปล่อยเรื่องนี้ไว้ unspecified — โค้ดอาจทำงานถูกวันนี้แล้วพังใน Go version อื่นหรือ GOMAXPROCS อื่น
+- map ถูกส่งเข้าฟังก์ชันที่ผู้เขียนเชื่อว่าจะได้ "copy" หรือเปล่า (มี comment แบบ `// safe, m is a local copy`)? copy ที่ได้มีแค่ header — callee ยังแก้ทุก entry ได้อยู่ดี
+
+<SpotTheBug code={`type Config struct {
+	Counts map[string]int
+}
+
+func NewConfig() *Config {
+	return &Config{}
+}
+
+func main() {
+	c := NewConfig()
+	c.Counts["hits"]++
+	fmt.Println(c.Counts)
+}`}>
+`NewConfig` คืน `*Config` ที่ field `Counts` ไม่เคยถูก initialize เลย — zero value ของ `map[string]int` คือ `nil` ไม่ใช่ map ว่าง `c.Counts["hits"]++` คือการอ่านแล้วเขียน ฝั่งอ่านไม่มีปัญหา (คืน 0 สำหรับ nil map) แต่ฝั่งเขียน panic verify บน 1.26.5 แล้ว: `panic: assignment to entry in nil map` แก้โดยให้ `NewConfig` initialize field นี้: `return &Config{Counts: make(map[string]int)}`
+</SpotTheBug>
+
 export const quizMaps = [
   {
     q: "คุณอ่าน `scores[\"Dave\"]` แต่ไม่เคยเพิ่ม \"Dave\" เข้าไป Go คืนค่าอะไร?",
@@ -166,7 +384,8 @@ export const quizMaps = [
       "Zero value ของ value type (0 สำหรับ int)",
       "Error value"
     ],
-    answer: 2
+    answer: 2,
+    explain: "การอ่าน key ที่ไม่มีอยู่จาก map ใด ๆ — รวมถึง nil map — ไม่เคย panic เลย มันคืน zero value ของ value type ของ map นั้น zero value ของ int คือ 0"
   },
   {
     q: "ค่า return ที่สองใน `v, ok := scores[\"Alice\"]` บอกอะไร?",
@@ -176,27 +395,41 @@ export const quizMaps = [
       "ว่า map มี capacity เหลืออีกไหม",
       "ว่า key เป็น string ที่ valid หรือไม่"
     ],
-    answer: 1
+    answer: 1,
+    explain: "comma-ok form เป็นวิธีเดียวที่เชื่อถือได้ในการแยกแยะ \"key ไม่มีอยู่\" ออกจาก \"key มีอยู่และเท่ากับ zero value\" — ทั้งสองกรณีคืน v เหมือนกันถ้าไม่เช็ค ok"
   },
   {
-    q: "คุณ assign `b := a` โดยที่ a คือ `map[string]int` แล้วกำหนด `b[\"x\"] = 99` ค่าของ `a[\"x\"]` คืออะไร?",
+    q: "โค้ดนี้ print อะไร?\n\nvar m map[string]int\nfmt.Println(m[\"a\"])\nm[\"a\"] = 1",
     options: [
-      "0 — b คือ copy ที่เป็นอิสระของ a",
-      "99 — map เป็น reference type; a และ b ชี้ไป hash table เดียวกัน",
-      "Panic — ไม่สามารถ assign map โดยตรงได้",
-      "ค่าเดิมของ a[\"x\"] ก่อน assign"
+      "0 แล้วโปรแกรมทำงานต่อไปปกติ",
+      "0 แล้ว panic: assignment to entry in nil map",
+      "Compile error — declare map โดยไม่ใช้ make ไม่ได้",
+      "1 แล้ว 1 อีกครั้ง"
     ],
-    answer: 1
+    answer: 1,
+    explain: "nil map (zero value ของ map type) รองรับการอ่านเหมือน map ว่างทุกประการ — m[\"a\"] print 0 ได้อย่างปลอดภัย บรรทัดถัดไปคือจุดที่พัง: verify บน 1.26.5 แล้ว m[\"a\"] = 1 panic ด้วยข้อความ panic: assignment to entry in nil map พอดี"
   },
   {
-    q: "ทำไม Go ถึงสุ่มลำดับ map iteration?",
+    q: "goroutine ยี่สิบตัวเรียก `m[n] = j` บน `map[int]int` เดียวกันโดยไม่มี locking เลย เกิดอะไรขึ้นจริงตอนรัน?",
     options: [
-      "เพื่อปรับปรุง hash table performance",
-      "เพื่อป้องกันโปรแกรมจากการพึ่งพาลำดับที่ไม่ได้นิยามโดยไม่ตั้งใจ",
-      "เพื่อลดการใช้ memory",
-      "ไม่ได้สุ่ม — ลำดับจะเรียงตาม key ตัวอักษรเสมอ"
+      "Go serialize การเขียนให้เองแบบเงียบ ๆ — map มี internal lock",
+      "เป็น data race แต่โปรแกรมยังทำงานต่อไปได้ด้วยผลลัพธ์ map ที่อาจผิด",
+      "fatal error: concurrent map writes — และ recover() กู้คืนไม่ได้",
+      "Compile error — compiler ตรวจจับ concurrent map access แบบ static ได้"
     ],
-    answer: 1
+    answer: 2,
+    explain: "verify บน 1.26.5 ด้วย go run แล้ว: runtime ตรวจจับ concurrent map writes และ terminate ทั้งโปรเซสด้วย fatal error: concurrent map writes ต่างจาก panic ตรงที่ fatal error ไม่มี recover() ตัวไหนในโปรแกรมจับได้เลย — นี่คือ crash แบบแข็ง ไม่ใช่ exception"
+  },
+  {
+    q: "มี `type Point struct{ X, Y int }` และ `m := map[string]Point{\"o\": {0, 0}}` ทำไม `m[\"o\"].X = 5` ถึง compile ไม่ผ่าน?",
+    options: [
+      "Point ไม่ได้ implement interface ที่ map ต้องการ",
+      "Map value ไม่ addressable — rehash อาจย้าย entry ก่อนที่การ assign จะเสร็จ",
+      "Struct value เก็บใน map ไม่ได้เลย",
+      "X ไม่ export นอก package (ไม่จริง — ตัวเลือกนี้เป็น distractor)"
+    ],
+    answer: 1,
+    explain: "verify บน 1.26.5 ด้วย go build แล้ว: ./main.go:7:2: cannot assign to struct field m[\"origin\"].X in map struct เก็บใน map เป็น value ได้สบาย ๆ (ตัวเลือก C ผิด) — compiler ห้ามเอา address เข้าไปใน map slot โดยเฉพาะ เพราะ grow/rehash ย้ายมันได้ทุกเมื่อ ต้อง load value มา แก้ copy แล้ว store กลับ"
   }
 ];
 

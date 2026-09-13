@@ -11,6 +11,10 @@ import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import Mermaid from '../../../../components/Mermaid.astro';
 
+## The thesis of this module: pass by value, always
+
+Every single function call in Go copies its arguments. There is no exception, no hidden reference-passing mode, and no way to opt out. What makes this confusing at first is that some types are small handles that happen to point at shared data — copying the handle is still a copy, it just leaves the data it points to shared. Every surprise in this module (why a slice mutation is visible across a function call but an append is not, why a map write inside a function affects the caller, why a struct field write does not) is downstream of this single fact. Learn it here first, and Structs, Slices, Maps, and Pointers each become "here is what gets copied," not four unrelated rules to memorize.
+
 ## The Go type landscape
 
 Every value in Go has a static type known at compile time. Go divides its types into two broad families:
@@ -18,6 +22,17 @@ Every value in Go has a static type known at compile time. Go divides its types 
 **Value types** — variables hold the data directly. Assigning one variable to another copies the data. The primitive value types are booleans, numeric types (`int`, `int64`, `float64`, `uint8`, …), and `string`. Composite value types are **arrays** and **structs**.
 
 **Reference-like types** — the variable holds a small handle that points to data allocated elsewhere: assigning always copies the handle itself, not the underlying data — that part is a plain, correct copy, just like copying any other value. **Slices** (a pointer + len + cap header), **maps** and **channels** (a single pointer), **functions**, and **pointers** (one word) all work this way, and because both copies of the handle still point at the same backing data, mutation through one is visible through the other. **Strings** are built the same way internally — a pointer + len header — but behave like a value type from the outside: string data is immutable, so sharing the header never produces the shared-mutation surprise that slices and maps can.
+
+That immutability is exactly why `[]byte(s)` has to copy: converting a string to a byte slice hands you something mutable, and the only way to guarantee the original string stays immutable is to give you your own backing array, not a view into the string's.
+
+```go
+s := "hello"
+b := []byte(s)
+b[0] = 'H'
+fmt.Println(s, string(b)) // hello Hello — s never changed; b was an independent copy from the start
+```
+
+Verified on 1.26.5: exactly `hello Hello`. Converting back with `string(b)` copies again, for the same reason in reverse — once something is a `string`, nothing may ever mutate it through any other handle, so the runtime cannot just relabel `b`'s backing array as a string without copying it first.
 
 export const typeTaxonomyDiagram = `flowchart TD
   Root["Go Type Taxonomy"]
@@ -107,7 +122,8 @@ export const quizIndex = [
       "struct { X, Y int }",
       "*int (pointer)"
     ],
-    answer: 2
+    answer: 2,
+    explain: "A struct is a value type: assigning it copies every field. Slices, maps, and pointers are all reference-like — assignment copies only a small handle (header or address) that still points at the same underlying data."
   },
   {
     q: "What does Go print when you read a map key that has never been set?",
@@ -117,7 +133,8 @@ export const quizIndex = [
       "An error value",
       "The zero value for the map's value type"
     ],
-    answer: 3
+    answer: 3,
+    explain: "Reading a missing map key never panics — it always returns the zero value for the map's value type (0 for int, \"\" for string, and so on)."
   },
   {
     q: "A `[]Point` slice and a `[3]Point` array both store Point values. What is the key difference?",
@@ -127,7 +144,8 @@ export const quizIndex = [
       "Arrays have a fixed size set at compile time; slices can grow dynamically",
       "They are identical — the brackets are just syntax sugar"
     ],
-    answer: 2
+    answer: 2,
+    explain: "An array's length is part of its type ([3]Point and [4]Point are different types) and is fixed forever. A slice is a dynamic view backed by an array and can grow via append."
   }
 ];
 

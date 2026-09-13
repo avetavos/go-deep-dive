@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Pointer คืออะไร?
 
@@ -49,7 +51,37 @@ fmt.Println(x) // 10
 
 **2. Struct ขนาดใหญ่.** การ copy struct ขนาดใหญ่ทุกครั้งที่เรียก function นั้นสิ้นเปลือง ส่ง `*Config` แทน `Config` เมื่อ struct มีหลาย field
 
-**3. Optional value.** `*T` สามารถเป็น `nil` เพื่อแทน "ไม่ได้กำหนด" คล้ายกับ `null` ในภาษาอื่น
+**3. Optional value.** `*T` สามารถเป็น `nil` เพื่อแทน "ไม่ได้กำหนด" คล้ายกับ `null` ในภาษาอื่น นี่คือการใช้งานคลาสสิกของอะไรแบบ `*bool` (สามสถานะ: true, false, ยังไม่กำหนด) — แต่เมื่อ type ที่จะห่อด้วย pointer เป็น struct หรือ `time.Time` เอง convention แบบ "มีค่าอยู่หรือเปล่า" เฉพาะทางอย่าง `omitzero` (Go 1.24) ของ `encoding/json` ช่วยเลี่ยง pointer และ nil check ไปได้เลย ดู [stdlib module](/go/th/stdlib/encoding-json/) สำหรับการเปรียบเทียบนั้น
+
+## Escape analysis: ทำไม pointer ไม่ได้เร็วกว่าเสมอไป
+
+"ส่ง pointer เพื่อเลี่ยง copy" เป็นเรื่องจริง แต่มันแลกต้นทุนหนึ่งกับอีกต้นทุนหนึ่ง: value ที่ pointer ชี้ไปต้องอยู่ในที่ที่มีชีวิตยืนกว่าการเรียก function ถ้า pointer นั้นหลุดออกจาก function ("escape") — และ "ที่" นั้นคือ heap ซึ่ง garbage collector ต้องคอย track ต่อไป Compiler ตัดสินใจเรื่องนี้อัตโนมัติด้วย **escape analysis**: ถ้าพิสูจน์ได้ว่า value ไม่มีชีวิตอยู่เกิน function ของมัน มันจะอยู่บน stack (allocate ฟรี, reclaim ฟรี); ถ้าพิสูจน์ไม่ได้ มัน "escape" ไปยัง heap
+
+```go
+type Config struct{ Workers int }
+
+// newConfig returns a pointer to a local variable — it must escape to the heap
+func newConfig() *Config {
+    c := Config{Workers: 4}
+    return &c
+}
+```
+
+`go build -gcflags=-m` print เหตุผลของ compiler เองออกมา verify บน 1.26.5 แล้ว:
+
+```text
+./main.go:8:6: can inline newConfig
+./main.go:13:6: can inline sum
+./main.go:18:18: inlining call to newConfig
+./main.go:19:30: inlining call to sum
+./main.go:19:13: inlining call to fmt.Println
+./main.go:9:2: moved to heap: c
+./main.go:19:13: ... argument does not escape
+./main.go:19:17: cfg.Workers escapes to heap
+./main.go:19:30: ~r0 escapes to heap
+```
+
+บรรทัดที่สำคัญคือ `moved to heap: c` — compiler กำลังบอกเหตุผลตรง ๆ ว่าทำไม `newConfig` เก็บ `c` ไว้บน stack ไม่ได้: address ของมันถูก return ออกไป ดังนั้นมันต้องมีชีวิตอยู่เกิน function นี่คือเหตุผลที่ "return `&T{}` ทุกที่ เผื่อไว้ก่อน" — pattern ที่โค้ด AI-generated Go พึ่งพาหนักเพราะดูปลอดภัยเชิงป้องกัน — ไม่ได้ฟรี: pointer แต่ละตัวคือ heap allocation และ object ที่ GC ต้อง track แม้ caller จะอ่านแค่ field เดียวครั้งเดียวแล้วทิ้งก็ตาม การ return value ตรง ๆ (`Config` ไม่ใช่ `*Config`) เมื่อ struct เล็กและ caller ไม่ต้อง mutate ต้นฉบับ ทำให้ compiler เก็บมันไว้บน stack ได้
 
 ## Shorthand สำหรับ struct pointer
 
@@ -86,6 +118,22 @@ p := Person{Name: "Ada", Age: new(36)}               // *int pointing to 36
 q := Person{Name: "Bob", Age: new(yearsSince(born))} // any expression works
 ```
 
+### สามวิธีในการได้ pointer ที่เป็น zero value
+
+`&T{}`, `new(T)`, และ `var t T; &t` ทั้งหมดให้ pointer ไปยัง zero value ที่เท่ากัน — แต่ถ้าเทียบด้วย identity มันคือสอง allocation ที่แยกกัน:
+
+```go
+p1 := &Config{}
+p2 := new(Config)
+var v Config
+p3 := &v
+
+fmt.Println(*p1 == *p2, *p2 == *p3) // true true — all zero-valued
+fmt.Println(p1 == p2)               // false — two distinct allocations
+```
+
+verify บน 1.26.5 แล้ว: `*p1 == *p2` และ `*p2 == *p3` เป็น `true` ทั้งคู่ (dereference แล้วเท่ากันเพราะเป็น zero value เดียวกัน) แต่ `p1 == p2` เป็น `false` (address คนละที่กัน — `new` กับ `&T{}` ไม่เคยคืน pointer ตัวเดียวกันเลย) เรื่อง style: `&T{}` เป็นตัวเลือก idiomatic เมื่อต้องการ set บาง field ไปในตัวด้วย (`&Config{Workers: 4}`); `new(T)` อ่านชัดกว่านิดหน่อยเมื่อต้องการแค่ zero value จริง ๆ ไม่มีอะไรอื่น ทั้งคู่ escape ไป heap ภายใต้กฎเดียวกับ pointer ทั่วไป — ดู escape analysis ด้านบน
+
 ## Nil pointer
 
 Zero value ของ pointer type ทุกชนิดคือ `nil` การ dereference nil pointer ทำให้เกิด runtime panic:
@@ -97,6 +145,82 @@ fmt.Println(p == nil) // true
 ```
 
 ควรตรวจสอบ pointer ว่าเป็น `nil` ก่อน dereference เสมอ เมื่อ pointer นั้นอาจไม่ได้ถูกกำหนดค่า
+
+## Nil pointer receiver เป็น Go ที่ถูกกฎหมาย
+
+การเรียก method บน nil pointer receiver **ไม่** panic ในตัวมันเอง — Go panic ก็ต่อเมื่อ method body ไป dereference receiver จริง ๆ เท่านั้น method ที่เช็ค `nil` ก่อนแล้ว return ออกไปเลยเป็น Go ที่ถูกต้องสมบูรณ์ และเป็น pattern idiomatic ที่พบทั่วไปสำหรับโครงสร้างแบบ recursive เช่น linked list กับ tree:
+
+```go
+type List struct {
+    Val  int
+    Next *List
+}
+
+// Sum works on a nil *List receiver — no field is dereferenced when l == nil
+func (l *List) Sum() int {
+    if l == nil {
+        return 0
+    }
+    return l.Val + l.Next.Sum()
+}
+
+var l *List
+fmt.Println(l.Sum()) // 0 — calling a method on a nil pointer is legal
+
+l = &List{Val: 1, Next: &List{Val: 2}}
+fmt.Println(l.Sum()) // 3
+```
+
+อย่าสับสนกับ **typed-nil interface trap**: `*List` ที่เป็น nil เก็บอยู่ใน `interface{}`/`error`/interface อื่นใด คือ *interface ที่ไม่ nil* ที่เก็บ concrete pointer ที่เป็น nil และ `iface == nil` เป็น `false` แม้ pointer ข้างในจะเป็น `nil` ก็ตาม trap นั้นอธิบายละเอียดใน [Error Values](/go/th/errors-generics/error-values/#the-typed-nil-interface-trap) — กฎในหัวข้อนี้เรื่องเรียก method บน nil receiver ได้อย่างถูกกฎหมาย เป็นคนละประเด็นที่แคบกว่ามาก และเป็นเรื่องของ pointer ไม่ใช่ interface
+
+## `&s[i]` หลัง `append` อาจกลายเป็นของเก่า
+
+Pointer ที่ชี้เข้าไปใน backing array ของ slice จะ valid ก็ต่อเมื่อ backing array นั้นยังเป็นตัวที่ slice ใช้อยู่ ถ้า `append` ทำให้เกิด reallocation pointer เก่าจะยังชี้ไปยัง array ที่ถูกทิ้งแล้ว:
+
+```go
+s := make([]int, 3, 3) // len == cap: no room to grow in place
+s[0], s[1], s[2] = 1, 2, 3
+p := &s[1] // points at index 1 of the current backing array
+
+s = append(s, 4) // len(3) == cap(3) -> reallocates to a new backing array
+s[1] = 99         // written to the NEW backing array
+
+fmt.Println(*p, s) // p still points at the OLD backing array
+```
+
+verify บน 1.26.5 แล้ว โค้ดนี้ print `2 [1 99 3 4]` — `*p` ยังอ่านค่า `2` ค่าเดิมก่อน reallocation แม้ `s[1]` จะเป็น `99` แล้วก็ตาม `&s[i]` ปลอดภัยที่จะเก็บไว้ข้าม `append` ก็ต่อเมื่อรู้แน่ชัดว่า slice จะไม่โตเกิน capacity ของมัน นี่คือภาพสะท้อนแบบ pointer ของอันตราย slice-aliasing จากบท [Slices](/go/th/types-data/slices/) — และ `&m[k]` สำหรับ map นั้นเขียนไม่ได้เลยตั้งแต่แรก เพราะ map value ถูกย้ายได้ทุกเมื่อจากการ rehash (ดู [Maps](/go/th/types-data/maps/))
+
+## Pointer ไปยัง loop variable: ก่อนและหลัง Go 1.22
+
+ก่อน Go 1.22 loop variable ของ `for` (index/range) เป็นตัวแปรตัวเดียวที่แชร์กันทุก iteration — closure ที่สร้างในตัว loop body จับตัวแปรตัวนั้นตัวเดียว ไม่ใช่ snapshot ต่อ iteration bug คลาสสิก: launch goroutine หรือเก็บ closure ต่อ iteration แล้วทุกตัวเห็นค่า *สุดท้าย* ของ loop ตอนที่ loop จบ เพราะทั้งหมดแชร์ตัวแปรเดียวกัน
+
+ตั้งแต่ Go 1.22 แต่ละ iteration ได้ copy ของ loop variable เป็น**ของตัวเอง** ซึ่งคือสิ่งที่โค้ดต่อไปนี้ print บน toolchain ปัจจุบันตัวใดก็ตาม:
+
+```go
+funcs := make([]func() int, 0, 3)
+for i := 0; i < 3; i++ {
+    funcs = append(funcs, func() int { return i })
+}
+got := make([]int, 0, 3)
+for _, f := range funcs {
+    got = append(got, f())
+}
+fmt.Println(got) // [0 1 2] — each closure captured its own i
+```
+
+การเปลี่ยนแปลงนี้เดิมถูก gate ด้วยบรรทัด `go` ใน `go.mod` — module ที่ declare `go 1.21` หรือเก่ากว่าควรจะรักษาพฤติกรรม shared-variable แบบเดิมไว้ เพื่อไม่ให้โค้ดเดิมเปลี่ยนความหมายแบบเงียบ ๆ **verify บน 1.26.5 แล้ว: ในทางปฏิบัติเรื่องนี้ไม่จริงอีกต่อไป** การ build โค้ดชิ้นเดียวกันข้างบนภายใน module ที่ declare `go 1.21` และแม้แต่ `go 1.16` ทั้งคู่ยัง print `[0 1 2]` — พฤติกรรมแบบ per-iteration ใช้แบบไม่มีเงื่อนไขบน toolchain นี้ ไม่ว่า module จะ declare language version อะไรก็ตาม อย่าพึ่งพา `go.mod` version เก่าเพื่อ reproduce หรือรักษาพฤติกรรม aliasing แบบก่อน 1.22 บน toolchain สมัยใหม่ — ถ้าต้องอ่านโค้ดเก่าที่พึ่งพาพฤติกรรม shared-variable ให้อ่านมันเป็นข้อเท็จจริงทางประวัติศาสตร์ของภาษา ไม่ใช่สิ่งที่ยังเปิดใช้กลับได้
+
+## `%p` กับ `uintptr` ไม่ใช่สิ่งเดียวกัน
+
+`fmt.Printf("%p", p)` format address ของ pointer เป็น hex มีประโยชน์สำหรับ logging และ debugging:
+
+```go
+x := 42
+p := &x
+fmt.Printf("%p\n", p) // 0x... — the actual runtime address, format only
+```
+
+`uintptr` หน้าตาคล้ายกัน (มันคือ integer ธรรมดาที่เก็บ address โดยโครงสร้าง) แต่มัน **ไม่ใช่** pointer ในสายตาของ garbage collector GC จะ track และ update เฉพาะ value ที่เป็น pointer type เท่านั้นตอนย้าย memory — `uintptr` มองไม่เห็นสำหรับมันเลย การแปลง pointer เป็น `uintptr` ทำ arithmetic แล้วแปลงกลับ คือ operation แบบ `unsafe` ที่จบลงด้วยการชี้ไปยัง memory ที่ถูก free หรือถูกย้ายไปแล้วได้ — documentation ของ package `unsafe` เองกำหนด pattern ที่เฉพาะเจาะจงมาก (ใช้ทันที ไม่เก็บไว้) เพื่อให้ปลอดภัย โค้ด application แทบไม่ต้องใช้ `uintptr` เลย มันมีไว้สำหรับ runtime และกรณี FFI/interop ที่แคบมาก
 
 ## ไม่มี pointer arithmetic
 
@@ -148,6 +272,56 @@ func main() {
 
 <Playground code={pointersCode} />
 
+Playground ตัวที่สองเน้นหัวข้อเชิงลึกด้านบน: สามวิธีในการได้ pointer ที่เป็น zero value, nil pointer receiver, และ pointer ที่กลายเป็นของเก่าหลัง `append` reallocate
+
+export const pointersAdvancedCode = `package main
+
+import "fmt"
+
+type Config struct{ Workers int }
+
+type List struct {
+\tVal  int
+\tNext *List
+}
+
+// Sum works on a nil *List receiver — no field is dereferenced when l == nil
+func (l *List) Sum() int {
+\tif l == nil {
+\t\treturn 0
+\t}
+\treturn l.Val + l.Next.Sum()
+}
+
+func main() {
+\t// &T{}, new(T), and var t T; &t all produce an equivalent zero value
+\tp1 := &Config{}
+\tp2 := new(Config)
+\tvar v Config
+\tp3 := &v
+\tfmt.Println(*p1 == *p2, *p2 == *p3) // true true
+\tfmt.Println(p1 == p2)               // false — two distinct allocations
+
+\t// Calling a method on a nil pointer receiver is legal Go
+\tvar l *List
+\tfmt.Println(l.Sum()) // 0
+
+\tl = &List{Val: 1, Next: &List{Val: 2}}
+\tfmt.Println(l.Sum()) // 3
+
+\t// &s[i] after append can point at a stale backing array
+\ts := make([]int, 3, 3) // len == cap: no room to grow in place
+\ts[0], s[1], s[2] = 1, 2, 3
+\told := &s[1]
+
+\ts = append(s, 4) // reallocates: s now points at a new backing array
+\ts[1] = 99        // written to the NEW array only
+
+\tfmt.Println(*old, s) // old still reads from the abandoned array
+}`;
+
+<Playground code={pointersAdvancedCode} />
+
 ## Mental Model
 
 ```text
@@ -164,6 +338,19 @@ heap allocation:  GC ต้องจัดการ, เพิ่ม latency เ
 Escape Analysis ตัดสินใจว่า variable ควรอยู่บน stack หรือ heap
 ```
 
+export const escapeDiagram = `flowchart LR
+  subgraph Stack["Stack (per-goroutine, freed on return)"]
+    x["x := 42"]
+    p["p := &x"]
+  end
+  subgraph Heap["Heap (GC-managed)"]
+    c["Config{Workers: 4}"]
+  end
+  p -.->|"&x: does not escape, stays on stack"| x
+  newConfig["newConfig() returns &c"] -->|"c escapes: outlives the function"| c`;
+
+<Mermaid code={escapeDiagram} title="Pointer จะบังคับให้เกิด heap allocation ก็ต่อเมื่อ escape analysis พิสูจน์ได้ว่า value ต้องมีชีวิตอยู่เกิน function ของมัน" />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -175,9 +362,11 @@ Escape Analysis ตัดสินใจว่า variable ควรอยู่
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **pointer ใน Go อันตรายเหมือน C** — Go ไม่มี pointer arithmetic และ GC จัดการ lifetime ให้ — use-after-free เป็นไปไม่ได้ แต่ pointer ที่ยังชี้ไปยัง element เก่าหลัง `append` reallocate backing array ใหม่นั้นยังเกิดได้ (ดู [Slices](/go/th/types-data/slices/))
-- **pointer เสมอเร็วกว่า value** — pointer อาจทำให้ variable escape to heap → GC ต้องทำงานเพิ่ม → latency สูงขึ้น
-- **nil pointer = ปัญหาเหมือน NullPointerException ใน Java** — Go panic มี stack trace ชัดเจน และตรวจสอบ nil ได้ง่ายด้วย `if p == nil`
+- **pointer ใน Go อันตรายเหมือน C** — Go ไม่มี pointer arithmetic และ GC จัดการ lifetime ให้ — use-after-free เป็นไปไม่ได้ แต่ pointer ที่ยังชี้ไปยัง element เก่าหลัง `append` reallocate backing array ใหม่นั้นยังเกิดได้ (ดูหัวข้อ "`&s[i]` หลัง append อาจกลายเป็นของเก่า" ด้านบน)
+- **pointer เสมอเร็วกว่า value** — pointer อาจทำให้ variable escape to heap → GC ต้องทำงานเพิ่ม → latency สูงขึ้น; `go build -gcflags=-m` แสดงให้เห็นตรง ๆ ว่าเรื่องนี้เกิดขึ้นเมื่อไหร่
+- **nil pointer = ปัญหาเหมือน NullPointerException ใน Java** — Go panic มี stack trace ชัดเจน และตรวจสอบ nil ได้ง่ายด้วย `if p == nil` การเรียก method บน nil pointer receiver ไม่ panic ในตัวมันเองด้วยซ้ำ — panic ก็ต่อเมื่อ dereference field ผ่านมันเท่านั้น
+- **set `go 1.21` ใน `go.mod` restore พฤติกรรม shared loop-variable แบบเดิมบน toolchain ปัจจุบัน** — verify แล้วว่าไม่จริงบน 1.26.5; พฤติกรรม per-iteration (Go 1.22+) ใช้แบบไม่มีเงื่อนไข ไม่ว่า module จะ declare version อะไร
+- **`uintptr` เป็นแค่อีกชื่อของ pointer** — มันคือ integer ธรรมดาในสายตาของ garbage collector; GC ไม่ update ค่า `uintptr` ตอนย้าย memory ซึ่งเป็นเหตุผลที่ raw `uintptr` arithmetic เป็น `unsafe`
 
 > 💡 ตัวอย่างจากของจริง
 >
@@ -186,6 +375,40 @@ Escape Analysis ตัดสินใจว่า variable ควรอยู่
 <Callout title="Go มี pointer แต่ไม่มี pointer arithmetic">
 Go มีความสามารถด้าน pointer อย่างเต็มที่ — นำ address, dereference, ส่ง pointer ไปยัง function — แต่ตั้งใจไม่รวม pointer arithmetic คุณไม่สามารถบวก integer เข้ากับ pointer เพื่อเดินผ่าน memory ได้ การไม่มี pointer arithmetic ทำให้ pointer ชี้ไปยังค่าจริงของ Go เสมอ; garbage collector ตัดปัญหา use-after-free ออกไป และ bounds check ตัดปัญหา buffer overflow ออกไป หากต้องการ memory operation ระดับต่ำ package `unsafe` มีให้ใช้ แต่ควรสงวนไว้สำหรับงาน FFI และ runtime เท่านั้น
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+Bug ที่เกี่ยวกับ pointer มักไม่ crash ตรงจุดที่พลาด — มันโผล่ออกมาที่อื่นเสมอ เช็คสิ่งเหล่านี้:
+
+- Function return `&LocalStruct{...}` จากทุก code path "เผื่อ caller ต้อง mutate" ทั้งที่ caller ส่วนใหญ่แค่อ่าน field เดียวหรือเปล่า? นั่นคือ heap allocation ทุกครั้งที่เรียก — เช็คด้วย `go build -gcflags=-m` ถ้า function นี้เป็น hot path
+- Method ที่มี pointer receiver dereference field ก่อนเช็ค receiver ว่าเป็น `nil` หรือเปล่า? nil-receiver check ต้องมาก่อน และต้อง `return`/`continue` จริง ๆ ก่อนแตะ field ใด ๆ
+- มีอะไรถือ `&slice[i]` หรือ sub-slice ข้าม call ที่อาจ `append` เข้า slice เดียวกันหรือเปล่า? Reallocation จะตัดขาด pointer นั้นจาก backing array ปัจจุบันของ slice แบบเงียบ ๆ
+- Closure ที่สร้างใน loop สมมติว่าต้องใช้ workaround แบบ Go-1.21 (`i := i` ในตัว loop body) ทั้งที่ `go.mod` ของ codebase ประกาศ `go 1.22` ขึ้นไปแล้วหรือเปล่า? Workaround นั้นเป็น dead code บน language version สมัยใหม่ — ไม่เป็นอันตราย แต่เป็นสัญญาณว่าผู้เขียน (หรือ AI) ไม่รู้ว่า fix นี้ ship ไปแล้ว
+- มีโค้ดที่เปรียบเทียบหรือ format `uintptr` ราวกับ garbage collector ยังรู้ว่ามันชี้ไปไหนหรือเปล่า? `uintptr` ที่ได้จาก pointer valid แค่ชั่วขณะที่ดึงมันมาเท่านั้น — object ข้างใต้ย้ายได้ก่อนบรรทัดถัดไปจะรัน
+
+<SpotTheBug code={`type Cache struct {
+	mu   sync.Mutex
+	data map[string]int
+}
+
+func (c *Cache) Get(key string) (int, bool) {
+	if c == nil {
+		return 0, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.data[key]
+	return v, ok
+}
+
+var globalCache *Cache
+
+func main() {
+	v, ok := globalCache.Get("x")
+	fmt.Println(v, ok)
+}`}>
+โค้ดนี้ถูกต้องจริง ๆ และนั่นคือประเด็นของแบบฝึกหัดนี้ — nil check ของ `Get` มาก่อนและ return ออกไปก่อนแตะ `c.mu` หรือ `c.data` ดังนั้นการเรียกมันบน `*Cache` ที่เป็น nil (แบบที่ `main` ทำกับ `globalCache` ที่เป็น zero value) ถูกกฎหมายสมบูรณ์และ print `0 false` รูปแบบ bug ที่ต้องระวังคือโครงเดียวกันแต่ check อยู่ผิดที่หรือหายไป: ถ้า `c.mu.Lock()` รันก่อน `nil` check การเรียกแบบเดียวกันเป๊ะจะ panic ด้วย `nil pointer dereference` เพราะ `Lock()` ต้องอ่าน address ของ `c.mu` ซึ่งต้องการให้ `c` ไม่เป็น nil ก่อน เวลา review โค้ดที่ generate มาซึ่งมี nil-receiver guard ให้ยืนยันว่า guard นั้นเป็น statement แรกสุดใน method จริง ๆ ไม่ใช่แค่มีอยู่ที่ไหนสักแห่งใน function
+</SpotTheBug>
 
 export const quizPointers = [
   {
@@ -196,17 +419,8 @@ export const quizPointers = [
       "Compile error — ต้องส่ง &x",
       "x กลายเป็น 0 — argument ของ function ถูก zero"
     ],
-    answer: 1
-  },
-  {
-    q: "`&x` คืนค่าอะไร?",
-    options: [
-      "Copy ของ x",
-      "ค่าที่เก็บใน x",
-      "Pointer (*T) ที่เก็บ memory address ของ x",
-      "Bitwise AND ของ x กับตัวเอง"
-    ],
-    answer: 2
+    answer: 1,
+    explain: "Go ส่ง argument ทุกตัวแบบ value เสมอ รวมถึง pointer ด้วย — n ใน add คือ copy ที่เป็นอิสระของ x การแก้ n ไม่มีทางกระทบ x ของ caller ได้เลย"
   },
   {
     q: "เกิดอะไรขึ้นถ้าคุณ dereference nil pointer ใน Go?",
@@ -216,17 +430,41 @@ export const quizPointers = [
       "Runtime panic: nil pointer dereference",
       "ได้ undefined behavior แบบ C"
     ],
-    answer: 2
+    answer: 2,
+    explain: "การ dereference nil (*p หรือการเข้าถึง field ผ่าน nil pointer) panic เสมอด้วยข้อความที่ชัดเจนและ catch ได้ — ไม่ใช่ undefined behavior เลย ต่างจากการเรียก method บน nil receiver ซึ่งถูกกฎหมายตราบใดที่ method นั้นไม่ dereference receiver เอง"
   },
   {
-    q: "กำหนด `cfg := &Config{Workers: 4}` จะ set field Debug อย่างไร?",
+    q: "โค้ดนี้ print อะไร?\n\nfunc newConfig() *Config {\n    c := Config{Workers: 4}\n    return &c\n}\n\nfmt.Println(newConfig().Workers)",
     options: [
-      "cfg->Debug = true (แบบ C arrow operator)",
-      "(*cfg).Debug = true หรือเทียบเท่า cfg.Debug = true",
-      "cfg[Debug] = true",
-      "deref(cfg).Debug = true"
+      "Compile error — return address ของตัวแปร local ไม่ได้",
+      "Undefined behavior — c ถูกทำลายตอน newConfig return",
+      "4 — escape analysis ย้าย c ไป heap ให้มันมีชีวิตอยู่เกิน call",
+      "0 — c ถูก reset เป็น zero value ทันทีที่ newConfig return"
     ],
-    answer: 1
+    answer: 2,
+    explain: "ต่างจาก C ตรงที่ return address ของตัวแปร local ปลอดภัยสมบูรณ์ใน Go — escape analysis ของ compiler ตรวจพบว่า &c มีชีวิตอยู่เกิน function เลย allocate c บน heap แทน stack verify บน 1.26.5 ด้วย go build -gcflags=-m แล้ว: ./main.go:9:2: moved to heap: c มัน print 4"
+  },
+  {
+    q: "โค้ดนี้ print อะไร?\n\ns := make([]int, 3, 3)\ns[0], s[1], s[2] = 1, 2, 3\np := &s[1]\ns = append(s, 4)\ns[1] = 99\nfmt.Println(*p, s)",
+    options: [
+      "99 [1 99 3 4] — p และ s[1] อ้างถึง memory เดียวกันเสมอ",
+      "2 [1 99 3 4] — append reallocate แล้ว p จึงยังชี้ไปยัง array เก่า",
+      "Compile error — เอา address ของ slice element ไม่ได้",
+      "2 [1 2 3 4] — s[1] = 99 fail แบบเงียบ ๆ หลัง append"
+    ],
+    answer: 1,
+    explain: "s มี len == cap == 3 ดังนั้น append(s, 4) ไม่มีที่ว่างให้โตใน place และ allocate backing array ใหม่ทั้งหมด p ยังชี้ไปยัง array เก่า (ที่ index 1 ยังเป็น 2) ส่วน s[1] = 99 แตะแค่ array ใหม่เท่านั้น verify บน 1.26.5 แล้ว: print 2 [1 99 3 4]"
+  },
+  {
+    q: "go.mod ของ module ประกาศ `go 1.21` บน toolchain Go 1.26.5 โค้ดนี้ print อะไร?\n\nfuncs := make([]func() int, 0, 3)\nfor i := 0; i < 3; i++ {\n    funcs = append(funcs, func() int { return i })\n}\ngot := make([]int, 0, 3)\nfor _, f := range funcs {\n    got = append(got, f())\n}\nsort.Ints(got)\nfmt.Println(got)",
+    options: [
+      "[3 3 3] — go 1.21 ใน go.mod restore พฤติกรรม shared loop-variable แบบเดิม",
+      "[0 1 2] — พฤติกรรมแบบ per-iteration ใช้เสมอไม่ว่า go.mod จะประกาศ version อะไรบน toolchain นี้",
+      "Compile error — closure จับ loop variable ไม่ได้",
+      "[0 0 0] — closure จับค่าเริ่มต้นของ loop variable เสมอ"
+    ],
+    answer: 1,
+    explain: "เรื่องนี้ verify ตรง ๆ บน 1.26.5 โดย build โปรแกรมเดียวกันเป๊ะภายใต้ go.mod ที่ประกาศ go 1.21 และแม้แต่ go 1.16 — ทั้งคู่ print [0 1 2] เหมือนกับ module go 1.26 เส้นทาง compatibility ก่อน 1.22 ที่ go.mod version นั้นควรจะรักษาไว้ ไม่ restore พฤติกรรมเดิมบน toolchain นี้ อย่าพึ่งพา go directive เก่าเพื่อ reproduce มัน"
   }
 ];
 

@@ -10,6 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Arrays: the foundation
 
@@ -21,6 +22,13 @@ fmt.Println(len(arr)) // 3 — always
 ```
 
 Arrays are value types: assigning `a2 := a1` copies every element. They are useful for fixed-size data but too rigid for most work.
+
+You do not have to count the elements yourself — `[...]T{...}` asks the compiler to size the array from the literal:
+
+```go
+a := [...]int{1, 2, 3, 4}
+fmt.Printf("%T %d\n", a, len(a)) // [4]int 4 — still a genuine array, size fixed at compile time
+```
 
 ## Slices: the dynamic view
 
@@ -60,6 +68,46 @@ s = append(s, 4, 5, 6)
 
 When `len == cap`, `append` allocates a new, larger backing array, copies existing elements, and returns a slice pointing to the new array. The old slice is unaffected. **Always reassign the result of append** — `s = append(s, ...)`.
 
+## The growth policy
+
+When `append` needs a new backing array, Go does not pick a random size — it follows a growth policy so that appending `n` elements one at a time still costs `O(n)` total, not `O(n²)`. On Go 1.26.5 the policy is: **double the capacity while it is small (under 256), then grow by roughly 1.25×**, and finally round up to one of the runtime's fixed allocation size classes. That last rounding step is why the numbers are not exact powers of two or exact ×1.25 — the allocator only has certain bucket sizes available and always rounds up to the nearest one.
+
+This is exactly what produces `6 10` in the playground below: `make([]int, 3, 5)` starts at cap 5; appending 3 more elements needs cap ≥ 6, so growth doubles 5 → 10 (still in the "double" regime).
+
+Appending one element at a time and printing `cap(s)` only when it changes shows the policy directly (`go run` on 1.26.5):
+
+```go
+s := make([]int, 0)
+prevCap := cap(s)
+for i := 0; i < 2100; i++ {
+    s = append(s, i)
+    if cap(s) != prevCap {
+        fmt.Println(len(s), cap(s))
+        prevCap = cap(s)
+    }
+}
+// 1 4
+// 5 8
+// 9 16
+// 17 32
+// 33 64
+// 65 128
+// 129 256
+// 257 512    <- still doubling exactly at the 256 boundary
+// 513 848    <- now ~1.25x + size-class rounding, not a clean double
+// 849 1280
+// 1281 1792
+// 1793 2560
+```
+
+Never rely on the exact growth numbers in your own code — they are a runtime implementation detail and have changed across Go versions before. What you can rely on is the amortized `O(1)` cost per `append`. If you already know roughly how many elements you will store, pre-size with `make([]T, 0, n)` or grow explicitly with `slices.Grow(s, n)` (Go 1.21+) to skip the reallocation dance entirely — `slices.Grow` guarantees capacity for at least `n` more elements without touching `len`:
+
+```go
+s := make([]int, 2, 2)
+s = slices.Grow(s, 10)
+fmt.Println(len(s), cap(s)) // 2 12 — len unchanged, cap rounded up by the same size classes
+```
+
 ## Slicing expressions and shared backing arrays
 
 `a[low:high]` creates a new slice header that shares the same backing array:
@@ -74,6 +122,46 @@ fmt.Println(b[0]) // 99 — mutation visible through b too
 
 This is powerful (zero-copy sub-slicing) but dangerous if you forget about it.
 
+## Aliasing: `append` can overwrite a sibling slice's data
+
+The dangerous case is not `a[0] = 99` — that's an obvious, visible mutation. The dangerous case is `append`, because it looks like it should only affect `a`, but if `a` still has spare capacity inside `base`'s backing array, `append` writes directly into memory that `base` still considers "its own":
+
+```go
+base := []int{1, 2, 3, 4, 5}
+a := base[1:3] // len=2, cap=4 — a has 2 elements of spare capacity inside base
+a = append(a, 99)
+fmt.Println(base) // [1 2 3 99 5] — base[3] silently overwritten, base never touched directly
+```
+
+`a` had `cap == 4` (from index 1 to the end of `base`), so appending one element fit inside the existing array — no reallocation, no warning, just a write into `base[3]`. This is one of the most common AI-generated-Go bugs: code that takes a sub-slice "as a snapshot" or "to keep the tail for later" and then appends to either the sub-slice or the original, silently corrupting the other.
+
+The **three-index slice expression** `base[low:high:max]` fixes this by capping the new slice's capacity at `max`, so it has zero spare room and `append` is forced to allocate a fresh backing array instead of reaching into `base`:
+
+```go
+c := base[1:3:3] // len=2, cap=2 — no spare capacity, "full slice expression"
+c = append(c, 77)
+fmt.Println(base, c) // base unchanged; c now has its own independent backing array
+```
+
+Use `base[low:high:high]` (capping `max` at `high`) any time you hand out a sub-slice and do not want the receiver's `append` calls to ever reach back into your array.
+
+## Slices as function arguments
+
+A slice header is copied by value into a function, just like everything else in Go — but the copy still points at the same backing array. That gives function-argument slices a split personality:
+
+```go
+func appendElem(s []int) {
+    s[0] = -1          // writes through the shared backing array — visible to the caller
+    s = append(s, 999) // only reassigns this function's local copy of the header — invisible to the caller
+}
+
+nums := []int{1, 2, 3}
+appendElem(nums)
+fmt.Println(nums) // [-1 2 3] — the element write stuck, the append did not
+```
+
+Element writes (`s[i] = x`) are always visible to the caller because they go through the shared pointer. `append` is only visible to the caller **if the function returns the new slice and the caller reassigns it** — `nums = appendElem(nums)`. An AI-generated helper that appends to a parameter and expects the caller to see the growth without returning anything is a compile-clean, silently-wrong bug.
+
 ## `copy` for independent slices
 
 Use the built-in `copy(dst, src)` to break the sharing. It copies `min(len(dst), len(src))` elements and returns the number copied:
@@ -87,6 +175,44 @@ fmt.Println(fresh[0], dst[0]) // 10 0 — independent
 ```
 
 `slices.Clone(a)` and `append([]int(nil), a...)` give you the same result as `copy` into a fresh slice — all three produce an independent backing array.
+
+## nil vs empty slices
+
+A `nil` slice and an empty (zero-length, non-nil) slice both have `len == 0`, and most operations treat them identically — but they are not the same value, and code that assumes otherwise breaks in two places:
+
+```go
+var n []int   // nil slice: no backing array at all
+e := []int{}  // empty slice: has a backing array, just zero elements
+
+fmt.Println(n == nil, e == nil) // true false
+fmt.Println(len(n), len(e))     // 0 0 — both report zero length
+```
+
+`==` against `nil` is the only comparison a slice supports (two non-nil slices cannot be compared with `==` at all — that's a compile error), and it is the one place `nil` and `[]int{}` genuinely differ. The other place is JSON: `encoding/json` marshals a `nil` slice as `null` and an empty slice as `[]`. If an API contract promises an array field is never `null`, initialize with `make([]T, 0)` or `[]T{}`, not `var s []T`.
+
+You almost never need to construct a `nil` slice on purpose — a `var s []T` zero value already is one, and it is perfectly safe to `append` to (append allocates on first use). Reserve `[]T{}` for the cases where an empty-but-present array actually means something different to a caller.
+
+## Memory retention from sub-slicing a large buffer
+
+Because a sub-slice shares its backing array with the slice it came from, keeping even a tiny sub-slice alive keeps the **entire** original backing array alive — the garbage collector cannot reclaim any of it as long as one live slice header still points into it. This is easy to miss when the pattern is "read a big buffer, keep a small interesting piece of it":
+
+```go
+// bigBuf might be a 64 KB read buffer from a network connection or bufio.Reader
+bigBuf := make([]byte, 65536)
+// ... fill bigBuf ...
+header := bigBuf[:16] // "just the first 16 bytes" — but header.cap reaches to the end of bigBuf
+store(header)         // if store() keeps header around, all 65536 bytes stay alive
+```
+
+The fix is the same tool used earlier to break aliasing: `copy` the interesting part into a freshly, correctly sized slice before discarding the reference to the big buffer, so only the small piece survives:
+
+```go
+headerCopy := make([]byte, 16)
+copy(headerCopy, bigBuf[:16])
+store(headerCopy) // bigBuf can now be garbage-collected once it goes out of scope
+```
+
+Watch for this pattern anywhere a long-lived slice is derived from slicing (not copying) a large, short-lived buffer — `bufio.Scanner.Bytes()` documents exactly this hazard: the returned slice is only valid until the next `Scan()` call, precisely because it aliases the scanner's internal buffer.
 
 ## `min`, `max`, `clear`, and the `slices` package
 
@@ -145,6 +271,51 @@ func main() {
 
 <Playground code={slicesCode} />
 
+The next playground focuses purely on the depth topics above: aliasing through `append`, the three-index slice expression, slices as function arguments, nil vs empty, and range copying elements.
+
+export const sliceAliasingCode = `package main
+
+import "fmt"
+
+// appendElem writes through the shared backing array, but growing via append
+// only updates this function's local copy of the slice header.
+func appendElem(s []int) {
+\ts[0] = -1          // visible to the caller
+\ts = append(s, 999) // invisible to the caller
+}
+
+func main() {
+\t// Aliasing: append can silently overwrite a sibling slice's data
+\tbase := []int{1, 2, 3, 4, 5}
+\ta := base[1:3] // len=2 cap=4 -- spare capacity inside base
+\ta = append(a, 99)
+\tfmt.Println(base) // [1 2 3 99 5] -- base[3] overwritten
+
+\t// The three-index slice expression removes the spare capacity
+\tc := base[1:3:3] // len=2 cap=2 -- no room left
+\tc = append(c, 77)
+\tfmt.Println(base, c) // base untouched, c has its own backing array
+
+\t// Slices as function arguments
+\tnums := []int{1, 2, 3}
+\tappendElem(nums)
+\tfmt.Println(nums) // [-1 2 3]
+
+\t// nil vs empty
+\tvar n []int
+\te := []int{}
+\tfmt.Println(n == nil, e == nil, len(n), len(e)) // true false 0 0
+
+\t// range copies each element into v
+\tvals := []int{1, 2, 3}
+\tfor _, v := range vals {
+\t\tv *= 10
+\t}
+\tfmt.Println(vals) // [1 2 3] -- unchanged
+}`;
+
+<Playground code={sliceAliasingCode} />
+
 ## Mental Model
 
 ```text
@@ -181,6 +352,35 @@ append past cap:
 Two important rules to internalize. First: `append` returns a new slice header — if growth caused a reallocation you now have a completely new backing array. Never ignore the return value. Second: `a[low:high]` does not copy data — both slices share the same backing array. A write through one is visible through the other. Use `copy` when you need a truly independent slice.
 </Callout>
 
+## Reading AI-generated code
+
+When you read a slice-heavy function an AI wrote (or wrote yourself quickly), check these before trusting it:
+
+- Does it slice a parameter or a struct field (`x[a:b]`) and then hand the result to something long-lived? That sub-slice keeps the *entire* original backing array alive, and if the original is later mutated or appended-to, the sub-slice can see writes it should not.
+- Does it `append` to a slice that was created by slicing another slice (`sub := big[i:j]`), without a three-index expression? If `sub` still has spare capacity inside `big`, that `append` can silently corrupt `big`'s data past index `j`.
+- Does a function `append` to a slice parameter and expect the caller to see the new elements without the function returning the slice? Only element writes (`s[i] = x`) are guaranteed visible to the caller — growth is not.
+- Does it compare a slice to `nil` when it actually meant "is this empty," or vice versa (e.g. relying on JSON `null` vs `[]` without checking which one the code path produces)?
+- Does a loop do `for _, v := range s { v = ... }` and expect `s` to change? `v` is a copy; only `s[i] = ...` (or `for i := range s`) mutates the original.
+
+<SpotTheBug code={`func dedupe(nums []int) []int {
+	out := nums[:0]
+	for i, n := range nums {
+		if i == 0 || n != nums[i-1] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func main() {
+	data := []int{1, 1, 2, 3, 3}
+	backup := data[2:] // keep the tail "just in case"
+	result := dedupe(data)
+	fmt.Println(result, backup)
+}`}>
+`out := nums[:0]` reuses `nums`'s own backing array as the destination — a common, usually-correct in-place dedupe trick. But `backup := data[2:]` aliases that *same* array, starting at index 2. As `dedupe` writes deduplicated values forward (`1, 2, 3` land at indices 0, 1, 2), it overwrites index 2 — which is exactly where `backup` starts. Verified output on 1.26.5: `[1 2 3] [3 3 3]` — `backup` was silently corrupted by `dedupe`'s in-place writes, even though `dedupe` never touched a variable named `backup`. The fix: either don't write in place (`out := make([]int, 0, len(nums))`), or take `backup` as an independent copy (`backup := slices.Clone(data[2:])`) before calling anything that might mutate `data`'s backing array in place.
+</SpotTheBug>
+
 export const quizSlices = [
   {
     q: "You write `s = append(s, 1)` when `len(s) == cap(s)`. What does Go do?",
@@ -190,17 +390,8 @@ export const quizSlices = [
       "Go allocates a new, larger backing array, copies existing elements, and returns a new slice pointing to it",
       "Go extends the existing array in place"
     ],
-    answer: 2
-  },
-  {
-    q: "You have `base := []int{1, 2, 3}` and `a := base[0:2]`. You then set `a[0] = 99`. What is `base[0]`?",
-    options: [
-      "1 — a is an independent copy",
-      "99 — a and base share the same backing array",
-      "0 — the slice header is zeroed after slicing",
-      "A panic — you cannot mutate a slice created from another slice"
-    ],
-    answer: 1
+    answer: 2,
+    explain: "There is no fixed-capacity panic in Go — append past cap always reallocates: a new, larger backing array is created, the existing elements are copied into it, and append returns a slice header pointing at the new array. The old backing array is untouched but abandoned by this slice."
   },
   {
     q: "What does `make([]string, 4, 10)` create?",
@@ -210,7 +401,8 @@ export const quizSlices = [
       "An array of 10 strings with 4 elements filled",
       "A compile error — make takes only one size argument for slices"
     ],
-    answer: 1
+    answer: 1,
+    explain: "make's arguments for a slice are (type, len, cap) in that order — len=4 usable zero-valued elements, backed by an array with room for 10 before the next reallocation."
   },
   {
     q: "What is the idiomatic way to ensure two slices do NOT share a backing array?",
@@ -222,6 +414,39 @@ export const quizSlices = [
     ],
     answer: 1,
     explain: "`a[:]` and `b := a` both copy only the slice header — the backing array is still shared. `copy(dst, src)`, `slices.Clone(a)`, and `append([]T(nil), a...)` are all correct ways to get an independent backing array; option D's claim about `slices.Clone` is false, which is why it is wrong here."
+  },
+  {
+    q: "What does this print?\n\nbase1 := []int{1, 2, 3}\na := base1[:2]\na = append(a, 99)\nfmt.Println(base1)",
+    options: [
+      "[1 2 3]",
+      "[1 2 99]",
+      "panic: index out of range",
+      "[1 2 3 99]"
+    ],
+    answer: 1,
+    explain: "base1[:2] has len=2 but cap=3 (it reaches to the end of base1's 3-element array), so appending one element fits inside the existing array at index 2 — overwriting base1[2] (the 3) with 99. Verified on 1.26.5: prints [1 2 99]. base1 itself never grows length, so option D (which assumes base1's own length changed) is also wrong."
+  },
+  {
+    q: "Same setup, but sliced with a three-index expression this time — what does this print?\n\nbase2 := []int{1, 2, 3}\nc := base2[:2:2]\nc = append(c, 99)\nfmt.Println(base2)",
+    options: [
+      "[1 2 99]",
+      "[1 2 3]",
+      "A compile error — three-index slicing is invalid here",
+      "[99 2 3]"
+    ],
+    answer: 1,
+    explain: "base2[:2:2] caps c's capacity at 2, matching its length — no spare room inside base2's array. append is forced to allocate a brand-new backing array for c, so base2 is left completely untouched. Verified on 1.26.5: prints [1 2 3]."
+  },
+  {
+    q: "What does this print?\n\nfunc f(s []int) {\n    s[0] = 100\n    s = append(s, 1)\n}\n\nnums := []int{1, 2, 3}\nf(nums)\nfmt.Println(nums)",
+    options: [
+      "[1 2 3] — f only modifies its own local copy",
+      "[100 2 3] — the element write is visible, but the append is not",
+      "[100 2 3 1] — both the write and the append are visible",
+      "A compile error — slices cannot be passed to functions by value"
+    ],
+    answer: 1,
+    explain: "s[0] = 100 writes through the shared backing array, so the caller sees it. s = append(s, 1) only reassigns f's local copy of the slice header — nums in main never gets that new header, so the 1 goes nowhere the caller can see. Verified on 1.26.5: prints [100 2 3]."
   }
 ];
 

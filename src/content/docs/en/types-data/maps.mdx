@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Creating a map
 
@@ -56,6 +58,24 @@ if !ok {
 }
 ```
 
+## Nil maps: readable, not writable
+
+The zero value of a map type is `nil` — not an empty, ready-to-use map. A `nil` map behaves like an empty map for every **read** operation, but panics on write:
+
+```go
+var m map[string]int
+fmt.Println(m["a"], len(m)) // 0 0 — reading a nil map is completely safe
+m["a"] = 1                  // panic: assignment to entry in nil map
+```
+
+Verified on 1.26.5, the panic is exactly:
+
+```text
+panic: assignment to entry in nil map
+```
+
+This is one of the most common AI-generated-Go bugs: a struct field declared as `map[string]int` with no explicit initialization looks like a normal zero value, and it compiles fine right up until the first write. Always initialize a map you intend to write to — `make(map[string]int)` or a composite literal — either at declaration or in a constructor.
+
 ## Maps are reference types
 
 Assigning a map copies the header, not the data. Both variables point to the same underlying hash table:
@@ -65,6 +85,110 @@ a := map[string]int{"x": 1}
 b := a
 b["x"] = 99
 fmt.Println(a["x"]) // 99 — a and b share the same map
+```
+
+## Maps as function arguments
+
+Because a map value is really just a pointer to the runtime's hash table, passing a map to a function passes that pointer by value — the function gets its own copy of the header, but both headers point at the same table. There is no way to prevent a function from mutating a map you hand it, and no need to return it — the caller already sees every change:
+
+```go
+func setAll(m map[string]int, v int) {
+    for k := range m {
+        m[k] = v
+    }
+}
+
+scores := map[string]int{"a": 1, "b": 2}
+setAll(scores, 9)
+fmt.Println(scores["a"], scores["b"]) // 9 9 — the caller's map was mutated directly
+```
+
+## Concurrent map writes are unrecoverable
+
+A Go map is **not** safe for concurrent access. Two goroutines writing to the same map at the same time do not race quietly — the runtime detects it and crashes the whole process immediately, and this crash cannot be caught with `recover()`:
+
+```go
+m := make(map[int]int)
+var wg sync.WaitGroup
+for i := 0; i < 20; i++ {
+    wg.Add(1)
+    go func(n int) {
+        defer wg.Done()
+        for j := 0; j < 10000; j++ {
+            m[n] = j
+        }
+    }(i)
+}
+wg.Wait()
+```
+
+Verified on 1.26.5 (`go run`), this reliably terminates with:
+
+```text
+fatal error: concurrent map writes
+
+goroutine 27 [running]:
+internal/runtime/maps.fatal(...)
+...
+```
+
+`fatal error` (not `panic:`) is Go's signal for "this is not a recoverable application error, this is a runtime-integrity violation" — the same category as an out-of-memory kill or a stack overflow. If multiple goroutines need to read and write the same map, protect every access with a `sync.RWMutex` (`RLock`/`RUnlock` for reads, `Lock`/`Unlock` for writes), or use `sync.Map` when the access pattern is dominated by disjoint keys per goroutine or a small number of keys under heavy contention. `sync.RWMutex` around a plain map is usually the better default — `sync.Map` optimizes for a narrower workload and loses type safety (its API takes and returns `any`).
+
+## Map values are not addressable
+
+You cannot take the address of a map element, and you cannot call a pointer-receiver method or assign to a field of a struct stored directly in a map:
+
+```go
+type Point struct{ X, Y int }
+m := map[string]Point{"origin": {0, 0}}
+m["origin"].X = 5 // compile error
+```
+
+Verified on 1.26.5 (`go build`):
+
+```text
+./main.go:7:2: cannot assign to struct field m["origin"].X in map
+```
+
+The same applies to `&`:
+
+```go
+mm := map[string]int{"a": 1}
+p := &mm["a"] // compile error
+```
+
+```text
+./main.go:5:8: invalid operation: cannot take address of m["a"] (map index expression of type int)
+```
+
+The reason is structural, not arbitrary: a map can rehash and move every entry to a new bucket layout at any time (on grow, or with the Swiss-table implementation used since Go 1.24). A pointer into the old bucket would silently point at stale or reused memory after a rehash, so the compiler refuses to create one in the first place. Fix it with the copy-modify-store pattern, or switch to storing pointers:
+
+```go
+p := m["origin"] // load a copy
+p.X = 5
+m["origin"] = p  // store it back
+
+// or: map[string]*Point avoids the copy round-trip entirely
+m2 := map[string]*Point{"origin": {0, 0}}
+m2["origin"].X = 5 // fine — *Point is addressable through the pointer already stored in the map
+```
+
+## Mutating a map during range
+
+Deleting the current key during a `range` is explicitly safe and specified — the deleted key is simply not produced by later iterations. Adding new keys during a `range` is a different story: the language spec leaves it **unspecified** whether a newly-added key is visited in that same loop. Never write a loop whose correctness depends on seeing (or not seeing) a key it just inserted.
+
+## Composite keys
+
+Any comparable type can be a map key, including a struct. This is a common, idiomatic way to build a multi-part lookup (a 2D coordinate, a (userID, resourceID) pair) without concatenating strings:
+
+```go
+type Coord struct{ X, Y int }
+
+grid := map[Coord]string{
+    {0, 0}: "origin",
+    {1, 1}: "diag",
+}
+fmt.Println(grid[Coord{0, 0}]) // origin
 ```
 
 ## Iteration order is randomized
@@ -95,6 +219,17 @@ for _, k := range slices.Sorted(maps.Keys(scores)) {
 ```
 
 Two more modern helpers: `clear(m)` (Go 1.21) removes every entry, and `maps.Clone`/`maps.Copy` replace hand-written copy loops.
+
+## Sizing a map up front
+
+`make(map[K]V, hint)` pre-sizes the map's internal storage for roughly `hint` entries, avoiding the incremental regrowth (and rehashing) that happens when a map created with `make(map[K]V)` fills up gradually. `hint` is only a hint, not a hard limit — the map still grows past it if needed:
+
+```go
+big := make(map[int]bool, 100)
+fmt.Println(len(big)) // 0 — hint pre-sizes storage; it does not create entries
+```
+
+Since Go 1.24, the runtime's map implementation is a Swiss-table design (open addressing with SIMD-friendly metadata) rather than the earlier bucket-and-overflow-chain layout — it's faster and uses less memory, but the language-level contract you have already learned in this lesson (no ordering, no addressability, not concurrency-safe) is completely unchanged.
 
 export const mapsCode = `package main
 
@@ -133,6 +268,63 @@ func main() {
 
 <Playground code={mapsCode} />
 
+The second playground focuses on the depth topics above: maps as function arguments, the copy-modify-store pattern for map values, safely deleting during range, and sizing with a hint.
+
+export const mapsAdvancedCode = `package main
+
+import "fmt"
+
+type Point struct{ X, Y int }
+
+func setAll(m map[string]int, v int) {
+\tfor k := range m {
+\t\tm[k] = v
+\t}
+}
+
+func main() {
+\t// Maps as function arguments: the callee mutates the caller's map directly
+\tm := map[string]int{"a": 1, "b": 2}
+\tsetAll(m, 9)
+\tfmt.Println(m["a"], m["b"])
+
+\t// Map values are not addressable: load, modify, store back
+\tpoints := map[string]Point{"origin": {X: 0, Y: 0}}
+\tp := points["origin"]
+\tp.X = 5
+\tpoints["origin"] = p
+\tfmt.Println(points["origin"])
+
+\t// Deleting the CURRENT key during range is safe and specified
+\tscores := map[string]int{"a": 1, "b": 2, "c": 3}
+\tfor k := range scores {
+\t\tif k == "b" {
+\t\t\tdelete(scores, "b")
+\t\t}
+\t}
+\tfmt.Println(len(scores))
+
+\t// make with a size hint pre-sizes storage; it does not create entries
+\tbig := make(map[int]bool, 100)
+\tfmt.Println(len(big))
+}`;
+
+<Playground code={mapsAdvancedCode} />
+
+## Mental Model
+
+export const mapBucketDiagram = `flowchart LR
+  H["hash(key)"] --> B0["bucket 0"]
+  H --> B1["bucket 1"]
+  H --> B2["bucket 2 (probed on collision)"]
+  B0 --> E0["key/value slots"]
+  B1 --> E1["key/value slots"]
+  B2 --> E2["key/value slots"]`;
+
+<Mermaid code={mapBucketDiagram} title="A Go map hashes each key to a bucket; colliding keys probe to another bucket" />
+
+A map is a hash table: `hash(key)` picks a bucket, and the entry lives in one of that bucket's slots (or a neighboring bucket, if the first one is full — "probing"). This single picture explains three rules from this lesson at once: lookup/insert/delete are `O(1)` on average because hashing jumps straight to a bucket; iteration order is random because there is no reason to visit buckets in any particular order; and a value stored in a bucket slot is not addressable because a grow/rehash can move it to a completely different bucket at any time.
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -157,6 +349,32 @@ func main() {
 Go intentionally randomizes map iteration order on every program run. This prevents bugs that silently depend on hash ordering. If you need stable output — for tests, logs, or user-facing data — collect the keys into a `[]string`, call `sort.Strings`, then range over the sorted slice. Never rely on the order of `for k, v := range myMap`.
 </Callout>
 
+## Reading AI-generated code
+
+Maps are one of the easiest places for generated code to compile cleanly and still be wrong. Check for these:
+
+- Is a map field on a struct ever written to without first checking it was initialized (`make` in a constructor, or a check-and-init on first use)? A zero-value struct field of map type is `nil`, and the first write panics.
+- Does any code try to assign into a field or index of a map value directly (`m[k].Field = x`, `m[k][i] = x`)? Both are compile errors — map values are not addressable.
+- Does a goroutine write to a shared map without a `sync.RWMutex` or `sync.Map` anywhere in sight? This compiles and often "works" in testing, then crashes the whole process in production under real concurrency.
+- Does a loop add new keys to the map it is currently ranging over, expecting a specific, deterministic outcome? The spec leaves this unspecified — the code may work today and break on a different Go version or GOMAXPROCS setting.
+- Is a map passed to a function that the author believed would receive "a copy" (some comment like `// safe, m is a local copy`)? The copy is only the header — the callee can still mutate every entry.
+
+<SpotTheBug code={`type Config struct {
+	Counts map[string]int
+}
+
+func NewConfig() *Config {
+	return &Config{}
+}
+
+func main() {
+	c := NewConfig()
+	c.Counts["hits"]++
+	fmt.Println(c.Counts)
+}`}>
+`NewConfig` returns a `*Config` whose `Counts` field was never initialized — the zero value of `map[string]int` is `nil`, not an empty map. `c.Counts["hits"]++` is a read-then-write; the read half is fine (returns 0 for a nil map), but the write half panics. Verified on 1.26.5: `panic: assignment to entry in nil map`. Fix `NewConfig` to initialize the field: `return &Config{Counts: make(map[string]int)}`.
+</SpotTheBug>
+
 export const quizMaps = [
   {
     q: "You read `scores[\"Dave\"]` but \"Dave\" was never added. What does Go return?",
@@ -166,7 +384,8 @@ export const quizMaps = [
       "The zero value for the value type (0 for int)",
       "An error value"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Reading a missing key from any map — including a nil map — never panics; it returns the zero value for the map's value type. int's zero value is 0."
   },
   {
     q: "What does the second return value in `v, ok := scores[\"Alice\"]` tell you?",
@@ -176,27 +395,41 @@ export const quizMaps = [
       "Whether the map has remaining capacity",
       "Whether the key is a valid string"
     ],
-    answer: 1
+    answer: 1,
+    explain: "The comma-ok form is the only reliable way to distinguish \"key absent\" from \"key present with the zero value\" — both otherwise return the same v."
   },
   {
-    q: "You assign `b := a` where a is a `map[string]int`. You then set `b[\"x\"] = 99`. What is `a[\"x\"]`?",
+    q: "What does this print?\n\nvar m map[string]int\nfmt.Println(m[\"a\"])\nm[\"a\"] = 1",
     options: [
-      "0 — b is an independent copy of a",
-      "99 — maps are reference types; a and b point to the same hash table",
-      "A panic — you cannot assign maps directly",
-      "The original value of a[\"x\"] before the assignment"
+      "0, then the program continues normally",
+      "0, then panic: assignment to entry in nil map",
+      "A compile error — you cannot declare a map without make",
+      "1, then 1 again"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A nil map (the zero value of a map type) supports reads exactly like an empty map — m[\"a\"] safely prints 0. The write on the next line is where it breaks: verified on 1.26.5, m[\"a\"] = 1 panics with exactly panic: assignment to entry in nil map."
   },
   {
-    q: "Why does Go randomize map iteration order?",
+    q: "Twenty goroutines all execute `m[n] = j` on the same `map[int]int` with no locking. What actually happens when you run it?",
     options: [
-      "To improve hash table performance",
-      "To prevent programs from accidentally depending on an undefined, implementation-specific ordering",
-      "To reduce memory usage",
-      "It does not randomize — the order is always alphabetical by key"
+      "Go silently serializes the writes — maps have an internal lock",
+      "It's a data race, but the program keeps running with a possibly-wrong final map",
+      "fatal error: concurrent map writes — and this cannot be recovered with recover()",
+      "A compile error — the compiler detects concurrent map access statically"
     ],
-    answer: 1
+    answer: 2,
+    explain: "Verified on 1.26.5 with go run: the runtime detects concurrent map writes and terminates the whole process with fatal error: concurrent map writes. Unlike a panic, a fatal error is not catchable by any recover() in the program — this is a hard crash, not an exception."
+  },
+  {
+    q: "Given `type Point struct{ X, Y int }` and `m := map[string]Point{\"o\": {0, 0}}`, why does `m[\"o\"].X = 5` fail to compile?",
+    options: [
+      "Point does not implement an interface required by maps",
+      "Map values are not addressable — a rehash could move the entry before the assignment completes",
+      "Struct values can never be stored in maps",
+      "X is unexported outside the package (it is not — this option is a distractor)"
+    ],
+    answer: 1,
+    explain: "Verified on 1.26.5 with go build: ./main.go:7:2: cannot assign to struct field m[\"origin\"].X in map. Structs can absolutely be map values (option C is false) — the compiler specifically forbids taking an address into a map slot because a grow/rehash can relocate it at any time. Load the value, mutate the copy, store it back."
   }
 ];
 

@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ทำไมต้องมี iterator?
 
@@ -56,6 +58,44 @@ for v := range Count(5) {
 
 เพราะลำดับถูกผลิตตามความต้องการ `Count(1_000_000_000)` จึงไม่มีต้นทุนจนกว่าจะเริ่มวน — และถ้าหยุดหลังสามตัว ก็ผลิตแค่สามตัว
 
+## การใช้ iterator ซ้ำหลัง early exit จะ panic
+
+กฎ `yield == false` จากหัวข้อก่อนหน้าไม่ใช่แค่คำแนะนำ — iterator ที่ไม่สนใจมันแล้วยังเรียก `yield` ต่อหลังจากที่มันคืน `false` ไปแล้วครั้งหนึ่งคือ runtime error ไม่ใช่แค่ bug ทาง logic:
+
+```go
+func Count(n int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for i := 0; i < n; i++ {
+			yield(i) // BUG: ignores yield's return value and keeps going
+		}
+	}
+}
+```
+
+ตรวจสอบแล้วบน 1.26.5 การเรียกโค้ดนี้แล้ว break ออกจาก loop `range` ก่อนจบจะ panic:
+
+```
+panic: runtime error: range function continued iteration after function for loop body returned false
+```
+
+Go runtime ติดตามว่า loop body ขอหยุดไปแล้วหรือยังและบังคับใช้กฎนี้ — iterator ที่เขียนเองทุกตัวต้องเช็กค่าที่ `yield` คืนกลับมาและ return ทันทีเมื่อมันเป็น `false` เหมือนที่ `Count` ทำไว้ก่อนหน้านี้ในบทเรียน
+
+## defer ข้างใน range-over-func body
+
+`defer` ที่เขียนไว้ข้างใน body ของ `for ... range someIterator` ไม่ได้รันตอนจบแต่ละ iteration — มันรันตอนที่ **function ที่ครอบมันอยู่** return เพราะ loop body ถูก compile เป็น closure ที่ iterator เรียกซ้ำ ๆ และ `defer` ทุกตัวข้างในนั้นถูกผูกกับ function ที่มี `for` loop อยู่ ไม่ใช่ผูกกับ closure เอง:
+
+```go
+func process() {
+	for v := range Count(3) {
+		defer fmt.Println("deferred for", v) // queues up, doesn't run yet
+		fmt.Println("processing", v)
+	}
+	fmt.Println("loop finished")
+}
+```
+
+ตรวจสอบแล้วบน 1.26.5 โค้ดนี้พิมพ์ทั้งสามบรรทัด `"processing"` และ `"loop finished"` **ก่อน** บรรทัด `"deferred for"` ใด ๆ — deferred call ทั้งสามตัวสะสมข้าม iteration และรันตามลำดับ LIFO ก็ต่อเมื่อ `process` เอง return โค้ดที่คาดหวังว่า `defer` ข้างใน range-over-func loop จะทำงานเหมือน `defer` ตอนจบ iteration เดียว (เหมือนเป็น body ของ `for` loop ธรรมดา) จะแปลกใจ — ให้ใช้ helper function ต่อ iteration หรือเรียก cleanup ตรง ๆ แทน `defer` ถ้าต้องการให้มันเกิดขึ้นทุกรอบของ loop
+
 ## Iterator บน type ของคุณเอง
 
 รูปแบบ idiomatic คือ method ชื่อ `All`, `Keys`, `Values` หรือทำนองนั้น ที่คืน iterator แทน slice:
@@ -80,6 +120,24 @@ for i, v := range list.All() {
 
 caller ไม่ต้องแตะ backing slice และคุณเปลี่ยน representation ทีหลังได้อิสระ — linked list, database cursor, HTTP API แบบแบ่งหน้า — โดย loop ไม่ต้องเปลี่ยนเลย
 
+## Single-pass เทียบกับ re-iterable
+
+ไม่มีอะไรใน type ของ `iter.Seq` บังคับให้ลำดับต้องรองรับการ range ซ้ำมากกว่าหนึ่งครั้ง — ขึ้นอยู่กับสิ่งที่ closure ทำทั้งหมด `List.All()` ด้านบนเป็น re-iterable: ทุกการเรียกสร้าง closure ใหม่ที่อ่าน `l.items` ตั้งแต่ต้น ส่วนลำดับที่อิงกับสิ่งที่ถูก "ใช้ไป" ตอนอ่าน — channel, network connection, bufio scanner — เป็น single-pass: เมื่อดึงหมดแล้ว การ range ค่า `iter.Seq` ตัวเดิมอีกครั้งจะไม่ให้อะไรเลย เงียบ ๆ:
+
+```go
+func FromChannel(ch <-chan int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for v := range ch {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+```
+
+ตรวจสอบแล้วบน 1.26.5: การ range `seq := FromChannel(ch)` ตัวเดิมสองครั้งจะพิมพ์ค่าของ channel ในรอบแรก แล้วไม่พิมพ์อะไรเลยในรอบที่สอง — ไม่มี error ไม่มี panic แค่ loop ที่ว่างเปล่า เพราะ channel ถูกดึงจนหมดไปแล้ว เมื่อ function คืนค่า `iter.Seq` ไม่มีอะไรใน type บอกว่ามัน range ซ้ำได้ปลอดภัยหรือเปล่า ต้องเช็ก doc comment หรือ source เหมือนที่ทำกับ function ที่คืน `*bufio.Reader`
+
 ## Standard library พูดภาษา iterator
 
 ตั้งแต่ Go 1.23 package `slices` และ `maps` (ส่วน `strings`/`bytes` ตั้งแต่ Go 1.24) ทั้ง **ผลิต** และ **ใช้** iterator:
@@ -102,6 +160,32 @@ for part := range strings.SplitSeq(csv, ",")   { /* no []string allocated */ }
 ```
 
 `slices.Collect`, `slices.Sorted`, `slices.SortedFunc`, `maps.Collect` และ `maps.Insert` คือสะพานกลับสู่ข้อมูลจริง ส่วน `strings.SplitSeq` และ `strings.FieldsSeq` คือฝาแฝดแบบ lazy ของ `Split` และ `Fields`
+
+helper อีกไม่กี่ตัวที่ควรรู้จักชื่อไว้:
+
+| Function | ผลิตอะไร |
+|----------|----------|
+| `slices.Backward(s)` | `iter.Seq2[int, E]` — คู่ index/value เรียงจาก index มากไปน้อย |
+| `slices.Chunk(s, n)` | `iter.Seq[Slice]` — sub-slice ต่อเนื่องขนาดไม่เกิน `n` element |
+| `maps.Values(m)` | `iter.Seq[V]` — เฉพาะ value เท่านั้น ลำดับไม่กำหนด |
+| `maps.Keys(m)` | `iter.Seq[K]` — เฉพาะ key เท่านั้น ลำดับไม่กำหนด |
+
+## maps.Keys คืน iter.Seq ไม่ใช่ slice
+
+ก่อน Go 1.23 `maps.Keys` (ใน `golang.org/x/exp/maps`) คืน `[]K` แต่ version ใน standard library คืน `iter.Seq[K]` แทน — เป็น function ไม่ใช่ slice — ดังนั้นโค้ดที่เขียนตามรูปแบบเก่าจะพังตอน compile time แทนที่จะทำงานผิดเงียบ ๆ:
+
+```go
+m := map[string]int{"z": 1, "a": 2}
+sort.Strings(maps.Keys(m)) // BUG: maps.Keys returns iter.Seq[string], not []string
+```
+
+ตรวจสอบแล้วบน 1.26.5 นี่คือ compile error:
+
+```
+cannot use maps.Keys(m) (value of func type iter.Seq[string]) as []string value in argument to sort.Strings
+```
+
+ทางแก้ปรากฏอยู่แล้วก่อนหน้านี้ในบทเรียน: `slices.Sorted(maps.Keys(m))` รวบรวม iterator ให้เป็น `[]string` ที่ sort แล้วในการเรียกครั้งเดียว แทนที่รูปแบบเก่าสองขั้นตอน "รวบรวมเป็น slice แล้วค่อย `sort.Strings`" ไปเลย
 
 `filter` เล็ก ๆ ไว้อ้างอิง — combinator แบบนี้ประกอบกันได้เป็นธรรมชาติ:
 
@@ -128,6 +212,23 @@ v, ok := next() // 0, true
 ```
 
 `iter.Pull` ใช้ coroutine อยู่ข้างใน จึงช้ากว่า `range` ธรรมดา ใช้เฉพาะเมื่อจำเป็นต้องได้รูปแบบ pull จริง ๆ
+
+export const pullFlowDiagram = `flowchart LR
+  subgraph Push["push (for ... range seq)"]
+    Producer["iterator drives"] --> Body["loop body runs as yield callback"]
+  end
+  subgraph Pull["pull (iter.Pull)"]
+    Caller["caller drives"] -->|"next()"| Coroutine["iterator's coroutine resumes to the next yield"]
+    Coroutine -->|"value, true"| Caller
+    Caller -->|"stop()"| Coroutine
+    Coroutine -->|"releases resources"| Done["coroutine exits"]
+  end`;
+
+<Mermaid code={pullFlowDiagram} title="Push: iterator เป็นฝ่ายเรียกเรา Pull: เราเป็นฝ่ายเรียก iterator และต้องเรียก stop() เมื่อเสร็จ" />
+
+## iter.Pull ต้องการ stop()
+
+contract อย่างเป็นทางการจาก doc ของ package `iter`: `stop` "must be called when the caller is no longer interested in next values and next has not yet signaled that the sequence is over" ในทางปฏิบัติ `iter.Pull` รัน push iterator เดิมบน coroutine ที่ suspend ตัวเองระหว่างแต่ละค่า `stop()` คือสิ่งที่บอกให้ coroutine นั้น unwind และปล่อยสิ่งที่มันถืออยู่ — ถ้าไม่เรียก การใช้ `next()` แล้วเลิกกลางทางจะทำให้ coroutine ค้างอยู่แบบนั้นตลอดไป การเรียก `stop` ซ้ำหลายครั้งถูกต้องเสมอ และเรียก `next` หลัง `stop` ก็ถูกต้องเช่นกัน (มันจะคืน zero value กับ `false` ต่อไป) — นี่คือเหตุผลที่ `defer stop()` ทันทีหลัง `iter.Pull` เป็น pattern มาตรฐาน เหมือน reflex เดียวกับ `defer resp.Body.Close()` หรือ `defer f.Close()`
 
 ## แนวทางการออกแบบ
 
@@ -205,6 +306,109 @@ func main() {
 \tfmt.Println(slices.Sorted(maps.Keys(m)))
 }`;
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ AI generate เขียนหรือใช้ iterator ให้มองหาสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- iterator ที่เขียนเองเพิกเฉยต่อค่าที่ `yield` คืนกลับมาแล้วยัง loop ต่อหลังจากมันคืน `false` หรือเปล่า? นั่นคือ runtime panic ไม่ใช่ bug ที่เงียบ
+- `sort.Strings`, `sort.Ints` หรือคล้ายกันถูกเรียกตรง ๆ กับผลลัพธ์ของ `maps.Keys`/`maps.Values`/`slices.Values` หรือเปล่า? สิ่งเหล่านั้นคืน `iter.Seq` ไม่ใช่ slice — compile ไม่ผ่าน
+- `defer` ข้างใน range-over-func loop body ถูกสมมติว่ารันครั้งเดียวต่อ iteration สำหรับ cleanup ที่ต้องเกิดทุกรอบของ loop หรือเปล่า?
+- โค้ด range ค่า `iter.Seq` เดิมซ้ำเป็นครั้งที่สอง โดยคาดหวังผลลัพธ์เดิม ทั้งที่ source ข้างใต้ (channel, scanner, network read) ดึงได้แค่ครั้งเดียวหรือเปล่า?
+- `iter.Pull` ถูกใช้โดยไม่มี `defer stop()` ครอบทุก return path รวมถึง early return และ error หรือเปล่า?
+
+<SpotTheBug code={`func Count(n int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for i := 0; i < n; i++ {
+			yield(i)
+		}
+	}
+}
+
+func main() {
+	for v := range Count(5) {
+		if v == 2 {
+			break
+		}
+		fmt.Println(v)
+	}
+}`}>
+iterator ของ `Count` เรียก `yield(i)` แต่ไม่เช็กค่าที่คืนกลับมาเลย จึงยังเรียก `yield` ต่อทุก `i` ที่เหลือ แม้ loop จะ break ออกไปแล้วก็ตาม ตรวจสอบแล้วบน 1.26.5: โค้ดนี้ panic ด้วย `panic: runtime error: range function continued iteration after function for loop body returned false` ทางแก้คือ `if !yield(i) { return }` เหมือนที่ `Count` เวอร์ชันถูกต้องก่อนหน้านี้ในบทเรียนทำ
+</SpotTheBug>
+
+export const iteratorsDepthCode = `package main
+
+import (
+\t"fmt"
+\t"iter"
+)
+
+func Count(n int) iter.Seq[int] {
+\treturn func(yield func(int) bool) {
+\t\tfor i := 0; i < n; i++ {
+\t\t\tif !yield(i) {
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}
+}
+
+// process shows that defer inside a range-over-func body queues up for the
+// whole enclosing function, not per iteration -- it runs LIFO when process
+// itself returns.
+func process() {
+\tfor v := range Count(3) {
+\t\tdefer fmt.Println("deferred for", v)
+\t\tfmt.Println("processing", v)
+\t}
+\tfmt.Println("loop finished")
+}
+
+// FromChannel is single-pass: once the channel is drained, ranging over the
+// same Seq again yields nothing.
+func FromChannel(ch <-chan int) iter.Seq[int] {
+\treturn func(yield func(int) bool) {
+\t\tfor v := range ch {
+\t\t\tif !yield(v) {
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}
+}
+
+func main() {
+\tprocess()
+
+\tch := make(chan int, 3)
+\tch <- 1
+\tch <- 2
+\tch <- 3
+\tclose(ch)
+\tseq := FromChannel(ch)
+
+\tfmt.Println("first pass:")
+\tfor v := range seq {
+\t\tfmt.Println(v)
+\t}
+\tfmt.Println("second pass on the same (now-drained) sequence:")
+\tfor v := range seq {
+\t\tfmt.Println(v)
+\t}
+\tfmt.Println("second pass produced nothing -- the channel has no more values")
+
+\t// iter.Pull for manual, one-at-a-time control.
+\tnext, stop := iter.Pull(Count(3))
+\tdefer stop() // required: releases the iterator's underlying coroutine
+\tfor {
+\t\tv, ok := next()
+\t\tif !ok {
+\t\t\tbreak
+\t\t}
+\t\tfmt.Println("pulled", v)
+\t}
+}`;
+
+<Playground code={iteratorsDepthCode} />
+
 <Callout title="Iterator คือ function ที่เรียก yield">
 `iter.Seq[V]` คือ `func(yield func(V) bool)` loop `for v := range seq` กลายเป็น callback `yield`; `break` ทำให้ `yield` คืน `false` และ iterator ต้อง return ตอนนั้น `slices.Collect`, `slices.Sorted`, `maps.Keys`, `strings.Lines` และ `strings.SplitSeq` ช่วยให้ผสมลำดับแบบ lazy กับ slice และ map ธรรมดาได้โดยไม่ allocate สิ่งที่ไม่ได้ใช้
 </Callout>
@@ -218,27 +422,52 @@ export const quizIterators = [
       "type Seq[V any] interface{ Next() (V, bool) }",
       "type Seq[V any] []V"
     ],
-    answer: 1
+    answer: 1,
+    explain: "iter.Seq[V] คือ function type ที่รับ callback yield range-over-func เรียก function นั้น และ loop body กลายเป็น callback yield"
   },
   {
-    q: "ใน iterator เมื่อ yield คืน false iterator ต้องทำอะไร?",
+    q: "```go\nsort.Strings(maps.Keys(m))\n```\nโค้ดนี้ compile ผ่านไหม?",
     options: [
-      "เรียก yield อีกครั้งด้วย element ถัดไป",
-      "panic",
-      "return ทันทีและหยุดผลิต",
-      "ปิด channel"
+      "ผ่าน มัน sort key ของ map ให้ in place",
+      "ไม่ผ่าน — maps.Keys คืน iter.Seq[string] ไม่ใช่ []string",
+      "ผ่าน แต่เฉพาะเมื่อ m มี value เป็น string",
+      "ไม่ผ่าน — maps.Keys ไม่มีอยู่จริง"
     ],
-    answer: 2
+    answer: 1,
+    explain: "ตั้งแต่ Go 1.23 maps.Keys คืน iter.Seq[K] ไม่ใช่ slice ตรวจสอบแล้วบน 1.26.5 นี่คือ compile error: cannot use maps.Keys(m) (value of func type iter.Seq[string]) as []string value in argument to sort.Strings ใช้ slices.Sorted(maps.Keys(m)) แทน"
   },
   {
-    q: "call ใดเปลี่ยน iterator เป็น slice ที่ sort แล้วในบรรทัดเดียว?",
+    q: "```go\nfunc Count(n int) iter.Seq[int] {\n    return func(yield func(int) bool) {\n        for i := 0; i < n; i++ {\n            yield(i)\n        }\n    }\n}\n\nfor v := range Count(5) {\n    if v == 2 {\n        break\n    }\n}\n```\nจะเกิดอะไรขึ้นเมื่อโค้ดนี้รัน?",
     options: [
-      "sort.Slice(seq)",
-      "slices.Sorted(seq)",
-      "slices.Sort(seq)",
-      "maps.Collect(seq)"
+      "พิมพ์ 0, 1, 2 แล้วหยุดปกติ",
+      "panic: range function continued iteration after function for loop body returned false",
+      "loop วนไม่รู้จบ",
+      "compile ผ่านแต่ไม่ทำอะไรเลยเงียบ ๆ หลัง v == 2"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Count เพิกเฉยต่อค่าที่ yield คืนมา ดังนั้นหลัง loop break (yield คืน false) Count ก็ยังเรียก yield ต่อไป Go runtime ตรวจจับสิ่งนี้และ panic — ตรวจสอบแล้วบน 1.26.5 ทางแก้คือ if !yield(i) { return }"
+  },
+  {
+    q: "```go\nseq := FromChannel(ch) // reads from a channel until it's closed\nfor v := range seq { /* ... */ }\nfor v := range seq { /* ... */ } // ranging again\n```\nจะเกิดอะไรขึ้นตอน range ครั้งที่สอง?",
+    options: [
+      "panic: sequence already consumed",
+      "ให้ค่าเดิมซ้ำอีกครั้ง",
+      "ไม่ให้อะไรเลย — channel ถูกดึงจนหมดไปแล้ว",
+      "block ตลอดไป"
+    ],
+    answer: 2,
+    explain: "iterator ที่อิงกับ channel เป็น single-pass: เมื่อ channel ถูกดึงหมดแล้ว iter.Seq ตัวเดิมจะไม่ให้อะไรเลยในการ range ครั้งที่สอง — เงียบ ๆ ไม่มี error หรือ panic ตรวจสอบแล้วบน 1.26.5 เทียบกับ iterator ที่อิงกับ slice อย่าง List.All() ซึ่ง re-iterable ได้อย่างปลอดภัย"
+  },
+  {
+    q: "ทำไม defer stop() ควรตามหลังทุกการเรียก iter.Pull?",
+    options: [
+      "stop() เป็นแค่ของตกแต่ง next() อย่างเดียวปลอดภัยเสมอแม้ปล่อยทิ้งไว้",
+      "ถ้าไม่มี stop() coroutine ข้างใต้ของ iterator อาจค้างอยู่ตลอดไปถ้า caller หยุดเรียก next() กลางทาง",
+      "stop() จำเป็นเฉพาะเมื่อ next() คืน false แล้วเท่านั้น",
+      "stop() ปิด iter.Seq เดิมเพื่อให้นำกลับมาใช้ใหม่ได้"
+    ],
+    answer: 1,
+    explain: "doc ของ package iter เองบอกว่า stop \"must be called when the caller is no longer interested in next values\" ก่อนที่ลำดับจะส่งสัญญาณว่าจบแล้ว defer stop() รับประกันสิ่งนี้ในทุก return path เหมือน reflex เดียวกับ defer f.Close()"
   },
   {
     q: "เมื่อไรที่การคืน slice ธรรมดาเป็นการออกแบบที่ดีกว่า?",
@@ -248,7 +477,8 @@ export const quizIterators = [
       "เมื่อข้อมูลมาจาก network stream",
       "เมื่อต้องซ่อน representation"
     ],
-    answer: 1
+    answer: 1,
+    explain: "iterator เพิ่ม indirection โดยไม่ได้ประโยชน์อะไรเมื่อข้อมูลมีอยู่แล้วเป็น slice เล็ก ๆ ใน memory — คืน slice ตรง ๆ ไปเลย iterator คุ้มค่าเมื่อข้อมูลใหญ่ ไม่มีที่สิ้นสุด อิง I/O หรือต้องซ่อน representation"
   }
 ];
 

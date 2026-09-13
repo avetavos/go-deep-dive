@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Interface values ตอน runtime
 
@@ -56,6 +57,8 @@ default:
 
 ภายใน `case` แต่ละอัน `v` เป็น concrete type แล้ว — ไม่ต้อง assertion เพิ่มเติม `default` case ทำงานเมื่อไม่มี type ที่ระบุตรงกัน
 
+`case` หนึ่งยังลิสต์หลาย types ร่วมกันได้ `case Circle, Rect:` — แต่แบบนั้น `v` จะคง **interface type เดิม** ไม่ใช่ concrete type เพราะ compiler เลือก concrete type เดียวให้ branch นั้นไม่ได้ มีแต่ single-type case เท่านั้นที่ narrow `v`
+
 ## Assert ไปยัง interface
 
 คุณยัง assert จาก interface หนึ่งไปยังอีก interface ได้:
@@ -69,6 +72,93 @@ if rc, ok := w.(io.ReadWriter); ok {
 ```
 
 นี่คือวิธีที่โค้ด standard library ตรวจสอบ optional capabilities (เช่น ว่า `Writer` รองรับ `Seek` ด้วยหรือไม่)
+
+## Assert บน nil interface
+
+nil interface — ไม่มี type ไม่มี value — ทำงานสม่ำเสมอภายใต้ assertion ทั้งสอง form แต่ทั้งสอง form ต่างกันชัดเจน:
+
+```go
+var s Shape // nil interface — no type, no value
+c, ok := s.(Circle)
+fmt.Println(c, ok) // {0} false — comma-ok is safe on a nil interface
+
+switch v := s.(type) {
+case nil:
+	fmt.Println("s is nil")
+case Circle:
+	fmt.Println("circle", v)
+}
+
+_ = s.(Circle) // single-value form panics on a nil interface
+```
+
+รันบน Go 1.26.5:
+
+```text
+{0} false
+s is nil
+panic: interface conversion: main.Shape is nil, not main.Circle
+```
+
+comma-ok form ปลอดภัยสมบูรณ์ — `ok` เป็น `false` เฉยๆ type switch จับ nil case ได้ชัดเจนด้วย `case nil:` ซึ่งทำงาน*ก่อน*ที่ concrete-type case ใด ๆ จะถูกพิจารณา มีแค่ single-value form เท่านั้นที่ panic และข้อความระบุ nil interface อย่างเจาะจง: `main.Shape is nil, not main.Circle` เทียบกับการ assert concrete type *ผิด* บน interface ที่ไม่ nil — ใช้ single-value form เหมือนกัน แต่ข้อความต่างกัน:
+
+```go
+var a Animal = Dog{}
+_ = a.(Cat)
+```
+
+```text
+panic: interface conversion: main.Animal is main.Dog, not main.Cat
+```
+
+ทั้งคู่เป็น `interface conversion` panic แต่อันแรกระบุ `nil` ในขณะที่อันหลังระบุ dynamic type จริง — ควรจำให้ได้ทันทีเมื่อเห็นใน crash log
+
+## Pointer vs value: `s.(*T)` vs `s.(T)`
+
+concrete type ไหนที่ interface variable เก็บได้ — `T` หรือ `*T` — ขึ้นกับ receiver kind ไหนที่ตอบสนอง interface และมันเปลี่ยนว่า type assertion จะสำเร็จกับอะไรได้บ้าง ถ้า `Area` มี receiver แบบ **pointer** `Circle` เองไม่เคยตอบสนอง `Shape` เลย ดังนั้นการ assert ไปยัง value type ไม่ใช่แค่ false ตอน runtime — มัน compile ไม่ผ่านด้วยซ้ำ:
+
+```go
+type Shape interface{ Area() float64 }
+type Circle struct{ Radius float64 }
+
+func (c *Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }
+
+func main() {
+	var s Shape = &Circle{Radius: 2}
+	if _, ok := s.(Circle); ok { // Circle does not implement Shape at all
+		// unreachable
+	}
+}
+```
+
+```text
+./main.go:13:14: impossible type assertion: s.(Circle)
+	Circle does not implement Shape (method Area has pointer receiver)
+```
+
+compiler พิสูจน์เรื่องนี้แบบ static เพราะ method set ของ `Circle` ไม่เคยมี `Area` เลย — assert ไปยัง type ที่ไม่มีทางตอบสนอง interface ได้เป็น compile error ไม่ใช่ runtime maybe เปลี่ยนให้ `Area` มี receiver แบบ **value** แทน แล้วทั้ง `Circle` และ `*Circle` ตอบสนอง `Shape` ได้ทั้งคู่ — แต่ `s` ยังเก็บแค่ concrete type ที่มัน assign มาเท่านั้น ดังนั้น value assertion จึง fail ตอน runtime ในขณะที่ pointer assertion สำเร็จ:
+
+```go
+func (c Circle) Area() float64 { return 3.14 * c.Radius * c.Radius } // value receiver
+
+var s Shape = &Circle{Radius: 2} // *Circle satisfies Shape too (method set of *T includes value-receiver methods)
+
+if _, ok := s.(Circle); ok {
+	fmt.Println("value assertion matched")
+} else {
+	fmt.Println("value assertion failed — s holds *Circle, not Circle")
+}
+if _, ok := s.(*Circle); ok {
+	fmt.Println("pointer assertion matched")
+}
+```
+
+```text
+value assertion failed — s holds *Circle, not Circle
+pointer assertion matched
+```
+
+method set ที่ใหญ่กว่าของ `*T` ทำให้ `*Circle` ตอบสนอง interface ที่ `Circle` เดี่ยว ๆ ก็ตอบสนองได้เหมือนกัน — แต่ assertion ยังเช็ก dynamic type ที่เก็บอยู่*จริง* ไม่ใช่ "type ใดก็ได้ที่ method set ผ่านเกณฑ์"
 
 export const typeAssertionsCode = `package main
 
@@ -85,13 +175,15 @@ func (d Dog) Sound() string { return "Woof" }
 func (c Cat) Sound() string { return "Meow" }
 
 func identify(a Animal) {
-\t// comma-ok form — safe
+\t// comma-ok form — safe even when a is nil
 \tif d, ok := a.(Dog); ok {
 \t\tfmt.Printf("Dog named %s says %s\\n", d.Name, d.Sound())
 \t\treturn
 \t}
-\t// type switch for multiple cases
+\t// type switch handles the nil interface explicitly
 \tswitch v := a.(type) {
+\tcase nil:
+\t\tfmt.Println("no animal")
 \tcase Cat:
 \t\tfmt.Printf("Cat named %s says %s\\n", v.Name, v.Sound())
 \tdefault:
@@ -100,7 +192,7 @@ func identify(a Animal) {
 }
 
 func main() {
-\tanimals := []Animal{Dog{Name: "Rex"}, Cat{Name: "Luna"}}
+\tanimals := []Animal{Dog{Name: "Rex"}, Cat{Name: "Luna"}, nil}
 \tfor _, a := range animals {
 \t\tidentify(a)
 \t}
@@ -117,6 +209,92 @@ func main() {
 | type switch | handle หลาย type ได้ชัดเจน | verbose กว่า single assertion |
 | reflect.TypeOf | introspect type ณ runtime | overhead สูง, ใช้เฉพาะจำเป็น |
 
+## errors.As คือ assertion ที่เดิน chain
+
+`errors.As` ดูเหมือน function call แต่โดยแนวคิดแล้วมันคือ type assertion ที่ unwrap ด้วย: มันเรียก `Unwrap()` บน error chain ซ้ำ ๆ, type-assert แต่ละ link เทียบกับ target type จนกว่าจะเจอที่ตรงหรือ chain จบ
+
+```go
+type NotFoundError struct{ Key string }
+
+func (e *NotFoundError) Error() string { return "not found: " + e.Key }
+
+func lookup(key string) error {
+	return &NotFoundError{Key: key}
+}
+
+func loadConfig() error {
+	if err := lookup("timeout"); err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	return nil
+}
+
+func main() {
+	err := fmt.Errorf("startup: %w", loadConfig())
+
+	var nf *NotFoundError
+	if errors.As(err, &nf) { // walks the %w chain until it finds a *NotFoundError
+		fmt.Println("missing key:", nf.Key)
+	}
+}
+```
+
+```text
+missing key: timeout
+```
+
+`err` ในที่นี้ถูก wrap สองชั้น (`startup: ` แล้ว `load config: `) แต่ `errors.As` เจอ `*NotFoundError` ที่ลึกลงไปสองชั้น — สิ่งที่ single `err.(*NotFoundError)` assertion ทำไม่ได้เลย เพราะมันเห็นแค่ error ชั้นนอกสุดเท่านั้น argument `target` ต้องเป็น **non-nil pointer** ไปยัง type ที่ implement `error` (หรือไปยัง interface type) การส่ง error value เองแทนที่จะเป็น pointer ไปยังตัวแปรของ type นั้น จะ panic:
+
+```go
+err := &NotFoundError{Key: "x"}
+var nf NotFoundError // not a pointer — wrong target
+fmt.Println(errors.As(err, nf))
+```
+
+```text
+panic: errors: target must be a non-nil pointer
+```
+
+## เมื่อ type assertion เป็น design smell — และเมื่อไม่ใช่
+
+การใช้ type assertion เพื่อดึง concrete type กลับมามักหมายความว่า interface เป็นเครื่องมือที่ผิด หรือกว้างเกินไป — เป็น smell ที่ควรตั้งคำถามก่อนเขียน `if v, ok := x.(ConcreteType); ok` แต่ standard library ก็ใช้ assertion อย่างตั้งใจเหมือนกัน เป็น *optional capability check* ไม่ใช่ทางลัด control-flow `go doc io.Copy` ระบุ contract ไว้ชัดเจน:
+
+```text
+If src implements WriterTo, the copy is implemented by calling
+src.WriteTo(dst). Otherwise, if dst implements ReaderFrom, the copy is
+implemented by calling dst.ReadFrom(src).
+```
+
+`io.Copy` รับ interface เล็ก `Reader`/`Writer` แต่ภายในมัน assert หา `io.WriterTo` และ `io.ReaderFrom` เพื่อไปทาง fast path เมื่อ concrete type รองรับ — caller ไม่ต้องรู้เลยว่าสิ่งนี้เกิดขึ้น
+
+`net/http` ใช้ pattern เดียวกันกับ `http.Flusher` และ `http.Hijacker` และ doc comment ของ `Flusher` เองก็เตือนกับดักนี้ตรง ๆ: *"ResponseWriter wrappers may not [support Flusher]. Handlers should always test for this ability at runtime."* wrapper สำหรับ logging ที่ embed `http.ResponseWriter` แสดงให้เห็นเป๊ะ ๆ ว่า capability หายไปได้อย่างไร:
+
+```go
+type loggingWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *loggingWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+var _ http.Flusher = &loggingWriter{}
+```
+
+```text
+./main.go:15:22: cannot use &loggingWriter{} (value of type *loggingWriter) as http.Flusher value in variable declaration: *loggingWriter does not implement http.Flusher (missing method Flush)
+```
+
+การ embed `http.ResponseWriter` promote แค่สาม methods ที่ interface นั้นประกาศ (`Header`, `Write`, `WriteHeader`) — `Flush` และ `Hijack` ไม่ได้เป็นส่วนหนึ่งของมัน จึงไม่ถูก promote เลย แม้ concrete `*http.response` ข้างใต้จะรองรับก็ตาม การส่ง `lw` ให้โค้ดที่คาดหวัง streaming จะพังไปอย่างเงียบ ๆ ทางแก้คือ assert กับ embedded field ไม่ใช่ตัว wrapper แล้ว forward ไปตรง ๆ:
+
+```go
+if f, ok := lw.ResponseWriter.(http.Flusher); ok {
+	f.Flush()
+}
+```
+
 ## ความเข้าใจผิดที่พบบ่อย
 
 - **type assertion เสมอปลอดภัย** — ไม่ใช้ comma-ok form จะ panic ทันทีถ้า type ไม่ตรง
@@ -128,6 +306,33 @@ func main() {
 > **encoding/json**: Unmarshal ใช้ type assertion เพื่อ handle `[]any` และ `map[string]any` เมื่อ JSON structure ไม่รู้ล่วงหน้า
 >
 > **net/http**: middleware ตรวจว่า ResponseWriter implement http.Flusher หรือ http.Hijacker ด้วย type assertion เพื่อ enable streaming หรือ WebSocket upgrade
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ generate มา type-assert ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- single-value assertion (`v := x.(T)`) ถูกใช้กับ value ที่อาจไม่เก็บ `T` หรือเปล่า — โดยเฉพาะ value ที่มาจาก nil interface variable หรือแหล่งที่ไม่น่าเชื่อถือ? นั่นคือ panic ที่รอวันเกิด
+- `errors.As` call ส่ง error value เองหรือตัวแปรที่ไม่ใช่ pointer เป็น argument ที่สองหรือเปล่า? มันต้องเป็น non-nil pointer ไปยัง target type ไม่งั้น panic
+- struct wrapper embed interface (`http.ResponseWriter`, `io.Writer`, ...) แล้วถูกส่งให้โค้ดที่คาดหวัง optional capability (`Flusher`, `Hijacker`, `WriterTo`) หรือเปล่า? การ embed promote แค่ methods ของ embedded interface เอง — capability เพิ่มเติมของ concrete value ข้างใต้หายไปอย่างเงียบ ๆ เว้นแต่ wrapper จะ assert แล้ว forward มันเอง
+- มี type assertion ดึง concrete type กลับจาก interface parameter ทันทีหลัง function รับ parameter นั้นเป็น interface หรือเปล่า? ปกติแปลว่า parameter ควรเป็น concrete type ตั้งแต่แรก หรือ interface กว้างเกินไป
+- type switch มี `case nil:` เมื่อ input อาจเป็น nil interface ได้จริงหรือเปล่า? ถ้าไม่มี `case ConcreteType:` จะไม่ match nil เลย แล้วตกไปที่ `default` อย่างเงียบ ๆ
+
+<SpotTheBug code={`type Shape interface{ Area() float64 }
+type Circle struct{ Radius float64 }
+
+func (c Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }
+
+func report(s Shape) {
+	c := s.(Circle)
+	fmt.Println(c.Area())
+}
+
+func main() {
+	var s Shape
+	report(s)
+}`}>
+`report` ใช้ single-value form `s.(Circle)` โดยไม่มี comma-ok check `main` เรียกมันด้วย `s` ที่ยังเป็น zero value อยู่ — nil interface ไม่ใช่ `Circle` assertion panic ทันที: `panic: interface conversion: main.Shape is nil, not main.Circle` ทางแก้คือ comma-ok form: `c, ok := s.(Circle); if !ok { return }` (หรือ handle nil case ชัดเจนใน type switch ด้วย `case nil:`)
+</SpotTheBug>
 
 <Callout title="Single-value assertion ที่ล้มเหลวจะ panic">
 `x.(T)` โดยไม่มี comma-ok idiom จะ panic ทันทีถ้า dynamic type ไม่ใช่ `T` นี่คือ runtime error ไม่ใช่ compile-time error — compiler ไม่สามารถรู้ dynamic type ได้ ใช้ comma-ok form `v, ok := x.(T)` เสมอเมื่อมีโอกาสที่ assertion อาจล้มเหลว สงวน single-value form ไว้สำหรับ code paths ที่รับประกัน type ทางตรรกะ — และเพิ่ม comment อธิบายเหตุผล
@@ -142,27 +347,52 @@ export const quizTypeAssertions = [
       "คืน nil และ ok == false",
       "คืน zero value ของ T และ ok == true"
     ],
-    answer: 1
+    answer: 1,
+    explain: "comma-ok form ไม่มีทาง panic เมื่อ fail มันคืน zero value ของ T และ false ทำให้ caller branch ตาม ok ได้โดยไม่ต้อง recover()"
   },
   {
-    q: "ภายใน type-switch case `case Rect:` type ของ switched variable `v` คืออะไร?",
+    q: "```go\nvar s Shape // nil interface\nc, ok := s.(Circle)\nfmt.Println(c, ok)\n_ = s.(Circle)\n```\nเกิดอะไรขึ้น?",
     options: [
-      "Interface type ต้นฉบับ",
-      "Concrete type Rect",
-      "`any`",
-      "Pointer ไปยัง Rect"
+      "print `{0} false` แล้ว single-value assertion panic: interface conversion: main.Shape is nil, not main.Circle",
+      "print `{0} true` แล้วโปรแกรมจบปกติ",
+      "compile error — Circle ไม่มี zero value",
+      "assertion ทั้งสองแบบ panic ทันที"
     ],
-    answer: 1
+    answer: 0,
+    explain: "comma-ok form ปลอดภัยเสมอ แม้บน nil interface — มันแค่รายงาน ok == false มีแค่ single-value form เท่านั้นที่ panic และข้อความระบุว่า interface เป็น nil อย่างเจาะจง ไม่ใช่ระบุ concrete type ที่ผิด"
   },
   {
-    q: "ควรใช้ form ใดเมื่อคุณไม่แน่ใจใน dynamic type?",
+    q: "```go\ntype Shape interface{ Area() float64 }\ntype Circle struct{ Radius float64 }\nfunc (c *Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }\n\nvar s Shape = &Circle{Radius: 2}\n_, ok := s.(Circle)\n```\nโค้ดนี้ compile ผ่านไหม และถ้าผ่าน `ok` เป็นอะไร?",
     options: [
-      "`v := x.(T)` — single-value form",
-      "`v, ok := x.(T)` — comma-ok form",
-      "เรียก `recover()` ล้อมรอบ `v := x.(T)`",
-      "ตรวจสอบ `reflect.TypeOf` ก่อน assert"
+      "compile ผ่าน; ok เป็น true — Circle และ *Circle ใช้แทนกันได้",
+      "compile ผ่าน; ok เป็น false — s เก็บ *Circle ไม่ใช่ Circle",
+      "compile ไม่ผ่าน — impossible type assertion: Circle does not implement Shape (method Area has pointer receiver)",
+      "compile ไม่ผ่าน — Shape ต้องประกาศด้วย pointer receiver"
     ],
-    answer: 1
+    answer: 2,
+    explain: "Area มี pointer receiver ดังนั้น method set ของ Circle ไม่เคยมี Area เลย — Circle ไม่มีทางตอบสนอง Shape และ compiler ปฏิเสธ assertion นี้แบบ static แทนที่จะรอ runtime check ที่ไม่มีทางสำเร็จอยู่แล้ว"
+  },
+  {
+    q: "```go\nvar nf NotFoundError // not a pointer\nerrors.As(err, nf)\n```\nจะเกิดอะไรขึ้นตอนรัน?",
+    options: [
+      "คืน false — nf ไม่ตรงกับ type ของ err",
+      "คืน true ถ้า err wrap NotFoundError อยู่ที่ไหนสักแห่งใน chain",
+      "panic: errors: target must be a non-nil pointer",
+      "compile error — errors.As ต้องการ argument สอง type เดียวกันเท่านั้น"
+    ],
+    answer: 2,
+    explain: "errors.As ต้องการ argument ที่สองเป็น non-nil pointer ไปยัง target type (หรือไปยัง interface type) การส่ง value เองแทนที่จะเป็น &nf จะ panic ด้วยข้อความนี้เป๊ะ ๆ"
+  },
+  {
+    q: "struct หนึ่ง embed `http.ResponseWriter` เพื่อเพิ่ม logging และ concrete writer ข้างใต้รองรับ `http.Flusher` wrapper นี้รองรับ `http.Flusher` ด้วยไหม?",
+    options: [
+      "ใช่ — embedding promote ทุก method ที่ concrete value ข้างใต้มี",
+      "ไม่ — embedding promote แค่ methods ที่ประกาศบน embedded interface type เองเท่านั้น Flusher เป็น interface แยกต่างหาก",
+      "ใช่เฉพาะเมื่อ wrapper ถูกใช้เป็น pointer ไม่ใช่ value",
+      "ใช่เฉพาะใน Go 1.27 ขึ้นไป ผ่านกฎ embedding ใหม่"
+    ],
+    answer: 1,
+    explain: "http.ResponseWriter ประกาศ Header, Write, และ WriteHeader — นั่นคือทั้งหมดที่ embedding promote Flush (จาก http.Flusher) เป็นของ concrete value ข้างใต้ ไม่ใช่ของ interface ResponseWriter จึงไม่ถูก promote wrapper ต้อง assert แล้ว forward มันเอง"
   },
   {
     q: "`%T` ใน format string พิมพ์อะไร?",
@@ -172,7 +402,8 @@ export const quizTypeAssertions = [
       "Dynamic (concrete) type ของค่า",
       "Interface type ที่ค่าถูกเก็บอยู่"
     ],
-    answer: 2
+    answer: 2,
+    explain: "%T รายงาน dynamic type ที่เก็บอยู่ในค่า — สำหรับ interface หมายถึง concrete type ที่มันเก็บอยู่ ณ ตอนนั้น ไม่ใช่ static interface type ของตัวแปร"
   }
 ];
 

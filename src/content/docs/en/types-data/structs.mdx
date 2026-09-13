@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Defining a struct
 
@@ -27,6 +29,51 @@ type User struct {
 ```
 
 Fields whose names begin with an uppercase letter are **exported** (visible outside the package). Lowercase names are unexported.
+
+## Struct tags
+
+A **struct tag** is a plain string literal attached to a field, written right after its type:
+
+```go
+type User struct {
+    Name string `json:"name" db:"user_name"`
+    Age  int    `json:"age,omitempty"`
+}
+```
+
+The compiler does nothing with a tag except store it — it has zero effect on compilation or field access. A tag only becomes meaningful when something reads it via reflection at runtime, which is exactly what `encoding/json`, most ORMs, and validation libraries do:
+
+```go
+t := reflect.TypeOf(User{})
+f, _ := t.FieldByName("Name")
+fmt.Println(f.Tag.Get("json")) // name
+fmt.Println(f.Tag.Get("db"))   // user_name
+```
+
+Because a tag is just a string until something parses it, a typo in the key name compiles perfectly and produces no warning — it just silently stops doing what you meant:
+
+```go
+type Broken struct {
+    Name string `jso:"name"` // typo: "jso" instead of "json"
+    Age  int    `json:"age"`
+}
+b, _ := json.Marshal(Broken{Name: "Ada", Age: 30})
+fmt.Println(string(b)) // {"Name":"Ada","age":30} — Name fell back to the Go field name
+```
+
+Verified on 1.26.5: this compiles, `go vet ./...` reports nothing, and it runs and marshals `Name` under its Go field name because `encoding/json` never found a tag under the key `"json"`. What `go vet`'s `structtag` check *does* catch is a tag that is not valid `reflect.StructTag` **syntax** — for example a missing space between `key:"value"` pairs:
+
+```go
+type Bad struct {
+    Name string `json:"name",omitempty`
+}
+```
+
+```text
+main.go:6:2: struct field tag `json:"name",omitempty` not compatible with reflect.StructTag.Get: key:"value" pairs not separated by spaces
+```
+
+So `go vet` protects you from malformed tag *syntax*, but not from a tag using the wrong *key name* for the library that will read it — that mistake is only caught by actually running the marshal/unmarshal path (a test).
 
 ## Struct literals
 
@@ -62,6 +109,36 @@ cfg := struct {
 }{Host: "localhost", Port: 8080}
 ```
 
+## Zero-value-useful design
+
+A well-designed struct should work correctly the moment it is declared, with no constructor call — `var b bytes.Buffer` or `var mu sync.Mutex` are already ready to use. This is called making the **zero value useful**, and it is idiomatic Go, not an accident: `bytes.Buffer`'s zero value is an empty buffer, `sync.Mutex`'s zero value is an unlocked mutex. Compare that to a type that panics or misbehaves until some `Init()` or `New()` runs first — every caller now has to remember an extra step, and forgetting it is a runtime bug instead of a compile error.
+
+When you design your own structs, prefer field types whose zero value already means something sensible: a nil slice that is safe to `append` to, a `sync.Mutex` (never a `*sync.Mutex` that needs allocating), a `time.Time` whose zero value `IsZero()` reports true instead of a `*time.Time` that needs a nil check everywhere. Reserve a `New`/constructor function for the genuinely necessary cases (required fields, a value that must be validated, or a field like a map that you know will be written to immediately).
+
+## The empty struct `struct{}`
+
+`struct{}` is a real, singleton type with a specific property: it occupies **zero bytes**.
+
+```go
+var s struct{}
+fmt.Println(unsafe.Sizeof(s)) // 0
+```
+
+Because it costs nothing to store, `struct{}` is the idiomatic value type for two patterns: a set (`map[K]struct{}`, when you only care whether a key is present, not any associated value) and a signal-only channel (`chan struct{}`, when a send/receive means "this happened," not "here is a payload"):
+
+```go
+set := map[string]struct{}{"a": {}, "b": {}}
+_, ok := set["a"]
+fmt.Println(len(set), ok) // 2 true
+
+done := make(chan struct{})
+close(done)
+_, open := <-done
+fmt.Println(open) // false — closed and drained, the classic "done" signal
+```
+
+A `map[K]bool` also works as a set, but `map[K]struct{}` documents the intent more precisely (there is no meaningful `false` entry to accidentally check for) and uses less memory at scale.
+
 ## Struct comparison
 
 Two struct values are comparable with `==` if **all** their fields are comparable types. The comparison is field-by-field:
@@ -72,31 +149,98 @@ b := Point{1, 2}
 fmt.Println(a == b) // true
 ```
 
-Structs containing slices, maps, or functions are **not** comparable with `==`.
+Structs containing slices, maps, or functions are **not** comparable with `==` — that is a compile error, not a runtime one, so the compiler catches it immediately. Two subtler comparability traps are runtime-only:
 
-## Struct embedding (composition)
-
-Go has no class inheritance. Instead, you **embed** one struct type inside another to promote its fields and methods:
+**NaN never equals itself**, even the exact same variable, because floating-point comparison follows IEEE 754, not value identity:
 
 ```go
-type Address struct {
-    City    string
-    Country string
+type WithNaN struct{ F float64 }
+w := WithNaN{F: math.NaN()}
+fmt.Println(w == w) // false — NaN != NaN, even the same variable
+```
+
+**A struct field of interface type defers comparability to whatever is stored inside it.** The struct type-checks as comparable at compile time (an interface field is always statically comparable), but comparing it can still **panic at runtime** if the dynamic value it holds turns out to be a slice, map, or function:
+
+```go
+var sx, sy any = []int{1}, []int{1}
+s3 := struct{ V any }{V: sx}
+s4 := struct{ V any }{V: sy}
+fmt.Println(s3 == s4) // panics: comparing uncomparable type []int
+```
+
+Verified on 1.26.5:
+
+```text
+panic: runtime error: comparing uncomparable type []int
+```
+
+An `any` field holding an `int` compares fine; the same field holding a `[]int` panics. The compiler cannot tell which case you are in — it only knows the *static* type is `any`, which is always comparable. This is a real risk in any struct with an `any`/`interface{}` field that gets compared with `==` or used as a map key.
+
+## Unkeyed literals and `go vet`
+
+A **positional** (unkeyed) struct literal — `Point{3, 4}` instead of `Point{X: 3, Y: 4}` — is valid Go, but it silently breaks if the struct's author ever reorders or inserts a field, because the values are matched to fields by position, not by name. `go vet`'s `composites` check flags unkeyed literals of struct types that come from **another package**:
+
+```go
+r := shapes.Rect{10, 20} // shapes is a different package
+```
+
+Verified on 1.26.5 (`go vet ./...`):
+
+```text
+main.go:10:7: example.com/t09b/shapes.Rect struct literal uses unkeyed fields
+```
+
+There is a catch worth knowing about: this check exempts a hardcoded list of well-known, historically-stable stdlib types — `image.Point{1, 2}` is idiomatic Go and `go vet` says nothing about it, even though it is exactly the same pattern. Do not treat "go vet is silent" as proof a literal is safe; treat unkeyed literals from *any* other package as a habit to avoid, vet exemption or not. Positional literals for a struct declared in the *same* file you are editing are common and fine — you would notice immediately if you reordered its fields.
+
+## Size, alignment, and padding
+
+Go lays out a struct's fields in declaration order, but not necessarily back-to-back: each field must start at an address that is a multiple of its own alignment (`int64` aligns to 8 bytes, `bool` to 1), so the compiler inserts invisible padding bytes between fields when needed. Field order can change a struct's total size:
+
+```go
+type Bad struct {
+    A bool  // 1 byte, then 7 bytes of padding to align B
+    B int64 // 8 bytes
+    C bool  // 1 byte, then 7 bytes of trailing padding (struct size rounds up to 8)
 }
 
-type Person struct {
-    Name    string
-    Age     int
-    Address          // embedded — City and Country are promoted
+type Good struct {
+    B int64 // 8 bytes
+    A bool  // 1 byte
+    C bool  // 1 byte, then 6 bytes of trailing padding
 }
 ```
 
-After embedding, `person.City` is shorthand for `person.Address.City`. This is **composition**, not inheritance — the embedded type does not know it is embedded, and the outer type is not a subtype of the inner type.
+export const paddingDiagram = `flowchart TD
+  subgraph Bad["Bad: 24 bytes"]
+    direction LR
+    BA["A (1B)"] --- BP1["padding (7B)"] --- BB["B (8B)"] --- BC["C (1B)"] --- BP2["padding (7B)"]
+  end
+  subgraph Good["Good: 16 bytes"]
+    direction LR
+    GB["B (8B)"] --- GA["A (1B)"] --- GC["C (1B)"] --- GP["padding (6B)"]
+  end`;
 
+<Mermaid code={paddingDiagram} title="Reordering fields from largest to smallest removes 8 bytes of padding per struct value" />
+
+Verified on 1.26.5 (`unsafe.Sizeof`/`unsafe.Offsetof`):
+
+```text
+fmt.Println(unsafe.Sizeof(Bad{}), unsafe.Sizeof(Good{}))       // 24 16
+fmt.Println(unsafe.Offsetof(Bad{}.B), unsafe.Offsetof(Good{}.B)) // 8 0
+```
+
+`Bad` and `Good` have the exact same three fields — only the declaration order differs, and it costs 8 bytes per value. The rule of thumb: **order fields from largest to smallest** (or group same-sized fields together) to minimize padding. This matters most for structs allocated in bulk — a slice of a million `Bad` values wastes 8 million bytes for nothing. `unsafe.Sizeof` and `unsafe.Offsetof` are the tools to check it; reach for them when a hot-path struct's size seems larger than the sum of its fields suggests.
+
+## Struct embedding (composition)
+
+Composition through embedding — promoting an embedded type's fields and methods, and why that is composition rather than inheritance — is covered in depth in [Embedding](/go/en/methods-interfaces/embedding/).
 
 export const structsCode = `package main
 
-import "fmt"
+import (
+\t"fmt"
+\t"math"
+)
 
 type Address struct {
 \tCity    string
@@ -106,19 +250,14 @@ type Address struct {
 type Person struct {
 \tName    string
 \tAge     int
-\tAddress // embedded struct
 }
+
+type WithNaN struct{ F float64 }
 
 func main() {
 \t// Named-field literal
-\tp1 := Person{
-\t\tName: "Alice",
-\t\tAge:  30,
-\t\tAddress: Address{City: "Bangkok", Country: "Thailand"},
-\t}
+\tp1 := Person{Name: "Alice", Age: 30}
 \tfmt.Println(p1.Name, p1.Age)
-\tfmt.Println(p1.City)    // promoted from Address
-\tfmt.Println(p1.Country) // promoted from Address
 
 \t// Struct copy: p2 is an independent value
 \tp2 := p1
@@ -136,6 +275,15 @@ func main() {
 \ta1 := Address{City: "Bangkok", Country: "Thailand"}
 \ta2 := Address{City: "Bangkok", Country: "Thailand"}
 \tfmt.Println(a1 == a2) // true
+
+\t// Unkeyed vs keyed literal: same value, but unkeyed breaks silently on reorder
+\tunkeyed := Address{"Bangkok", "Thailand"}
+\tkeyed := Address{City: "Bangkok", Country: "Thailand"}
+\tfmt.Println(unkeyed == keyed) // true
+
+\t// NaN never equals itself, even the same variable
+\tw := WithNaN{F: math.NaN()}
+\tfmt.Println(w == w) // false
 }`;
 
 <Playground code={structsCode} />
@@ -145,24 +293,49 @@ func main() {
 | What you get | Benefit | Cost |
 |---------|---------|------|
 | value semantics | predictable behavior, no aliasing | copy cost for large structs |
-| embedding (composition) | reuse fields and methods without inheritance | field shadowing can be confusing when the embedded type has a field with the same name |
-| struct tags | declarative metadata for JSON/DB/validation | runtime-only — no compile-time check that a tag is correct |
+| zero-value-useful design | no constructor call needed, fewer nil checks | not every type can have a meaningful zero value (e.g. one with a required field) |
+| struct tags | declarative metadata for JSON/DB/validation | runtime-only — no compile-time check that a tag's key name is correct |
+| field ordered by size (padding-aware) | smaller struct, less memory at scale | slightly less readable than "logical" field grouping |
 | exported vs unexported fields | clear control over the API surface | exposing a new field later is a breaking change |
 
 ## Common Misconceptions
 
-- **Struct embedding is inheritance** — Go has no inheritance — a `Person` that embeds `Address` is not a subtype of `Address`.
 - **Struct copies are always expensive** — a small struct (2-4 fields) copies faster than using a pointer, which requires a dereference and can make the object escape to the heap.
 - **An unexported field is private to the type** — unexported means package-level visibility — any code in the same package can access it.
-- **Struct tags have an effect at compile time** — struct tags are string literals that reflection reads at runtime — a typo in a tag produces no compile error.
+- **Struct tags have an effect at compile time** — struct tags are string literals that reflection reads at runtime — a typo in a tag's key name compiles fine and is not caught by `go vet` either, only by actually exercising the code path that reads the tag.
+- **`go vet` catches every unkeyed-literal risk** — it only flags unkeyed literals of types from *other* packages, and it exempts a hardcoded list of stable stdlib types like `image.Point`.
+- **Any two equal-looking struct values compare equal** — true field-by-field, except a `float64` field holding `NaN`, which never equals itself, and an `any`/interface field, which can panic at runtime if its dynamic type is a slice, map, or function.
 
 > 💡 Real-world example
 >
-> **`bufio.ReadWriter`** (stdlib) is a struct that embeds `*Reader` and `*Writer` together — it gets both types' methods for free and satisfies `io.ReadWriter` immediately.
+> **`bytes.Buffer`** (stdlib) has a useful zero value — `var b bytes.Buffer` is immediately ready to `Write` and `Read` with no constructor call, exactly the zero-value-useful pattern this lesson recommends.
 
 <Callout title="Structs are value types — assignment copies">
 Writing `p2 := p1` produces a completely independent copy of the struct. Every field is copied. Mutating `p2.Name` does not touch `p1`. This is different from slices and maps, where assignment copies only the header and the two variables share the same underlying data. If you need to share a struct across goroutines or avoid copying large structs, use a pointer (`*Person`).
 </Callout>
+
+## Reading AI-generated code
+
+Struct-related bugs tend to hide in what looks like boilerplate. Check for these:
+
+- Does a struct field use a tag key that does not match what the library actually expects (`jso:"name"` instead of `json:"name"`, a field the ORM's docs call something else)? This compiles and often "half-works" — some fields serialize, one silently doesn't.
+- Is a positional (unkeyed) literal used for a struct defined in a *different* package or file the author didn't just write? A field reorder upstream silently scrambles the values.
+- Does anything compare two structs with `==`, or use a struct as a map key, when one of its fields is `any`/`interface{}`? That is a latent panic waiting for the first slice or map value to flow through it.
+- Are the struct's fields ordered for readability with no thought to size — small fields (bool, int8) scattered between large ones (int64, pointers, strings)? Not a bug, but worth flagging in a hot-path or bulk-allocated type.
+- Does a type require a `New()`/`Init()` call before it is safe to use, when its zero value could have been made to just work? Every caller who forgets that call has a latent bug, and nothing enforces the call at compile time.
+
+<SpotTheBug code={`type Metrics struct {
+	Name  string \`json:"name"\`
+	Count int    \`jso:"count"\`
+}
+
+func main() {
+	m := Metrics{Name: "requests", Count: 42}
+	b, _ := json.Marshal(m)
+	fmt.Println(string(b))
+}`}>
+The second field's tag has a typo: `` `jso:"count"` `` instead of `` `json:"count"` ``. This is valid tag *syntax* — `go vet ./...` reports nothing, because the `structtag` check only validates the `key:"value"` grammar, not that `"jso"` is a key `encoding/json` recognizes. The struct compiles and runs, but `Count` marshals under its Go field name instead of the intended key: `{"name":"requests","Count":42}`. Nothing short of a test asserting the exact JSON shape would catch this — it will not fail a build, a lint pass, or even a casual glance at the struct definition.
+</SpotTheBug>
 
 export const quizStructs = [
   {
@@ -173,7 +346,8 @@ export const quizStructs = [
       "An empty string — the copy zeroes all fields",
       "A compile error — structs cannot be assigned directly"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Structs are value types in Go — every field is copied on assignment. p2 is a completely independent value from the moment `p2 := p1` runs, so mutating p2.Name can never affect p1.Name."
   },
   {
     q: "Which struct literal style is preferred in idiomatic Go?",
@@ -183,27 +357,41 @@ export const quizStructs = [
       "Either style is equally idiomatic",
       "Structs should always be created with `new(Point)`"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Named-field literals are self-documenting and immune to breaking silently if the struct's fields are ever reordered — go vet's composites check specifically flags positional literals of types from other packages for exactly this reason."
   },
   {
-    q: "What does embedding `Address` inside `Person` give you?",
+    q: "What does this print?\n\ntype User struct {\n    Name string `jso:\"name\"`\n}\nb, _ := json.Marshal(User{Name: \"Ada\"})\nfmt.Println(string(b))",
     options: [
-      "Person inherits from Address; Person is a subtype of Address",
-      "The Address fields and methods are promoted onto Person, accessible as person.City etc.",
-      "A compile error — Go does not support embedding",
-      "Person and Address share the same memory layout"
+      "A compile error — jso is not a valid tag key",
+      "{\"name\":\"Ada\"} — Go corrects the typo automatically",
+      "{\"Name\":\"Ada\"} — encoding/json falls back to the Go field name",
+      "{} — a malformed tag causes the field to be dropped"
     ],
-    answer: 1
+    answer: 2,
+    explain: "`jso:\"name\"` is syntactically a perfectly valid struct tag — it just isn't the key \"json\" that encoding/json looks for. Verified on 1.26.5: the field marshals under its exported Go field name, Name, and go vet reports nothing because the tag's grammar is fine."
   },
   {
-    q: "Can you compare two `User` structs with `==` if User contains a `[]string` field?",
+    q: "What does `unsafe.Sizeof` report for these two structs, and why do they differ?\n\ntype Bad struct { A bool; B int64; C bool }\ntype Good struct { B int64; A bool; C bool }",
     options: [
-      "Yes — Go compares slices element by element",
-      "Yes — but only if the slices have the same length",
-      "No — structs containing slices are not comparable with ==",
-      "Yes — the comparison ignores slice fields"
+      "Both are 10 bytes — Go always packs fields tightly",
+      "Bad is 24 bytes, Good is 16 bytes — padding to satisfy int64's 8-byte alignment costs more when small fields surround it",
+      "Both are 24 bytes — field order never affects struct size in Go",
+      "Bad is 16 bytes, Good is 24 bytes — the compiler optimizes declaration order automatically"
     ],
-    answer: 2
+    answer: 1,
+    explain: "Verified on 1.26.5 with unsafe.Sizeof: Bad is 24 bytes, Good is 16. int64 needs 8-byte alignment, so in Bad the compiler inserts 7 padding bytes after the leading bool and another 7 after the trailing bool. Good groups the 8-byte field first and both 1-byte fields together afterward, needing only 6 bytes of trailing padding."
+  },
+  {
+    q: "Does this compile, and if so what does it print?\n\nvar x, y any = []int{1}, []int{1}\ns1 := struct{ V any }{V: x}\ns2 := struct{ V any }{V: y}\nfmt.Println(s1 == s2)",
+    options: [
+      "Compile error — structs with an any field are never comparable",
+      "Compiles, prints true — both slices have the same contents",
+      "Compiles, panics at runtime: comparing uncomparable type []int",
+      "Compiles, prints false — different slice headers never compare equal"
+    ],
+    answer: 2,
+    explain: "A struct with an any field type-checks as comparable at compile time — the compiler only sees the static type any, which is always comparable. The panic only happens at runtime, once the actual dynamic type ([]int, which is not comparable) is inspected. Verified on 1.26.5: panic: runtime error: comparing uncomparable type []int."
   }
 ];
 

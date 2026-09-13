@@ -104,6 +104,22 @@ func mightFail(fail bool) error {
 
 `mightFail(false)` returns an `error` whose type is `*MyError` and whose value is `nil` — that is a non-nil interface holding a nil pointer, not a nil interface. `err == nil` is **false**:
 
+export const errorInterfaceLayoutDiagram = `flowchart LR
+  subgraph A["nil interface -- err == nil is true"]
+    A1["type = none"]
+    A2["value = none"]
+  end
+  subgraph B["typed nil in interface -- err == nil is false"]
+    B1["type = *MyError"]
+    B2["value = nil"]
+  end
+  subgraph C["real error -- err == nil is false"]
+    C1["type = *MyError"]
+    C2["value = pointer"]
+  end`;
+
+<Mermaid code={errorInterfaceLayoutDiagram} title="An error is a (type, value) pair -- it is nil only when both halves are unset" />
+
 export const typedNilCode = `package main
 
 import "fmt"
@@ -234,6 +250,31 @@ func main() {
 
 <Playground code={errorValuesCode} />
 
+## Reading AI-generated code
+
+When a generated snippet returns or checks an error, look for these before trusting it:
+
+- Does a function that declares a typed pointer variable (`var e *MyError`) ever `return e` directly on the success path, instead of a bare `nil`? That's the typed-nil trap above.
+- Does a sentinel comparison use `==` when the error could have passed through `fmt.Errorf("...: %w", err)` anywhere upstream? `==` breaks the moment a wrapper is introduced; `errors.Is` does not.
+- Is `err` re-declared with `:=` inside an `if`/`for` that already has an `err` in scope? Check whether the outer `err` is actually being read afterward.
+- Is every error handled exactly once? Watch for a `log.Println(err)` immediately followed by `return err` in the same function — that logs the same failure twice as it propagates up the stack.
+- Does a behaviour check use a plain type assertion (`err.(timeout)`) instead of `errors.As(err, &t)`? A type assertion misses the interface if the error was wrapped even once.
+
+<SpotTheBug code={`var ErrNotFound = errors.New("not found")
+
+func find(id string) error {
+	return fmt.Errorf("find %s: %w", id, ErrNotFound)
+}
+
+func main() {
+	err := find("42")
+	if err == ErrNotFound {
+		fmt.Println("not found")
+	}
+}`}>
+`find` wraps `ErrNotFound` with `%w`, so `err` is a `*fmt.wrapError`, not `ErrNotFound` itself. `err == ErrNotFound` compares that wrapper against the sentinel by identity and is `false` — the `if` body never runs, even though `ErrNotFound` is right there in the chain. Verified on 1.26.5: printing `err == ErrNotFound` gives `false`, `errors.Is(err, ErrNotFound)` gives `true`. The fix is `errors.Is(err, ErrNotFound)`, which walks the chain instead of comparing the outermost value.
+</SpotTheBug>
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -269,17 +310,30 @@ export const quizErrorValues = [
       "The error was ignored",
       "The caller should retry"
     ],
-    answer: 1
+    answer: 1,
+    explain: "nil is the zero value of the error interface. By convention, a nil error means the call succeeded and the other return values are valid."
   },
   {
-    q: "Which function creates a new error value from a static string?",
+    q: "```go\ntype MyError struct{ msg string }\nfunc (e *MyError) Error() string { return e.msg }\n\nfunc mightFail(fail bool) error {\n    var e *MyError\n    if fail {\n        e = &MyError{msg: \"boom\"}\n    }\n    return e\n}\n\nfunc main() {\n    err := mightFail(false)\n    fmt.Println(err == nil)\n}\n```\nWhat does this print?",
     options: [
-      "fmt.Errorf",
-      "errors.New",
-      "log.Fatal",
-      "panic"
+      "true",
+      "false",
+      "a compile error",
+      "a panic"
     ],
-    answer: 1
+    answer: 1,
+    explain: "mightFail returns the *MyError-typed variable e directly. Even when e is a nil pointer, the returned error interface has a concrete type (*MyError), so it is not a nil interface — err == nil is false."
+  },
+  {
+    q: "```go\nfunc run() error {\n    var err error\n    if v, err := step(); err != nil {\n        fmt.Println(\"inner saw:\", v, err)\n    }\n    return err\n}\n```\nAssuming step() returns a non-nil error, what does run() return?",
+    options: [
+      "The error returned by step()",
+      "nil",
+      "A compile error: err declared and not used",
+      "A panic: nil pointer dereference"
+    ],
+    answer: 1,
+    explain: ":= inside the if statement's init clause declares a new, block-scoped err because v is new. The outer err declared with var err error is never assigned, so run() always returns nil regardless of what step() did."
   },
   {
     q: "A sentinel error is declared with:",
@@ -289,7 +343,8 @@ export const quizErrorValues = [
       "type ErrX struct{}",
       "func ErrX() error"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A sentinel is a package-level variable holding a fixed error value, created once with errors.New, so callers can compare against it (ideally with errors.Is) by identity."
   },
   {
     q: "When should you use fmt.Errorf instead of errors.New?",
@@ -299,7 +354,8 @@ export const quizErrorValues = [
       "When you need a global sentinel",
       "Both A and B"
     ],
-    answer: 3
+    answer: 3,
+    explain: "fmt.Errorf formats runtime values into the message and, with %w, wraps an existing error so errors.Is/errors.As can still find it. errors.New only ever produces a fixed, unwrapped string."
   }
 ];
 

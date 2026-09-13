@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Interface values at runtime
 
@@ -56,6 +57,8 @@ default:
 
 Inside each `case`, `v` is already the concrete type — no additional assertion needed. The `default` case fires when none of the listed types match.
 
+A case can also list several types together, `case Circle, Rect:` — but then `v` keeps the **original interface type**, not a concrete one, because the compiler cannot pick a single concrete type for the branch. Only a single-type case narrows `v`.
+
 ## Asserting to an interface
 
 You can also assert from one interface to another:
@@ -69,6 +72,93 @@ if rc, ok := w.(io.ReadWriter); ok {
 ```
 
 This is how standard library code checks for optional capabilities (e.g., whether a `Writer` also supports `Seek`).
+
+## Asserting on a nil interface
+
+A nil interface — no type, no value — behaves consistently under both assertion forms, but the two forms disagree loudly:
+
+```go
+var s Shape // nil interface — no type, no value
+c, ok := s.(Circle)
+fmt.Println(c, ok) // {0} false — comma-ok is safe on a nil interface
+
+switch v := s.(type) {
+case nil:
+	fmt.Println("s is nil")
+case Circle:
+	fmt.Println("circle", v)
+}
+
+_ = s.(Circle) // single-value form panics on a nil interface
+```
+
+Running this on Go 1.26.5:
+
+```text
+{0} false
+s is nil
+panic: interface conversion: main.Shape is nil, not main.Circle
+```
+
+The comma-ok form is completely safe — `ok` is simply `false`. A type switch can catch the nil case explicitly with `case nil:`, which runs *before* any concrete-type case is considered. Only the single-value form panics, and the message names the nil interface specifically: `main.Shape is nil, not main.Circle`. Compare that to asserting the *wrong* concrete type on a non-nil interface — same single-value form, different message:
+
+```go
+var a Animal = Dog{}
+_ = a.(Cat)
+```
+
+```text
+panic: interface conversion: main.Animal is main.Dog, not main.Cat
+```
+
+Both are `interface conversion` panics, but the first names `nil` where the second names the actual dynamic type — worth recognizing on sight when reading a crash log.
+
+## Pointer vs value: `s.(*T)` vs `s.(T)`
+
+Which concrete type an interface variable can hold — `T` or `*T` — depends on which receiver kind satisfies the interface, and it changes what a type assertion can succeed against. If `Area` has a **pointer** receiver, `Circle` itself never satisfies `Shape`, so asserting to the value type is not just false at runtime — it does not even compile:
+
+```go
+type Shape interface{ Area() float64 }
+type Circle struct{ Radius float64 }
+
+func (c *Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }
+
+func main() {
+	var s Shape = &Circle{Radius: 2}
+	if _, ok := s.(Circle); ok { // Circle does not implement Shape at all
+		// unreachable
+	}
+}
+```
+
+```text
+./main.go:13:14: impossible type assertion: s.(Circle)
+	Circle does not implement Shape (method Area has pointer receiver)
+```
+
+The compiler proves this statically because `Circle`'s method set never includes `Area` — asserting to a type that could never satisfy the interface is a compile error, not a runtime maybe. Give `Area` a **value** receiver instead, and both `Circle` and `*Circle` satisfy `Shape` — but `s` still only ever holds the concrete type it was assigned, so the value assertion fails at runtime while the pointer assertion succeeds:
+
+```go
+func (c Circle) Area() float64 { return 3.14 * c.Radius * c.Radius } // value receiver
+
+var s Shape = &Circle{Radius: 2} // *Circle satisfies Shape too (method set of *T includes value-receiver methods)
+
+if _, ok := s.(Circle); ok {
+	fmt.Println("value assertion matched")
+} else {
+	fmt.Println("value assertion failed — s holds *Circle, not Circle")
+}
+if _, ok := s.(*Circle); ok {
+	fmt.Println("pointer assertion matched")
+}
+```
+
+```text
+value assertion failed — s holds *Circle, not Circle
+pointer assertion matched
+```
+
+`*T`'s larger method set lets `*Circle` satisfy an interface that `Circle` alone could also satisfy — but the assertion still checks the *exact* dynamic type stored, not "any type whose method set would qualify."
 
 export const typeAssertionsCode = `package main
 
@@ -85,13 +175,15 @@ func (d Dog) Sound() string { return "Woof" }
 func (c Cat) Sound() string { return "Meow" }
 
 func identify(a Animal) {
-\t// comma-ok form — safe
+\t// comma-ok form — safe even when a is nil
 \tif d, ok := a.(Dog); ok {
 \t\tfmt.Printf("Dog named %s says %s\\n", d.Name, d.Sound())
 \t\treturn
 \t}
-\t// type switch for multiple cases
+\t// type switch handles the nil interface explicitly
 \tswitch v := a.(type) {
+\tcase nil:
+\t\tfmt.Println("no animal")
 \tcase Cat:
 \t\tfmt.Printf("Cat named %s says %s\\n", v.Name, v.Sound())
 \tdefault:
@@ -100,7 +192,7 @@ func identify(a Animal) {
 }
 
 func main() {
-\tanimals := []Animal{Dog{Name: "Rex"}, Cat{Name: "Luna"}}
+\tanimals := []Animal{Dog{Name: "Rex"}, Cat{Name: "Luna"}, nil}
 \tfor _, a := range animals {
 \t\tidentify(a)
 \t}
@@ -117,6 +209,92 @@ func main() {
 | Type switch | Handles several types clearly | More verbose than a single assertion |
 | `reflect.TypeOf` | Inspects a type at runtime | High overhead — use only when truly needed |
 
+## errors.As is an assertion that walks the chain
+
+`errors.As` looks like a function call, but conceptually it is a type assertion that also unwraps: it repeatedly calls `Unwrap()` on the error chain, type-asserting each link against the target type, until one matches or the chain ends.
+
+```go
+type NotFoundError struct{ Key string }
+
+func (e *NotFoundError) Error() string { return "not found: " + e.Key }
+
+func lookup(key string) error {
+	return &NotFoundError{Key: key}
+}
+
+func loadConfig() error {
+	if err := lookup("timeout"); err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	return nil
+}
+
+func main() {
+	err := fmt.Errorf("startup: %w", loadConfig())
+
+	var nf *NotFoundError
+	if errors.As(err, &nf) { // walks the %w chain until it finds a *NotFoundError
+		fmt.Println("missing key:", nf.Key)
+	}
+}
+```
+
+```text
+missing key: timeout
+```
+
+`err` here is wrapped twice (`startup: ` then `load config: `), but `errors.As` finds the `*NotFoundError` two levels down — something a single `err.(*NotFoundError)` assertion could never do, because it only ever sees the outermost error. The `target` argument must be a **non-nil pointer** to a type that implements `error` (or to an interface type). Passing the error value itself, instead of a pointer to a variable of that type, panics:
+
+```go
+err := &NotFoundError{Key: "x"}
+var nf NotFoundError // not a pointer — wrong target
+fmt.Println(errors.As(err, nf))
+```
+
+```text
+panic: errors: target must be a non-nil pointer
+```
+
+## When a type assertion is a design smell — and when it's not
+
+Reaching for a type assertion to recover a concrete type usually means an interface was the wrong tool, or too broad — a smell worth questioning before writing `if v, ok := x.(ConcreteType); ok`. But the standard library also uses assertions deliberately, as an *optional capability check* rather than a control-flow shortcut. `go doc io.Copy` states the contract explicitly:
+
+```text
+If src implements WriterTo, the copy is implemented by calling
+src.WriteTo(dst). Otherwise, if dst implements ReaderFrom, the copy is
+implemented by calling dst.ReadFrom(src).
+```
+
+`io.Copy` accepts the small `Reader`/`Writer` interfaces, but internally asserts for `io.WriterTo` and `io.ReaderFrom` to take a faster path when the concrete type supports it — callers never need to know this happens.
+
+`net/http` uses the same pattern for `http.Flusher` and `http.Hijacker`, and its own doc comment for `Flusher` warns about the trap directly: *"ResponseWriter wrappers may not [support Flusher]. Handlers should always test for this ability at runtime."* A logging wrapper that embeds `http.ResponseWriter` demonstrates exactly how the capability gets lost:
+
+```go
+type loggingWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *loggingWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+var _ http.Flusher = &loggingWriter{}
+```
+
+```text
+./main.go:15:22: cannot use &loggingWriter{} (value of type *loggingWriter) as http.Flusher value in variable declaration: *loggingWriter does not implement http.Flusher (missing method Flush)
+```
+
+Embedding `http.ResponseWriter` only promotes the three methods that interface declares (`Header`, `Write`, `WriteHeader`) — `Flush` and `Hijack` are not part of it, so they are never promoted, even though the concrete `*http.response` underneath supports them. Handing `lw` to code that expects streaming silently breaks it. The fix is to assert against the embedded field, not the wrapper, and forward explicitly:
+
+```go
+if f, ok := lw.ResponseWriter.(http.Flusher); ok {
+	f.Flush()
+}
+```
+
 ## Common Misconceptions
 
 - **A type assertion is always safe.** Without the comma-ok form, it panics immediately if the type does not match.
@@ -128,6 +306,33 @@ func main() {
 > `encoding/json`: `Unmarshal` uses type assertions to handle `[]any` and `map[string]any` when the JSON structure is not known in advance.
 >
 > `net/http`: a `ResponseWriter` wrapper checks whether the underlying writer also implements `http.Flusher` or `http.Hijacker` via a type assertion, to enable streaming or a WebSocket upgrade.
+
+## Reading AI-generated code
+
+When generated code type-asserts, check for these before trusting it:
+
+- Is a single-value assertion (`v := x.(T)`) used on a value that might not hold `T` — especially a value coming from a nil interface variable or an untrusted source? That is a live panic waiting to happen.
+- Does an `errors.As` call pass the error value itself, or a non-pointer variable, as the second argument? It must be a non-nil pointer to the target type, or it panics.
+- Does a wrapper struct embed an interface (`http.ResponseWriter`, `io.Writer`, …) and get handed to code that expects an optional capability (`Flusher`, `Hijacker`, `WriterTo`)? Embedding only promotes the embedded interface's own methods — extra capabilities of the concrete value underneath are silently lost unless the wrapper re-asserts and forwards them.
+- Is there a type assertion recovering a concrete type from an interface parameter, right after the function accepted that parameter as an interface? That usually means the parameter should have been the concrete type all along, or the interface is too broad.
+- Does a type switch have a `case nil:` when the input could plausibly be a nil interface? Without it, `case ConcreteType:` never matches nil, and it silently falls to `default`.
+
+<SpotTheBug code={`type Shape interface{ Area() float64 }
+type Circle struct{ Radius float64 }
+
+func (c Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }
+
+func report(s Shape) {
+	c := s.(Circle)
+	fmt.Println(c.Area())
+}
+
+func main() {
+	var s Shape
+	report(s)
+}`}>
+`report` uses the single-value form `s.(Circle)` with no comma-ok check. `main` calls it with `s` still at its zero value — a nil interface, not a `Circle`. The assertion panics immediately: `panic: interface conversion: main.Shape is nil, not main.Circle`. The fix is the comma-ok form: `c, ok := s.(Circle); if !ok { return }` (or handle the nil case explicitly in a type switch with `case nil:`).
+</SpotTheBug>
 
 <Callout title="A failed single-value assertion panics">
 `x.(T)` without the comma-ok idiom panics immediately if the dynamic type is not `T`. This is a runtime error, not a compile-time error — the compiler cannot know the dynamic type. Always use the comma-ok form `v, ok := x.(T)` when there is any chance the assertion could fail. Reserve the single-value form for code paths where the type is logically guaranteed — and add a comment explaining why.
@@ -142,27 +347,52 @@ export const quizTypeAssertions = [
       "Returns nil and ok == false",
       "Returns the zero value of T and ok == true"
     ],
-    answer: 1
+    answer: 1,
+    explain: "The comma-ok form never panics. On failure it returns T's zero value and false, so the caller can branch on ok without a recover()."
   },
   {
-    q: "Inside a type-switch case `case Rect:`, what is the type of the switched variable `v`?",
+    q: "```go\nvar s Shape // nil interface\nc, ok := s.(Circle)\nfmt.Println(c, ok)\n_ = s.(Circle)\n```\nWhat happens?",
     options: [
-      "The original interface type",
-      "The concrete type Rect",
-      "`any`",
-      "A pointer to Rect"
+      "Prints `{0} false`, then the single-value assertion panics: interface conversion: main.Shape is nil, not main.Circle",
+      "Prints `{0} true`, then the program exits normally",
+      "A compile error — Circle has no zero value",
+      "Both assertions panic immediately"
     ],
-    answer: 1
+    answer: 0,
+    explain: "The comma-ok form is always safe, even on a nil interface — it just reports ok == false. Only the single-value form panics, and the message specifically names the interface as nil rather than naming a wrong concrete type."
   },
   {
-    q: "Which form should you use when you are NOT certain of the dynamic type?",
+    q: "```go\ntype Shape interface{ Area() float64 }\ntype Circle struct{ Radius float64 }\nfunc (c *Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }\n\nvar s Shape = &Circle{Radius: 2}\n_, ok := s.(Circle)\n```\nDoes this compile, and if so what is `ok`?",
     options: [
-      "`v := x.(T)` — the single-value form",
-      "`v, ok := x.(T)` — the comma-ok form",
-      "A `recover()` call around `v := x.(T)`",
-      "A `reflect.TypeOf` check before asserting"
+      "Compiles; ok is true — Circle and *Circle are interchangeable",
+      "Compiles; ok is false — s holds *Circle, not Circle",
+      "Does not compile — impossible type assertion: Circle does not implement Shape (method Area has pointer receiver)",
+      "Does not compile — Shape must be declared with a pointer receiver"
     ],
-    answer: 1
+    answer: 2,
+    explain: "Area has a pointer receiver, so Circle's method set never includes Area — Circle can never satisfy Shape, and the compiler rejects the assertion statically instead of waiting for a runtime check that could never succeed."
+  },
+  {
+    q: "```go\nvar nf NotFoundError // not a pointer\nerrors.As(err, nf)\n```\nWhat happens when this runs?",
+    options: [
+      "Returns false — nf does not match err's type",
+      "Returns true if err wraps a NotFoundError anywhere in the chain",
+      "panic: errors: target must be a non-nil pointer",
+      "Compile error — errors.As requires exactly two arguments of the same type"
+    ],
+    answer: 2,
+    explain: "errors.As requires its second argument to be a non-nil pointer to the target type (or to an interface type). Passing the value itself, instead of &nf, panics with exactly this message."
+  },
+  {
+    q: "A struct embeds `http.ResponseWriter` to add logging, and the underlying concrete writer supports `http.Flusher`. Does the wrapper also support `http.Flusher`?",
+    options: [
+      "Yes — embedding promotes every method the underlying concrete value has",
+      "No — embedding only promotes the methods declared on the embedded interface type itself; Flusher is a separate optional interface",
+      "Only if the wrapper is used as a pointer, not a value",
+      "Only in Go 1.27 and later, via the new embedding rules"
+    ],
+    answer: 1,
+    explain: "http.ResponseWriter declares Header, Write, and WriteHeader — that is all embedding promotes. Flush (from http.Flusher) belongs to the concrete value underneath, not to the ResponseWriter interface, so it is not promoted; the wrapper must assert and forward it explicitly."
   },
   {
     q: "What does `%T` print in a format string?",
@@ -172,7 +402,8 @@ export const quizTypeAssertions = [
       "The dynamic (concrete) type of the value",
       "The interface type the value is stored in"
     ],
-    answer: 2
+    answer: 2,
+    explain: "%T reports the dynamic type stored in the value — for an interface, that means the concrete type it currently holds, not the static interface type of the variable."
   }
 ];
 

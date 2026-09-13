@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Composition แทน Inheritance
 
@@ -54,6 +56,19 @@ e.Name // compile error: ambiguous selector e.Name
 
 Promotion ถูก resolve ที่ compile time และ promoted methods เข้าร่วม method set ของ outer type — นี่คือเหตุผลที่ `Employee` satisfy `Describer` ด้านล่าง รูปแบบยาว `e.Named.Name` ใช้ได้เสมอ แม้ในกรณีที่รูปแบบสั้นจะ ambiguous
 
+export const promotionDiagram = `flowchart TD
+  E["Employee (depth 0)"]
+  N["Named (depth 1, embedded)"]
+  E -->|embeds| N
+  E -.promoted.-> Name["e.Name"]
+  E -.promoted.-> Desc["e.Describe()"]
+  N --> NameField["Name field"]
+  N --> DescMethod["Describe() method"]
+  NameField -.-> Name
+  DescMethod -.-> Desc`;
+
+<Mermaid code={promotionDiagram} title="field หรือ method ที่ depth ตื้นกว่าชนะ; สอง candidate ที่ depth เดียวกันจะ ambiguous" />
+
 คุณสามารถ **override** promoted method ได้โดยประกาศ method ที่มีชื่อเดียวกันบน outer type:
 
 ```go
@@ -93,9 +108,151 @@ type ใดที่ตอบสนอง `Describer` ก็ตอบสนอ�
 
 เพราะไม่มี virtual dispatch, embedding ไม่อนุญาต polymorphism บน outer type ในการได้ polymorphism คุณยังต้องการ interface
 
+## Embedding `*T` vs `T`
+
+การ embed pointer แทน value เปลี่ยนสองอย่าง: embedded type จะถูกแชร์หรือ copy และมันเป็น nil ได้หรือไม่ zero value ของมันเป็น nil จนกว่าจะมีอะไรมา allocate มัน — และการเรียก promoted method ผ่าน pointer นั้น dereference มัน:
+
+```go
+type Named struct{ Name string }
+
+func (n *Named) Hello() string { return "hi " + n.Name }
+
+type Employee struct {
+	*Named // embedded pointer — zero value is nil
+	Dept   string
+}
+
+func main() {
+	e := Employee{Dept: "eng"} // Named is nil, not allocated
+	fmt.Println(e.Dept)
+	fmt.Println(e.Hello()) // panics: promoted method dereferences a nil embedded pointer
+}
+```
+
+รันบน Go 1.26.5:
+
+```text
+eng
+panic: runtime error: invalid memory address or nil pointer dereference
+```
+
+การ embed `Named` แบบ value แทนจะเลี่ยงกรณี nil ได้ทั้งหมด แลกกับการ copy `Named` struct ทั้งก้อนเข้าไปใน `Employee` ทุกตัว การ embed `*Named` เลี่ยง copy และให้ outer values หลายตัวแชร์ `Named` ตัวเดียวกันได้ แต่ทุกการเรียก promoted method ห่างจาก panic นี้แค่ nil check เดียว จนกว่าจะมีอะไรมา assign pointer นั้น
+
+## Embed interface เพื่อทำ partial mock
+
+Struct embedding ใช้กับ interface types ได้เหมือนกัน ไม่ใช่แค่ concrete types การ embed interface field ให้ outer type ได้ methods ทั้งหมดของ interface นั้นมาฟรี — รวมถึงตัวที่คุณไม่เคย implement เอง ซึ่ง forward ตรงไปยังสิ่งที่ field นั้นเก็บอยู่ นี่เป็นเทคนิคที่พบบ่อยสำหรับ partial test double: override เฉพาะ method ที่ test สนใจ แล้ว inherit ที่เหลือ
+
+```go
+type Store interface {
+	Get(key string) string
+	Put(key, val string)
+}
+
+// mockStore embeds the interface to get a partial implementation for free —
+// only override the method the test cares about.
+type mockStore struct {
+	Store // nil — any unoverridden method panics if called
+}
+
+func (m *mockStore) Get(key string) string { return "stub-" + key }
+
+func main() {
+	var s Store = &mockStore{}
+	fmt.Println(s.Get("x")) // stub-x — overridden, fine
+
+	s.Put("x", "y") // panics: Put is not overridden, falls through to the nil embedded Store
+}
+```
+
+```text
+stub-x
+panic: runtime error: invalid memory address or nil pointer dereference
+```
+
+`mockStore` ตอบสนอง `Store` ทันทีที่มัน embed มัน — compiler พอใจเพราะ method set ของ embedded interface ครอบคลุมทุกอย่างที่ `Store` ต้องการ — แต่ embedded field เองเป็น nil จนกว่าคุณจะ assign implementation จริงเข้าไป การเรียก method ใดที่คุณไม่ได้ override จะเข้าถึง field ที่ nil นั้นและ panic pattern นี้ตั้งใจและมีประโยชน์สำหรับ stub method เดียวเป๊ะ ๆ แต่ทุกการเรียกที่ไม่ได้ override คือกับระเบิดที่ยังไม่ถูกเก็บ ไม่ใช่ค่า default ที่ปลอดภัย
+
+## JSON flattening ผ่าน embedding
+
+`encoding/json` promote embedded struct fields เข้าไปใน JSON object ของ parent เมื่อ embedded field ไม่มี tag ของตัวเอง — บ่อยครั้งนี่คือสิ่งที่ API ต้องการพอดี และเกิดขึ้นโดยไม่ตั้งใจได้ง่ายเมื่อไม่ใช่:
+
+```go
+type Address struct {
+	City string `json:"city"`
+}
+
+type Person struct {
+	Address // embedded, no json tag — fields flatten into the parent object
+	Name    string `json:"name"`
+}
+
+func main() {
+	p := Person{Address: Address{City: "Bangkok"}, Name: "Ada"}
+	b, _ := json.Marshal(p)
+	fmt.Println(string(b))
+}
+```
+
+```text
+{"city":"Bangkok","name":"Ada"}
+```
+
+fields ของ `Address` ปรากฏตรง ๆ ใน JSON object ของ `Person` โดยไม่มี `"address": {...}` ซ้อนเลย — กฎ field-promotion เดียวกับที่ให้คุณเขียน `p.City` ใน Go ก็ทำให้ JSON แบนไปด้วย ใส่ tag ให้ embedded field (`Address \`json:"address"\``) เพื่อได้ nested object แทน ซึ่งจะเปลี่ยนมันจาก field แบบ *embedded* เป็นแบบ *named* ด้วย ทำให้ `p.City` compile ไม่ผ่านอีกต่อไปและกลายเป็น `p.Address.City`
+
+## Method set เมื่อ embed `T` vs `*T`
+
+ไม่ว่าจะ embed แบบ value หรือ pointer promoted methods เข้าร่วม method set ของ outer type ตามกฎ value/pointer ปกติ — แต่ methods ไหนบ้างขึ้นกับ receiver ของ *embedded* type และผลลัพธ์อาจน่าแปลกใจ การ embed `Named` แบบ value เข้าไปใน `Employee` เมื่อ method เดียวของ `Named` มี pointer receiver:
+
+```go
+type Named struct{ Name string }
+
+func (n *Named) Hello() string { return "hi " + n.Name }
+
+type Sayer interface{ Hello() string }
+
+type Employee struct {
+	Named // embedded by value
+	Dept  string
+}
+
+func main() {
+	var _ Sayer = Employee{} // Employee's method set has only value-receiver promoted methods
+}
+```
+
+```text
+./main.go:15:16: cannot use Employee{} (value of struct type Employee) as Sayer value in variable declaration: Employee does not implement Sayer (method Hello has pointer receiver)
+```
+
+`Employee` (value) ไม่ตอบสนอง `Sayer` เพราะ `Hello` ต้องการ `*Named` และ `Named` field ที่ embed แบบ value จะ promote แค่ pointer-receiver methods ของมันไปยัง `*Employee` เท่านั้น ไม่ใช่ไปยัง `Employee` `var _ Sayer = &Employee{}` compile ผ่านสบาย ๆ — กฎเดียวกับที่ควบคุม methods ของ type เอง (method set ของ `T` เทียบกับ `*T`) ใช้ได้แบบ recursive ผ่าน embedding ด้วย
+
+## Lock/Unlock ที่รั่วจาก embedded mutex
+
+การ embed `sync.Mutex` เป็นทางลัดยอดนิยมเพื่อได้ lock/unlock โดยไม่ต้องตั้งชื่อ field — แต่ embedding promote `Lock` และ `Unlock` เข้าไปใน method set แบบ *exported* ของ outer type ทำให้ทุก caller เข้าถึง internal lock ได้โดยตรง:
+
+```go
+// Bad: embedding sync.Mutex promotes Lock/Unlock into Cache's exported API —
+// any caller can lock/unlock the internal mutex directly.
+type Cache struct {
+	sync.Mutex
+	data map[string]string
+}
+
+func main() {
+	c := &Cache{data: map[string]string{}}
+	c.Lock() // Lock is part of Cache's public method set — leaked
+	c.data["a"] = "1"
+	c.Unlock()
+}
+```
+
+โค้ดนี้ compile และรันได้โดยไม่ race แต่มันคือ design bug: ไม่มีอะไรหยุด caller ภายนอก `Cache` จากการเรียก `c.Lock()` แล้วไม่ unlock เลย หรือ lock คร่อมโค้ดที่เรียก method ของ `Cache` ที่ lock ภายในอีกที — deadlock ทันที ใช้ named, unexported field แทน — `mu sync.Mutex` — เพื่อให้เฉพาะ methods ของ `Cache` เองเท่านั้นที่เข้าถึง lock ได้ และวินัยการ lock อยู่ภายใน type ที่เป็นเจ้าของมันทั้งหมด
+
 export const embeddingCode = `package main
 
-import "fmt"
+import (
+\t"encoding/json"
+\t"fmt"
+)
 
 type Named struct {
 \tName string
@@ -135,6 +292,28 @@ func print(d Describer) {
 \tfmt.Println(d.Describe()) // promoted Describe still calls Named's String, not Employee's
 }
 
+// Store is a minimal dependency; mockStore embeds it to get a partial fake for free.
+type Store interface {
+\tGet(key string) string
+\tPut(key, val string)
+}
+
+type mockStore struct {
+\tStore // only Get is overridden below; calling Put would panic on this nil embedded Store
+}
+
+func (m *mockStore) Get(key string) string { return "stub-" + key }
+
+// Address is embedded without a json tag, so its fields flatten into Person's JSON object.
+type Address struct {
+\tCity string \`json:"city"\`
+}
+
+type Person struct {
+\tAddress
+\tName string \`json:"name"\`
+}
+
 func main() {
 \te := Employee{
 \t\tNamed:      Named{Name: "Alice"},
@@ -144,6 +323,13 @@ func main() {
 \tfmt.Println(e.Name)       // Alice
 \tfmt.Println(e.Describe()) // Name: Named(Alice) — Named's own String, not Employee's override
 \tprint(e)
+
+\tvar s Store = &mockStore{}
+\tfmt.Println(s.Get("x")) // stub-x — overridden, safe to call
+
+\tp := Person{Address: Address{City: "Bangkok"}, Name: "Ada"}
+\tb, _ := json.Marshal(p)
+\tfmt.Println(string(b)) // {"city":"Bangkok","name":"Ada"} — embedded fields flatten into the parent object
 }`;
 
 <Playground code={embeddingCode} />
@@ -168,6 +354,40 @@ func main() {
 >
 > **bufio.ReadWriter** embed `*bufio.Reader` และ `*bufio.Writer` โดยตรง — promote methods `Read`/`Write` (และอื่น ๆ ) ของทั้งสองให้เรียกผ่าน `ReadWriter` ตัวเดียวได้เลย โดยไม่ต้อง duplicate code
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ generate มา embed type ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- embedded field เป็น pointer (`*T`) หรือเปล่า? ถ้าใช่ มันรับประกันว่าไม่ nil ก่อนที่ promoted method ใด ๆ จะถูกเรียกหรือเปล่า? struct ที่ zero value มี embedded `*T` field จะมี `T` เป็น nil จนกว่าจะมีอะไรมา assign
+- type ของ embedded field มี `sync.Mutex`, `sync.RWMutex`, หรือคล้ายกันหรือเปล่า? ถ้าไม่ใช่ named, unexported field (`mu sync.Mutex`) `Lock`/`Unlock` จะรั่วเข้าไปใน exported API ของ outer type
+- interface ถูก embed เพื่อสร้าง partial mock หรือ decorator หรือเปล่า? ทุก method ที่ไม่ได้ override ชัดเจนจะ forward ไปยัง embedded field ซึ่ง panic ถ้า field นั้นไม่เคยถูก assign
+- embedded struct field ขาด JSON tag ทั้งที่ตั้งใจอยากได้ nested `"address": {...}` object หรือเปล่า? ถ้าไม่มี tag fields ของมันจะแบนเข้าไปใน parent object แทน
+- เมื่อ embed แบบ value, method ที่เกี่ยวข้องเดียวของ embedded type มี pointer receiver หรือเปล่า? ถ้าใช่ outer type รูปแบบ *value* อาจไม่ตอบสนอง interface ที่รูปแบบ *pointer* ตอบสนองได้ — เช็กว่าโค้ดใช้แบบไหนจริง ๆ
+
+<SpotTheBug code={`type Cache struct {
+	sync.Mutex
+	data map[string]int
+}
+
+func NewCache() *Cache {
+	return &Cache{data: make(map[string]int)}
+}
+
+func (c *Cache) Inc(key string) {
+	c.Lock()
+	defer c.Unlock()
+	c.data[key]++
+}
+
+func main() {
+	c := NewCache()
+	c.Lock() // caller reaches into Cache's internal lock directly
+	c.Inc("requests")
+	c.Unlock()
+}`}>
+`Cache` embed `sync.Mutex` ตรง ๆ ซึ่ง promote `Lock` และ `Unlock` เข้าไปใน exported method set ของ `Cache` เอง — caller ใดก็ได้ ไม่ใช่แค่ methods ของ `Cache` สามารถเรียก `c.Lock()` ได้ ใน `main` caller lock mutex แล้วเรียก `c.Inc` ซึ่งพยายาม `Lock` อีกครั้งภายใน — `sync.Mutex` ไม่ reentrant ดังนั้น goroutine จึง block ตัวเองตลอดไป: `fatal error: all goroutines are asleep - deadlock!` ทางแก้คือ named, unexported field — `mu sync.Mutex` — เพื่อให้เฉพาะ methods ของ `Cache` เองเท่านั้นที่เข้าถึง lock ได้ และ caller ไม่มีทางไปยุ่งกับวินัยการ lock ภายในของมัน
+</SpotTheBug>
+
 <Callout title="Embedding คือ composition ไม่ใช่ inheritance">
 ไม่มี virtual dispatch บน outer type `Named.Describe()` เรียก `n.String()` บนตัวเอง ดังนั้นจึง resolve ไปยัง `String` ของ `Named` เองเสมอ — แม้ concrete value จะเป็น `Employee` ที่มี `String()` ของตัวเอง และแม้ `Describe` จะถูกเรียกผ่าน interface `Describer` ก็ตาม เทียบกับ `d.String()` ที่เรียกตรงบน interface: มัน dispatch ไปยัง override ของ `Employee` เพราะ call นั้นไม่ได้ผ่าน `Named` เลย นี่เป็นเจตนา: embedding ของ Go คือกลไก code-reuse ไม่ใช่กลไก polymorphism สำหรับ polymorphism ให้นิยาม interface และให้ทั้งสอง types ตอบสนองอย่างอิสระ
 </Callout>
@@ -181,17 +401,41 @@ export const quizEmbedding = [
       "เฉพาะ `e.Named.Name` — short form ไม่มีสำหรับ embedded fields",
       "`e.Get(\"Name\")` — promoted fields ใช้ generic accessor"
     ],
-    answer: 1
+    answer: 1,
+    explain: "ทั้งสอง form ไปถึง field เดียวกัน short form ใช้ได้เพราะไม่มี field หรือ method ที่ depth ตื้นกว่าชื่อ Name เหมือนกัน ส่วน long form ใช้ได้เสมอไม่ว่ากรณีไหน"
   },
   {
-    q: "คุณ embed `Named` ใน `Employee` และประกาศ `func (e Employee) Describe() string` ด้วย `e.Describe()` เรียก method ใด?",
+    q: "```go\ntype Named struct{ Name string }\nfunc (n *Named) Hello() string { return \"hi \" + n.Name }\n\ntype Employee struct {\n    *Named\n    Dept string\n}\n\ne := Employee{Dept: \"eng\"}\nfmt.Println(e.Hello())\n```\nเกิดอะไรขึ้น?",
     options: [
-      "Describe ของ Named — embedded methods มีความสำคัญก่อนเสมอ",
-      "Describe ของ Employee — method ของ outer type บัง promoted method",
-      "ทั้งสองถูกเรียกและผลลัพธ์ถูก concatenate",
-      "เกิด compile error — ไม่สามารถ override promoted method ได้"
+      "print `hi ` — Name เป็นค่า default เป็น empty string",
+      "panic: runtime error: invalid memory address or nil pointer dereference",
+      "compile error — Employee ไม่ implement Hello",
+      "print `hi eng` — Dept ถูกใช้เป็น fallback"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Employee embed *Named แบบ pointer และ zero value ของมันปล่อย pointer นั้นเป็น nil — ไม่มีอะไรใน literal assign มัน การเรียก promoted Hello dereference *Named ที่ nil เพื่ออ่าน n.Name ซึ่ง panic ด้วยข้อความนี้เป๊ะ ๆ"
+  },
+  {
+    q: "```go\ntype Cache struct {\n    sync.Mutex\n    data map[string]string\n}\n```\nปัญหาของการ embed `sync.Mutex` ตรง ๆ แบบนี้คืออะไร?",
+    options: [
+      "compile ไม่ผ่าน — sync.Mutex embed ไม่ได้",
+      "Lock และ Unlock ถูก promote เข้าไปใน exported method set ของ Cache ดังนั้น caller ภายนอกใดก็ lock/unlock มันตรง ๆ ได้",
+      "มันทำให้ทุก method บน Cache ต้องใช้ pointer receiver",
+      "มัน copy mutex อย่างเงียบ ๆ ทุกครั้งที่เรียก method"
+    ],
+    answer: 1,
+    explain: "embedding promote Lock/Unlock เข้าไปใน public API ของ Cache เอง named, unexported field (mu sync.Mutex) เก็บ lock ให้เป็นส่วนตัวของ methods ของ Cache เท่านั้น ป้องกัน caller lock คร่อม method ของ Cache ที่ lock ภายในเองอีกที"
+  },
+  {
+    q: "```go\ntype Named struct{ Name string }\nfunc (n *Named) Hello() string { return \"hi \" + n.Name }\ntype Sayer interface{ Hello() string }\n\ntype Employee struct {\n    Named // embedded by value\n    Dept  string\n}\n\nvar _ Sayer = Employee{}\n```\nโค้ดนี้ compile ผ่านไหม?",
+    options: [
+      "ผ่าน — Employee ได้ทุก method ของ Named แบบ promote เสมอ",
+      "ไม่ผ่าน — Employee (value) ไม่ implement Sayer; Hello มี pointer receiver และ Named ถูก embed แบบ value",
+      "ผ่าน แต่เพราะ Sayer มีแค่ method เดียวเท่านั้น",
+      "ไม่ผ่าน — Sayer ต้องถูก embed ไม่ใช่ implement"
+    ],
+    answer: 1,
+    explain: "การ embed Named แบบ value promote แค่ value-receiver methods ไปยัง Employee เอง; pointer-receiver methods อย่าง Hello จะ promote ไปยัง *Employee var _ Sayer = &Employee{} จะ compile ผ่าน — กฎ method-set T กับ *T เดียวกันใช้ผ่าน embedding แบบ recursive ด้วย"
   },
   {
     q: "Interface `io.ReadWriter` embeds `io.Reader` และ `io.Writer` type ที่ตอบสนอง `io.ReadWriter` ตอบสนอง... โดยอัตโนมัติ",
@@ -201,17 +445,19 @@ export const quizEmbedding = [
       "เฉพาะ io.Writer",
       "ทั้ง io.Reader และ io.Writer"
     ],
-    answer: 3
+    answer: 3,
+    explain: "interface embedding คือ set union: การตอบสนอง interface ที่ compose แล้วต้องการ (และดังนั้นก็หมายถึง) การตอบสนองทุก interface ที่ embed อยู่ข้างในด้วย"
   },
   {
-    q: "ความแตกต่างหลักระหว่าง Go embedding กับ Java inheritance คืออะไร?",
+    q: "struct `Person` embed `Address` (ไม่มี json tag) แล้วทั้งคู่ถูก marshal ด้วย `encoding/json` JSON หน้าตาเป็นอย่างไร?",
     options: [
-      "Go embedding ช้ากว่าเพราะใช้ reflection ภายใน",
-      "Go embedding มี virtual dispatch; Java inheritance ไม่มี",
-      "Go embedding คือ composition ที่มี promoted methods; ไม่มี virtual dispatch หรือ type hierarchy",
-      "Go embedding ต้องการให้ outer type ระบุทุก promoted method อย่างชัดเจน"
+      "`{\"address\":{\"city\":\"Bangkok\"},\"name\":\"Ada\"}` — ซ้อนใต้ key address",
+      "`{\"city\":\"Bangkok\",\"name\":\"Ada\"}` — fields ของ Address แบนเข้าไปใน object ของ Person",
+      "marshal error — embedded structs serialize ไม่ได้",
+      "`{\"Address\":{\"City\":\"Bangkok\"},\"name\":\"Ada\"}` — ซ้อนใต้ชื่อ field ของ Go"
     ],
-    answer: 2
+    answer: 1,
+    explain: "encoding/json ทำตามกฎ field-promotion เดียวกับที่ Go เองใช้: embedded field ที่ไม่มี tag ของตัวเองจะ promote fields ของมันเข้าไปใน parent object ดังนั้น City จึงปรากฏตรง ๆ ใน JSON ของ Person ไม่ซ้อน"
   }
 ];
 

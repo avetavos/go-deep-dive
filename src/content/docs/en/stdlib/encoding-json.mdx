@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## JSON in Go
 
@@ -166,6 +168,210 @@ func main() {
 
 <Playground code={encodingJsonCode} />
 
+## Unexported fields are invisible, not just omitted
+
+An unexported field (lowercase first letter) is not merely skipped by `omitempty` semantics — `encoding/json` cannot see it at all, through reflection or otherwise. No tag changes that:
+
+```go
+type Account struct {
+    Name   string `json:"name"`
+    secret string // never marshaled, never populated by Unmarshal, no matter what
+}
+```
+
+`json.Marshal(Account{Name: "root", secret: "swordfish"})` produces `{"name":"root"}` — the `secret` field simply does not exist as far as the package is concerned. This is a common source of "why isn't my field showing up" confusion when AI-generated code copies a lowercase field name from elsewhere in the codebase.
+
+## Decoding into any: float64 precision and json.Number
+
+Without a target struct, `Unmarshal`/`Decode` turn every JSON number into a Go `float64` — including integers. A `float64` only has 53 bits of mantissa, so any integer literal larger than 2^53 (9007199254740992) silently loses precision the moment it becomes `any`:
+
+```go
+var v any
+json.Unmarshal([]byte(`{"n": 9007199254740993}`), &v)
+// v["n"] is 9.007199254740992e+15 — the trailing 3 became a 2
+```
+
+`json.Decoder.UseNumber()` avoids this: it decodes JSON numbers into `json.Number`, a string type that preserves the original text, and you convert explicitly with `.Int64()` or `.Float64()` when you actually need a numeric type — a large ID field is the classic case this saves.
+
+## Decoder vs Unmarshal: DisallowUnknownFields and streaming with More()
+
+`json.Unmarshal(data, &v)` needs the whole payload in memory as a `[]byte`. `json.NewDecoder(r).Decode(&v)` reads directly from an `io.Reader` — no full buffer required, and it supports two features `Unmarshal` does not:
+
+- **`dec.DisallowUnknownFields()`** rejects any JSON key that has no matching struct field, instead of silently ignoring it — useful at an API boundary where a typo'd or unexpected field should be a hard error.
+- **`dec.More()`** lets you decode a stream of values one at a time — for example the elements of a JSON array — without ever holding the whole array in memory.
+
+```go
+dec := json.NewDecoder(r)
+dec.Token() // consume the opening '['
+for dec.More() {
+    var item Item
+    dec.Decode(&item) // one element at a time
+}
+```
+
+## []byte, time.Time, and nil vs empty slices
+
+Three encoding rules that are easy to get wrong when writing an API contract by hand:
+
+- **`[]byte`** marshals as a base64-encoded JSON string (RFC 4648), not as a JSON array of numbers.
+- **`time.Time`** marshals as an RFC 3339 string by default (`json.Marshal`'s only built-in time format).
+- **A `nil` slice marshals as `null`; a non-nil empty slice (`[]T{}`) marshals as `[]`.** A `GET /items` endpoint that forgets to initialize its result slice sends `"items":null` to clients that expect `"items":[]` — a real API-compatibility bug, not just cosmetic.
+
+## Custom MarshalJSON and the alias trick
+
+A type can control its own JSON encoding by implementing `MarshalJSON() ([]byte, error)`. The trap: calling `json.Marshal` on the receiver *inside* that method calls `MarshalJSON` again, recursing forever. The fix is the **alias trick** — define a new type with the same underlying fields but none of the original's methods, and marshal that instead:
+
+```go
+type Node struct {
+    Value    int    `json:"value"`
+    Children []Node `json:"children"`
+}
+
+func (n Node) MarshalJSON() ([]byte, error) {
+    type alias Node // same fields, no methods — breaks the recursive call
+    return json.Marshal(struct {
+        Total int `json:"total"`
+        alias
+    }{
+        Total: n.Value + len(n.Children),
+        alias: alias(n),
+    })
+}
+```
+
+`type alias Node` creates a distinct named type with `Node`'s exact field layout but a fresh, empty method set, so `json.Marshal(alias(n))` goes through the default struct encoder instead of calling `MarshalJSON` again.
+
+export const encodingJsonAdvancedCode = `package main
+
+import (
+\t"bytes"
+\t"encoding/json"
+\t"fmt"
+\t"strings"
+\t"time"
+)
+
+// secret is unexported — encoding/json can never see it, tag or no tag
+type Account struct {
+\tName   string \`json:"name"\`
+\tsecret string
+}
+
+// Node uses a MarshalJSON with the "alias trick" to avoid infinite recursion:
+// aliasing Node to a new type with the same fields drops the MarshalJSON method,
+// so encoding it with the alias type calls the default struct encoder, not itself.
+type Node struct {
+\tValue    int    \`json:"value"\`
+\tChildren []Node \`json:"children"\`
+}
+
+func (n Node) MarshalJSON() ([]byte, error) {
+\ttype alias Node // same fields, no methods — breaks the recursive call
+\treturn json.Marshal(struct {
+\t\tTotal int \`json:"total"\`
+\t\talias
+\t}{
+\t\tTotal: n.Value + len(n.Children),
+\t\talias: alias(n),
+\t})
+}
+
+type Blob struct {
+\tRaw   []byte    \`json:"raw"\`
+\tWhen  time.Time \`json:"when"\`
+\tTags  []string  \`json:"tags"\`
+\tEmpty []string  \`json:"empty"\`
+}
+
+func main() {
+\t// 1. unexported field is invisible to encoding/json
+\ta := Account{Name: "root", secret: "swordfish"}
+\tdata, _ := json.Marshal(a)
+\tfmt.Println("unexported dropped:", string(data))
+
+\t// 2. decoding into any: numbers become float64, large ints lose precision
+\tvar any1 any
+\tjson.Unmarshal([]byte(\`{"n": 9007199254740993}\`), &any1)
+\tm := any1.(map[string]any)
+\tfmt.Printf("as any: %v (%T)\\n", m["n"], m["n"])
+
+\t// json.Number keeps the exact text instead
+\tdec := json.NewDecoder(strings.NewReader(\`{"n": 9007199254740993}\`))
+\tdec.UseNumber()
+\tvar any2 any
+\tdec.Decode(&any2)
+\tm2 := any2.(map[string]any)
+\tnum := m2["n"].(json.Number)
+\tfmt.Printf("as json.Number: %v (%T) -> Int64: %v\\n", num, num, func() string {
+\t\ti, err := num.Int64()
+\t\treturn fmt.Sprintf("%d err=%v", i, err)
+\t}())
+
+\t// 3. DisallowUnknownFields rejects fields the struct doesn't declare
+\ttype Strict struct {
+\t\tName string \`json:"name"\`
+\t}
+\tvar s Strict
+\tdec2 := json.NewDecoder(strings.NewReader(\`{"name":"Ada","extra":1}\`))
+\tdec2.DisallowUnknownFields()
+\terr := dec2.Decode(&s)
+\tfmt.Println("DisallowUnknownFields error:", err)
+
+\t// 4. Decoder streaming with dec.More() over a JSON array, one element at a time
+\tdec3 := json.NewDecoder(strings.NewReader(\`[1,2,3]\`))
+\tdec3.Token() // consume the opening '['
+\tvar nums []int
+\tfor dec3.More() {
+\t\tvar n int
+\t\tdec3.Decode(&n)
+\t\tnums = append(nums, n)
+\t}
+\tfmt.Println("streamed with dec.More():", nums)
+
+\t// 5. []byte marshals as base64, time.Time as RFC3339
+\tb := Blob{
+\t\tRaw:   []byte("hi"),
+\t\tWhen:  time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC),
+\t\tTags:  []string{"a"},
+\t\tEmpty: []string{},
+\t}
+\tvar nilTags []string
+\tb.Tags = nilTags // nil slice
+\tdata2, _ := json.Marshal(b)
+\tfmt.Println("[]byte + time.Time:", string(data2))
+
+\t// 6. custom MarshalJSON with the alias trick against infinite recursion
+\ttree := Node{Value: 1, Children: []Node{{Value: 2}, {Value: 3}}}
+\tdata3, _ := json.Marshal(tree)
+\tfmt.Println("custom MarshalJSON:", string(data3))
+
+\t// 7. nil slice encodes as null, empty slice encodes as []
+\ttype Lists struct {
+\t\tNil   []int \`json:"nil"\`
+\t\tEmpty []int \`json:"empty"\`
+\t}
+\tvar buf bytes.Buffer
+\tjson.NewEncoder(&buf).Encode(Lists{Nil: nil, Empty: []int{}})
+\tfmt.Print("nil vs empty slice: ", buf.String())
+}`;
+
+<Playground code={encodingJsonAdvancedCode} />
+
+Real output from this program on Go 1.26.5:
+
+```text
+unexported dropped: {"name":"root"}
+as any: 9.007199254740992e+15 (float64)
+as json.Number: 9007199254740993 (json.Number) -> Int64: 9007199254740993 err=<nil>
+DisallowUnknownFields error: json: unknown field "extra"
+streamed with dec.More(): [1 2 3]
+[]byte + time.Time: {"raw":"aGk=","when":"2026-09-13T12:00:00Z","tags":null,"empty":[]}
+custom MarshalJSON: {"total":3,"value":1,"children":[{"total":2,"value":2,"children":null},{"total":3,"value":3,"children":null}]}
+nil vs empty slice: {"nil":null,"empty":[]}
+```
+
+Note the last line of `children` in the tree output: `{Value: 3}` has no `Children` set, so it is a nil slice, and it marshals as `null` — the same rule from item 7, showing up inside the custom `MarshalJSON` output too.
+
 ## encoding/json/v2 (Go 1.27)
 
 Go 1.27 ships `encoding/json/v2` and its low-level companion `encoding/json/jsontext` as stable packages. Everything above still works: the v1 `encoding/json` API is unchanged, but it is now *implemented on top of v2*, so existing programs get the faster decoder for free (opt out with `GOEXPERIMENT=nojsonv2` if you hit a behavioural difference).
@@ -254,6 +460,17 @@ for {
 
 Rule of thumb for 2026: keep v1 for existing code and for wire formats that tolerate sloppy input; start new services on v2 so malformed JSON fails loudly at the boundary.
 
+## The marshal/unmarshal path
+
+export const jsonPathDiagram = `flowchart LR
+  GoValue["Go struct"] -- "json.Marshal" --> Bytes["[]byte JSON"]
+  Bytes -- "json.Unmarshal" --> GoValue2["Go struct"]
+  GoValue -- "MarshalJSON()" --> Custom["custom encoding"]
+  Bytes -- "json.NewDecoder(r)" --> Dec["Decoder"]
+  Dec -- "Decode() / More()" --> Stream["one value at a time"]
+  Bytes -- "into map[string]any" --> Any["float64 / json.Number"]`;
+
+<Mermaid code={jsonPathDiagram} title="Struct tags and MarshalJSON control one direction; Decoder streaming avoids loading the whole payload" />
 
 ## Trade-offs
 
@@ -281,6 +498,44 @@ Rule of thumb for 2026: keep v1 for existing code and for wire formats that tole
 Fields that start with a lowercase letter are unexported and are completely invisible to `encoding/json` — they will never appear in the output and will never be populated during unmarshaling, regardless of what tag you write on them. Always make fields you want to serialize start with an uppercase letter. The `json:"name"` tag then controls the key name in the JSON output independently of the Go field name, so you can follow Go naming conventions (`UserID`) while producing clean JSON (`"user_id"`).
 </Callout>
 
+## Reading AI-generated code
+
+AI-generated `encoding/json` code tends to look complete while quietly assuming a schema it never validates. Check for these before trusting it:
+
+- Does a field meant to appear in JSON start with an uppercase letter? A lowercase field silently never serializes, with no error from `Marshal` or `Unmarshal`.
+- Does anything type-assert a decoded `any` value straight to `int`, `int64`, or a custom numeric type? Every JSON number decodes to `float64` unless the target is a concrete struct field or `UseNumber()` is set.
+- Does an `omitempty` tag sit on a `struct` or `time.Time` field and assume it will be dropped when zero? It will not — only `omitzero` (Go 1.24) does that.
+- Is a `[]T` result field ever left nil on an empty result, when API consumers expect `[]` rather than `null`?
+- Does a custom `MarshalJSON` call `json.Marshal` on `n` (the receiver) instead of an alias type — an infinite recursion that only surfaces at runtime?
+- Does code that must reject unexpected fields use plain `Unmarshal` instead of a `Decoder` with `DisallowUnknownFields()`?
+
+<SpotTheBug code={`func parseCount(body []byte) (int, error) {
+	var v map[string]any
+	if err := json.Unmarshal(body, &v); err != nil {
+		return 0, err
+	}
+	count := v["count"].(int) // ???
+	return count, nil
+}`}>
+
+`json.Unmarshal` into `map[string]any` turns every JSON number into `float64`, never `int` — so `v["count"].(int)` panics on any valid input:
+
+```text
+recovered: interface conversion: interface {} is float64, not int
+```
+
+Fix it with the correct type assertion and an explicit conversion, or avoid the map entirely by decoding into a typed struct with a `Count int` field, which lets `encoding/json` do the numeric conversion for you:
+
+```go
+count, ok := v["count"].(float64)
+if !ok {
+    return 0, fmt.Errorf("count: not a number")
+}
+return int(count), nil
+```
+
+</SpotTheBug>
+
 export const quizEncodingJson = [
   {
     q: "What does json.Unmarshal require as its second argument?",
@@ -290,7 +545,8 @@ export const quizEncodingJson = [
       "A []byte slice",
       "An io.Reader"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Unmarshal writes into the value the pointer refers to; without a pointer it has no way to modify the caller's variable."
   },
   {
     q: "A struct field tagged `json:\"email,omitempty\"` with an empty string value will:",
@@ -300,17 +556,19 @@ export const quizEncodingJson = [
       "Be omitted from the JSON output entirely",
       "Cause json.Marshal to return an error"
     ],
-    answer: 2
+    answer: 2,
+    explain: "omitempty treats an empty string as empty at the language level and drops the field entirely — but the same tag on a zero struct or zero time.Time does NOT drop it; that needs omitzero (Go 1.24)."
   },
   {
-    q: "You unmarshal JSON into map[string]any. What Go type does the number 1.22 become?",
+    q: "\`\`\`go\nvar v any\njson.Unmarshal([]byte(\`{\"n\": 9007199254740993}\`), &v)\nm := v.(map[string]any)\nfmt.Println(m[\"n\"])\n\`\`\`\nWhat does this print?",
     options: [
-      "int",
-      "int64",
-      "float32",
-      "float64"
+      "9007199254740993",
+      "9.007199254740992e+15",
+      "9007199254740992",
+      "It panics"
     ],
-    answer: 3
+    answer: 1,
+    explain: "Decoding into any always produces float64 for numbers; a float64's 53-bit mantissa cannot represent 9007199254740993 exactly, so the trailing 3 rounds to a 2. json.Number avoids this by keeping the original text."
   },
   {
     q: "A struct field named userID (lowercase u) with a json:\"user_id\" tag will:",
@@ -320,7 +578,30 @@ export const quizEncodingJson = [
       "Never appear in the JSON output because the field is unexported",
       "Cause a compile error"
     ],
-    answer: 2
+    answer: 2,
+    explain: "encoding/json only sees exported (uppercase-first) fields; a tag on an unexported field has no effect because the field is invisible to the package."
+  },
+  {
+    q: "\`\`\`go\ntype Result struct {\n    Items []string \`json:\"items\"\`\n}\nr := Result{}\ndata, _ := json.Marshal(r)\nfmt.Println(string(data))\n\`\`\`\nWhat does this print?",
+    options: [
+      "{\"items\":[]}",
+      "{\"items\":null}",
+      "{}",
+      "It does not compile"
+    ],
+    answer: 1,
+    explain: "Items is never initialized, so it is a nil slice; a nil slice marshals as null, not []. Initializing it as []string{} would print {\"items\":[]} instead — an easy API-contract bug."
+  },
+  {
+    q: "Why does a custom MarshalJSON method use `type alias T` before calling json.Marshal on the receiver's fields?",
+    options: [
+      "It is required by the encoding/json interface",
+      "It makes the JSON output smaller",
+      "Calling json.Marshal on the original type would call MarshalJSON again, recursing forever — alias has the same fields but none of the methods",
+      "It converts the struct to a map first"
+    ],
+    answer: 2,
+    explain: "type alias T defines a distinct type with T's field layout but an empty method set, so json.Marshal(alias(v)) goes through the default struct encoder instead of calling MarshalJSON again."
   }
 ];
 

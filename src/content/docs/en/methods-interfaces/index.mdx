@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Go's approach to polymorphism
 
@@ -21,6 +22,8 @@ The combination of methods and interfaces gives you:
 - **Polymorphism** without inheritance trees.
 - **Dependency inversion** without frameworks — accept an interface, return a struct.
 - **Composition** without `extends` — embed types to promote their fields and methods.
+
+Every rule in this module resolves to one of two things at the keyboard: a compile error naming a missing or mismatched method, or a nil surprise inside an interface or an embedded pointer. Learning to recognize both on sight — not just knowing the rule in the abstract — is the actual skill this module builds.
 
 ## Module map
 
@@ -55,10 +58,20 @@ func printArea(s Sizer) {
 \tfmt.Printf("area = %.2f\\n", s.Area())
 }
 
+// Counter shows the other half of the story: a pointer receiver that mutates.
+type Counter struct{ n int }
+
+func (c *Counter) Inc() { c.n++ }
+
 func main() {
 \tr := Rectangle{Width: 4, Height: 3}
 \tfmt.Println(r.Area())
 \tprintArea(r)
+
+\tc := &Counter{}
+\tc.Inc()
+\tc.Inc()
+\tfmt.Println(c.n) // 2 — pointer receiver mutated the original
 }`;
 
 <Playground code={indexCode} />
@@ -84,6 +97,35 @@ func main() {
 >
 > Kubernetes' `runtime.Object` interface (`k8s.io/apimachinery/pkg/runtime`) is satisfied by every Kubernetes API resource — a controller written once against `runtime.Object` works with `Pod`, `Deployment`, and `Service` alike.
 
+## Reading AI-generated code
+
+Across every lesson in this module, the same handful of checks catch most generated-code bugs before they ship:
+
+- Does every method on a type use the same receiver kind? A mix, or a value receiver on a type meant to mutate, is the first thing to check.
+- Is a concrete value assigned to an interface variable when one of the required methods has a pointer receiver? That is a compile error, not a runtime bug — read the message, it names the method.
+- Does a function return a typed `nil` pointer through an interface-typed result (`error`, or any other interface)? The caller's `== nil` check will be wrong.
+- Does a single-value type assertion (`v := x.(T)`) run without a comma-ok guard on a value that might not hold `T`?
+- Does an embedded pointer, or an embedded interface used as a partial mock, get a promoted method called on it before anything assigns it a real value?
+
+<SpotTheBug code={`type Rectangle struct {
+	Width, Height float64
+}
+
+func (r *Rectangle) Area() float64 {
+	return r.Width * r.Height
+}
+
+type Sizer interface {
+	Area() float64
+}
+
+func main() {
+	var s Sizer = Rectangle{Width: 4, Height: 3}
+	_ = s
+}`}>
+`Area` has a **pointer** receiver, so `Rectangle`'s method set (the value type) does not include it — only `*Rectangle`'s does. Assigning a plain `Rectangle{}` value to the `Sizer` interface variable fails to compile: `cannot use Rectangle{…} (value of struct type Rectangle) as Sizer value in variable declaration: Rectangle does not implement Sizer (method Area has pointer receiver)`. The fix is `var s Sizer = &Rectangle{Width: 4, Height: 3}`.
+</SpotTheBug>
+
 <Callout title="The key insight">
 `Rectangle` never says `implements Sizer`. It just has a method with the right name and signature. That is all Go needs. If the method set matches, the interface is satisfied — automatically, at compile time.
 </Callout>
@@ -97,7 +139,30 @@ export const quizMethodsInterfaces = [
       "By having the correct methods — no declaration is needed",
       "By registering with an interface registry at runtime"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Go checks the method set structurally at compile time. No declaration, keyword, or registration step exists — or is needed."
+  },
+  {
+    q: "```go\ntype Rectangle struct{ W, H float64 }\nfunc (r *Rectangle) Area() float64 { return r.W * r.H }\ntype Sizer interface{ Area() float64 }\n\nvar s Sizer = Rectangle{W: 4, H: 3}\n```\nDoes this compile?",
+    options: [
+      "Yes — Rectangle has an Area method, so it satisfies Sizer",
+      "No — Rectangle does not implement Sizer because Area has a pointer receiver",
+      "Yes, but calling s.Area() later panics",
+      "No — Sizer must be embedded inside Rectangle first"
+    ],
+    answer: 1,
+    explain: "Area has a pointer receiver, so only *Rectangle's method set includes it. Assigning a value Rectangle{} to a Sizer variable fails to compile with a message naming exactly this: method Area has pointer receiver."
+  },
+  {
+    q: "```go\ntype MyErr struct{ msg string }\nfunc (e *MyErr) Error() string { return e.msg }\n\nfunc f() error {\n    var p *MyErr\n    return p\n}\n\nfmt.Println(f() == nil)\n```\nWhat does this print, and why?",
+    options: [
+      "true — p is nil, so the returned error is nil too",
+      "false — the error interface holds a non-nil type descriptor around a nil *MyErr",
+      "This is a compile error — *MyErr does not implement error",
+      "true, but only on the first call"
+    ],
+    answer: 1,
+    explain: "An interface is (type, data). Returning a typed nil *MyErr through an error-typed return produces (type: *MyErr, data: nil) — never (nil, nil) — so == nil is false even though the pointer itself is nil."
   },
   {
     q: "Which of the following can have methods in Go?",
@@ -107,7 +172,8 @@ export const quizMethodsInterfaces = [
       "Any named type defined in the same package, except pointer types and interface types",
       "Only types that implement at least one interface"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Methods attach to any named type you declare, including named function types and named primitives like type Celsius float64 — with pointer types and interface types as the only exclusions."
   },
   {
     q: "What is the idiomatic Go substitute for class inheritance?",
@@ -117,7 +183,8 @@ export const quizMethodsInterfaces = [
       "Pointer receivers on a base struct",
       "The `any` interface"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Embedding gives code reuse without a type hierarchy, and small interfaces give polymorphism without inheritance — together they replace what class inheritance does in other languages, without virtual dispatch."
   }
 ];
 

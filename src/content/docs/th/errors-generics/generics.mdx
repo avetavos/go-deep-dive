@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ทำไมต้องใช้ Generics?
 
@@ -48,6 +50,47 @@ type Number interface {
 
 prefix `~` หมายถึง "type ใดก็ตามที่มี underlying type เป็น `int` หรือ `float64`" นี่คือ **tilde operator**: หากไม่มี `~` เฉพาะ named type นั้นเท่านั้นที่ตรงกัน; เมื่อมี `~` custom types เช่น `type Celsius float64` ก็ satisfy `~float64` ได้เช่นกัน — นี่คือ defined (named) type ทำให้ constraints ทำงานได้ตามธรรมชาติกับ type แบบนี้ ส่วน true alias อย่าง `type C = float64` เป็น type เดียวกับ `float64` อยู่แล้ว จึงไม่ต้องใช้ `~` เลย
 
+## Constraint interfaces ไม่ใช่ type ธรรมดา
+
+constraint interface ที่มี type term คั่นด้วย `|` (หรือมี `~`) ใช้ได้แค่ข้างใน list `[T Constraint]` เท่านั้น — ห้ามใช้เป็น type ของตัวแปรธรรมดา, field, หรือ parameter เลย แม้จะเขียนด้วย syntax `interface { ... }` ก็ตาม:
+
+```go
+type Number interface {
+	~int | ~float64
+}
+
+var x Number // BUG: constraint interfaces aren't usable this way
+```
+
+ตรวจสอบแล้วบน 1.26.5 นี่คือ compile error:
+
+```
+cannot use type Number outside a type constraint: interface contains type constraints
+```
+
+interface ที่ไม่มี type term เลย (มีแค่ method อย่าง `error` หรือ `io.Reader`) ใช้เป็น type ธรรมดาได้เสมอ — ข้อจำกัดนี้ใช้เฉพาะกับ interface ที่มี type term คั่นด้วย `|` เพราะมันมีไว้เพื่ออธิบาย constraint ตอน compile time เท่านั้น ไม่ใช่ interface value ตอน runtime
+
+## comparable มีข้อยกเว้นตอน runtime
+
+`comparable` ดูเหมือนจะรับประกันว่า `==` ไม่มีวันล้มเหลว แต่ไม่ใช่ทั้งหมด ตั้งแต่ Go 1.20 `any` (และ interface type ใด ๆ) satisfy `comparable` ได้ เพราะ *static* type ของ interface value รองรับ `==` ทาง syntax เสมอ ส่วนการเปรียบเทียบจะสำเร็จจริงหรือไม่ขึ้นอยู่กับ *dynamic* value ที่เก็บอยู่ข้างในตอน runtime:
+
+```go
+func Equal[T comparable](a, b T) bool {
+	return a == b
+}
+
+var a, b any = []int{1, 2}, []int{1, 2}
+Equal(a, b) // compiles fine -- any satisfies comparable
+```
+
+ตรวจสอบแล้วบน 1.26.5 การเรียกนี้ panic เพราะ slice ไม่ comparable แม้ interface ที่ถือมันจะ comparable ก็ตาม:
+
+```
+panic: runtime error: comparing uncomparable type []int
+```
+
+type ที่ comparable ตามปกติ (`int`, `string`, struct ที่มี field เป็น comparable ทั้งหมด) ไม่มีวันเจอปัญหานี้ — ความเสี่ยงจะปรากฏเฉพาะเมื่อ `T` ถูก instantiate ด้วย `any` หรือ interface type อื่น และ caller ควบคุมไม่ได้ว่าข้างในจะมีอะไร
+
 ## Built-in constraints จาก cmp
 
 Go 1.21 นำเสนอ package `cmp` ซึ่ง export `cmp.Ordered` — constraint แบบ idiomatic สำหรับ type ที่รองรับ `<`, `<=`, `>`, `>=`, `==` ครอบคลุม integer, float, และ string ทุกชนิด การใช้ `cmp.Ordered` สะอาดกว่าการเขียน union เต็มรูปแบบ `~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ... | ~float64 | ~string` ด้วยตัวเอง
@@ -64,6 +107,8 @@ func Min[T cmp.Ordered](a, b T) T {
 ```
 
 playground snippet ด้านล่างใช้ local `Number` interface แทน `cmp.Ordered` เพื่อให้เห็น constraint อยู่ในไฟล์เดียวกัน
+
+ก่อนที่ `cmp.Ordered` จะเข้ามาอยู่ใน standard library (Go 1.21) package ของ community อย่าง `golang.org/x/exp/constraints` ทำหน้าที่นี้อยู่ก่อน — `constraints.Ordered` มีรูปแบบเดียวกันและมีมาก่อน stdlib version โค้ดใหม่ควรใช้ `cmp.Ordered`; `constraints.Ordered` ยังพบได้ในโค้ดที่เขียนสำหรับ Go 1.18–1.20 หรือ package ที่ยังไม่ migrate และทั้งสองใช้แทนกันได้เมื่อคุณควบคุมทั้งสองฝั่ง
 
 ## Generic Types
 
@@ -90,6 +135,43 @@ func (s *Stack[T]) Pop() (T, bool) {
 ```
 
 methods บน generic type ใช้ type parameter ซ้ำใน receiver — `(s *Stack[T])` — แต่ไม่เพิ่ม constraint ใหม่ constraint ถูกกำหนดไว้แล้วครั้งเดียวตอนประกาศ type
+
+`Pop` ด้านบนใช้ `var zero T` เพื่อสร้าง zero value ของ `T` ไม่ว่ามันจะเป็นอะไร — `0` สำหรับตัวเลข, `""` สำหรับ string, `nil` สำหรับ slice และ pointer `*new(T)` ทำสิ่งเดียวกัน: `new(T)` allocate `T` ที่เป็น zero แล้วคืน `*T` และการ dereference มันก็ได้ค่านั้นมา ทั้งสองแบบเทียบเท่ากันและพบได้ในโค้ดจริง `var zero T` เป็น idiom ที่พบบ่อยกว่าเพราะอ่านตรง ๆ ว่า "zero value ของ T" โดยไม่ต้องผ่านขั้นตอน allocate-แล้ว-dereference เพิ่ม
+
+## Instantiation ต้องชัดเจน; inference ไม่ครอบคลุมทุกที่
+
+**type** แบบ generic ไม่เคย infer type argument ให้เลย — ทุกการใช้งานต้อง instantiate อย่างชัดเจน รวมถึงการประกาศตัวแปรเปล่า ๆ ด้วย:
+
+```go
+type Stack[T any] struct{ items []T }
+
+var s Stack // BUG: missing a type argument
+```
+
+ตรวจสอบแล้วบน 1.26.5:
+
+```
+cannot use generic type Stack[T any] without instantiation
+```
+
+ทางแก้คือ `var s Stack[int]` (หรือ element type ที่ต้องการ) นี่ต่างจาก **function** แบบ generic ซึ่งมักไม่ต้องระบุ type argument อย่างชัดเจนเพราะ Go อนุมาน `T` จาก arguments ที่ call site ได้ — แต่การอนุมานนั้นดูแค่ arguments เท่านั้น ไม่เคยดูจาก return type ที่คาดหวัง:
+
+```go
+func Zero[T any]() T {
+	var zero T
+	return zero
+}
+
+var x int = Zero() // BUG: nothing to infer T from
+```
+
+ตรวจสอบแล้วบน 1.26.5:
+
+```
+in call to Zero, cannot infer T (declared at ./main.go:5:11)
+```
+
+แม้ผลลัพธ์จะถูก assign ให้ `int` Go ก็ไม่ทำ return-type inference ให้ — ต้องเขียน `Zero[int]()`
 
 ## Generic type alias (Go 1.24)
 
@@ -248,6 +330,85 @@ func main() {
 
 <Playground code={genericsCode} />
 
+## เมื่อไหร่ไม่ควรใช้ generics
+
+generics แก้ปัญหาเฉพาะเจาะจง: algorithm เดียวกัน เขียนครั้งเดียว ใช้กับหลาย concrete type โดยตรวจสอบตอน compile time มันเป็นเครื่องมือที่ผิดเมื่อ:
+
+- **มี concrete type เดียวที่ต้องการใช้จริง ๆ** `Stack` ที่ใช้แค่กับ `int` ใน package เดียวไม่จำเป็นต้องมี type parameter — ค่อยเพิ่มทีหลังถ้ามี use case ที่สองเกิดขึ้นจริง
+- **สิ่งที่ต้องการจริง ๆ คือ runtime polymorphism** ถ้า caller ต้องเลือก*พฤติกรรม*ต่างกันตอน runtime (`Reader`, `Handler`, plugin) นั่นคือ interface ไม่ใช่ type parameter — generics ถูก resolve ตอน compile time จึงไม่สามารถแสดงออกว่า "เลือก implementation ไหนตอน runtime" แบบที่ interface value ทำได้
+- **body ของ function แทบไม่ได้ใช้ `T` เลย** function ที่ส่งผ่าน `T` โดยไม่แตะต้องมันเลย (ไม่มี operation เฉพาะ `T`) บางครั้งอ่านง่ายกว่าถ้าใช้ `any` กับ type assertion แค่จุดเดียวที่จำเป็น แทนที่จะร้อย type parameter ผ่านทั้ง call chain เพื่อ use case แคบ ๆ อันเดียว
+- **constraint ต้องใหญ่โตหรือขัดแย้งกันเองมาก** แค่เพื่อทำให้ function เดียวเป็น generic — ปกติแล้วเป็นสัญญาณว่ามี algorithm ที่ต่างกันจริง ๆ สองตัวถูกยัดเข้ารูปแบบเดียว
+
+export const gcShapeDiagram = `flowchart LR
+  subgraph Distinct["different GC shapes -- separate compiled code"]
+    IntCall["Max[int](3, 7)"] --> IntCode["compiled Max for int"]
+    F64Call["Max[float64](3, 7)"] --> F64Code["compiled Max for float64"]
+  end
+  subgraph Shared["pointer-shaped types -- one shared stencil"]
+    PtrACall["Max[*A](...)"] --> SharedCode["compiled Max for pointer shape"]
+    PtrBCall["Max[*B](...)"] --> SharedCode
+    SharedCode --> Dict["runtime dictionary picks *A vs *B behavior"]
+  end`;
+
+<Mermaid code={gcShapeDiagram} title="GC-shape stenciling: shape ที่ต่างกันได้ code ของตัวเอง; type ที่ shape เดียวกันแชร์ตัวเดียวบวก dictionary" />
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ AI generate ใช้ type parameter ให้มองหาสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- constraint interface (ที่มี type term คั่นด้วย `|` หรือ `~`) ถูกใช้เป็น type ของตัวแปร, field, หรือ parameter แทนที่จะใช้แค่ข้างใน `[T Constraint]` หรือเปล่า? นั่นคือ compile error ไม่ใช่ runtime surprise
+- generic type ถูกใช้โดยไม่มี type argument (`var s Stack` แทนที่จะเป็น `var s Stack[int]`) หรือเปล่า? type ไม่เคย infer ให้เลย — มีแค่ function call เท่านั้นที่ infer ได้ และ infer จาก argument เท่านั้น
+- โค้ดสมมติว่า `==` จาก `Equal[T comparable]` หรือคล้ายกัน panic ไม่ได้เลยหรือเปล่า? ถ้า `T` เป็น `any` หรือ interface type อื่นได้ ค่าที่ไม่ comparable ข้างในจะ panic ตอน runtime
+- มี generic function ที่ concrete type เดียว หรือ interface ธรรมดา จะสื่อความหมายเดียวกันได้โดยใช้กลไกน้อยกว่าหรือเปล่า?
+- `var zero T` (หรือ `*new(T)`) ถูกใช้สร้างกรณี "ไม่มีผลลัพธ์" แต่ caller กลับปฏิบัติกับ zero value เหมือนมันมีความหมายต่างจาก "ไม่มี" หรือเปล่า — เช่น `0` หมายถึงทั้ง "ไม่มีค่า" และ "ค่าคือศูนย์" พร้อมกัน?
+
+<SpotTheBug code={`func Equal[T comparable](a, b T) bool {
+	return a == b
+}
+
+func main() {
+	var a, b any = []int{1, 2}, []int{1, 2}
+	fmt.Println(Equal(a, b))
+}`}>
+`any` satisfy `comparable` ได้ตั้งแต่ Go 1.20 — การตรวจ constraint ผ่านตอน compile time แต่ `==` ระหว่างค่า `any` สองตัวเทียบ concrete value ที่เก็บอยู่ข้างในตอน runtime และ `[]int` ไม่ comparable ตรวจสอบแล้วบน 1.26.5: โค้ดนี้ panic ด้วย `panic: runtime error: comparing uncomparable type []int` `comparable` รับประกันแค่ว่าโค้ด compile ผ่าน ไม่ได้รับประกันว่าทุก instantiation รันได้ปลอดภัย — ปัญหานี้จะเกิดเฉพาะเมื่อ `T` ลงเอยเป็น `any` หรือ interface type อื่นที่ถือ slice, map, หรือ func
+</SpotTheBug>
+
+export const genericsDepthCode = `package main
+
+import "fmt"
+
+// Zero returns the zero value of T -- var zero T is the idiomatic form.
+func Zero[T any]() T {
+\tvar zero T
+\treturn zero
+}
+
+// ZeroAlt is equivalent using *new(T): new(T) allocates a T and zeroes it,
+// then *new(T) dereferences to get the value. var zero T is more common.
+func ZeroAlt[T any]() T {
+\treturn *new(T)
+}
+
+// Equal works for any comparable type -- including plain values, where == never panics.
+func Equal[T comparable](a, b T) bool {
+\treturn a == b
+}
+
+func main() {
+\tfmt.Println(Zero[int](), Zero[string](), Zero[[]int]() == nil)
+\tfmt.Println(ZeroAlt[int](), ZeroAlt[string]() == "")
+
+\tfmt.Println(Equal(3, 3))
+\tfmt.Println(Equal("go", "rust"))
+
+\t// any satisfies comparable since Go 1.20 -- fine as long as the
+\t// dynamic value inside it is itself comparable.
+\tvar a, b any = 3, 3
+\tfmt.Println(Equal(a, b))
+}`;
+
+<Playground code={genericsDepthCode} />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -281,17 +442,30 @@ export const quizGenerics = [
       "T ต้องเป็น type Number เท่านั้น",
       "Number เป็น function ที่คืน T"
     ],
-    answer: 1
+    answer: 1,
+    explain: "[T Number] ประกาศ T เป็น type parameter; Number คือ constraint ที่จำกัดว่า concrete type ใดสามารถแทน T ได้ที่แต่ละ call site"
   },
   {
-    q: "prefix ~ ใน constraint เช่น ~int หมายความว่าอะไร?",
+    q: "```go\ntype Number interface {\n    ~int | ~float64\n}\n\nfunc main() {\n    var x Number\n}\n```\nโค้ดนี้ compile ผ่านไหม?",
     options: [
-      "เฉพาะ type int เท่านั้น",
-      "type ใด ๆ ที่มี underlying type เป็น int (รวม custom types เช่น type MyID int)",
-      "ประมาณ int (fuzzy matching)",
-      "pointer ชี้ไปที่ int"
+      "ผ่าน x เป็น interface value ที่เริ่มต้นด้วย nil",
+      "ไม่ผ่าน — cannot use type Number outside a type constraint",
+      "ผ่าน แต่เฉพาะเมื่อ Number ไม่มี ~ prefix",
+      "ไม่ผ่าน — Number ต้อง instantiate ด้วย [int] ก่อน"
     ],
-    answer: 1
+    answer: 1,
+    explain: "constraint interface ที่มี type term คั่นด้วย | หรือ ~ มีไว้อธิบาย constraint ตอน compile time เท่านั้น — ใช้ข้างใน [T Constraint] ได้ แต่ห้ามใช้เป็น type ของตัวแปรธรรมดา ตรวจสอบแล้วบน 1.26.5 ว่านี่คือข้อความที่ compiler ฟ้องจริง ๆ"
+  },
+  {
+    q: "```go\ntype Stack[T any] struct{ items []T }\n\nfunc main() {\n    var s Stack\n}\n```\nจะเกิดอะไรขึ้น?",
+    options: [
+      "s เป็น Stack[any] โดย default",
+      "compile error: cannot use generic type Stack[T any] without instantiation",
+      "compile error: undefined: Stack",
+      "compile ผ่านและ s.items เป็น nil"
+    ],
+    answer: 1,
+    explain: "ต่างจาก generic function, generic type ไม่เคย infer type argument ให้เลย ทุกการใช้งาน — แม้แต่การประกาศตัวแปรเปล่า ๆ — ต้อง instantiate อย่างชัดเจน เช่น var s Stack[int] ตรวจสอบแล้วบน 1.26.5"
   },
   {
     q: "constraint ใดที่อนุญาต type ที่รองรับ == และ !=?",
@@ -301,7 +475,8 @@ export const quizGenerics = [
       "ordered",
       "equatable"
     ],
-    answer: 1
+    answer: 1,
+    explain: "comparable คือ built-in constraint สำหรับ type ที่รองรับ == และ != ข้อสังเกตคือตั้งแต่ Go 1.20 มันรับ interface type ด้วย ซึ่งการเปรียบเทียบตอน runtime ยัง panic ได้ถ้า dynamic value ข้างในไม่ comparable"
   },
   {
     q: "ที่ call site Max(3, 7) จำเป็นต้องเขียน Max[int](3, 7) หรือไม่?",
@@ -311,7 +486,19 @@ export const quizGenerics = [
       "เฉพาะเมื่อ arguments ทั้งสองเป็น type เดียวกัน",
       "เฉพาะใน Go 1.21+"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Go อนุมาน type parameter ของ function call จาก arguments ในกรณีปกติ ต้องระบุ type argument ชัดเจนเฉพาะเมื่อการอนุมานคลุมเครือ, ไม่มี argument ให้ดู, หรือ (ตามบทเรียนนี้) พยายาม infer จาก return type ที่คาดหวังอย่างเดียว ซึ่ง Go ไม่ทำให้"
+  },
+  {
+    q: "Stack[T] แบบ generic มี method Pop คืนค่า (T, bool) var zero T ข้างใน Pop จะได้ค่าอะไรเมื่อ T เป็น []int?",
+    options: [
+      "compile error — slice ไม่มี zero value",
+      "slice ที่ไม่ nil แต่ว่างเปล่า",
+      "nil ซึ่งเป็น zero value ของ slice type",
+      "panic ตอน runtime"
+    ],
+    answer: 2,
+    explain: "var zero T ให้ zero value ตาม T ที่ถูก instantiate — 0 สำหรับตัวเลข, \"\" สำหรับ string, และ nil สำหรับ slice, map, pointer, และ interface *new(T) ให้ค่าเดียวกัน"
   }
 ];
 
