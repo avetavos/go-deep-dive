@@ -1,0 +1,239 @@
+---
+title: Verification tools
+description: 'What go vet, staticcheck, golangci-lint, -race, govulncheck, gopls, and go test -cover each actually catch — and what they miss — with real output on catalog bugs.'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+Every output below is real, captured by running each tool against patterns from the **[AI Bug Catalog](/go/en/reading-go/ai-bug-catalog/)**. None of these tools overlap perfectly, and none of them is close to complete — the point of this lesson is to know exactly where each one's coverage ends, so you know what is still on you.
+
+## `go vet` — built into `go test`, catches structural bugs for free
+
+`go vet` ships with the Go toolchain and runs automatically before `go test`. It only reports things it can prove from the type system and a fixed set of analyzers — no style opinions, very few false positives, and no configuration required.
+
+**Catches, unconditionally, in this catalog:**
+
+```text
+copylocks: Inc passes lock by value: main.Counter contains sync.Mutex
+waitgroup: WaitGroup.Add called from inside new goroutine
+errorsas: second argument to errors.As must be a non-nil pointer to either a type that implements error, or to any interface type
+main.go:10:8: using resp before checking for errors
+```
+
+**Catches only with the `go.mod` directive it applies to:** the `loopclosure` analyzer flags a goroutine capturing a loop variable — but only under a `go` directive older than 1.22, since the bug itself only exists there.
+
+**Misses:** everything that requires proving something about program *behavior* rather than *structure* — leaks, nil-map writes that aren't provably always-nil, missing status-code checks, missing `Timeout` fields, `err` shadowing (the `shadow` analyzer exists but is not run by default — enable it explicitly with `go vet -vettool=$(which shadow)` or `golangci-lint`'s `govet.enable: [shadow]` setting).
+
+## `staticcheck` — deeper static analysis, no false-negative shame
+
+`staticcheck` subsumes `go vet`'s checks and adds hundreds more, organized as `SA*` (bugs), `ST*` (style), and other prefixes. It is slower and occasionally flags something intentional, but it catches real bugs `go vet` structurally cannot.
+
+**Catches, in this catalog:**
+
+```text
+SA4023: this comparison is always true          (typed-nil error, when provable)
+SA2000: should call wg.Add(1) before starting the goroutine to avoid a race
+SA5000: assignment to nil map                    (only when provably always-nil)
+SA4011: ineffective break statement. Did you mean to break out of the outer loop?
+SA1004: sleeping for 5 nanoseconds is probably a bug; be explicit if it isn't
+ST1006: receiver name should be a reflection of its identity; don't use generic names such as "this" or "self"
+```
+
+**Misses:** the same runtime-only categories `go vet` misses, plus anything requiring whole-program knowledge — most notably, whether an interface has one implementation or ten.
+
+<Callout title="A real environment gotcha, worth knowing before you hit it">
+`staticcheck` (and `govulncheck`) must be built with a Go toolchain at least as new as the one your module's `go.mod` targets. On this course's own toolchain, `staticcheck` built with Go 1.26.5 refuses to analyze a module declaring `go 1.27`: `package requires newer Go version go1.27 (application built with go1.26)`. Rebuilding the tool with a newer toolchain (`GOTOOLCHAIN=go1.27.0 go install ...@latest`) fixes it for tools that support it; `staticcheck`'s own `go.mod` currently still pins an older Go, so as of this writing it can only analyze `go 1.26`-and-earlier modules regardless of how it is installed. Always check a linter's own version compatibility before trusting a silent, all-clear run.
+</Callout>
+
+## `golangci-lint` v2 — runs `go vet`, `staticcheck`, and dozens more in one pass
+
+`golangci-lint` is a meta-linter: `linters.default: standard` in its config runs a curated set that already includes `go vet` (as `govet`) and `staticcheck`, plus `errcheck`, `unused`, and others. One command replaces running each tool by hand.
+
+```yaml
+version: "2"
+linters:
+  default: standard
+```
+
+**Catches everything `go vet` and `staticcheck` catch above**, reported under the linter that found it — `golangci-lint run` on the `errors.As`-without-`&` file reports:
+
+```text
+main.go:19:5: errorsas: second argument to errors.As must be a non-nil pointer to either a type that implements error, or to any interface type (govet)
+```
+
+**Also catches, via `errcheck`** (part of `standard`) — an unchecked return value, a different bug from the ones it happens to sit next to in this catalog:
+
+```text
+main.go:10:23: Error return value of `resp.Body.Close` is not checked (errcheck)
+```
+
+**Needs opting in, even though the analyzer exists in `golangci-lint`'s toolbox:**
+
+- `shadow` (the `err`-shadowing check) — enable via `linters.settings.govet.enable: [shadow]`.
+- `modernize` (flags `interface{}` where `any` reads better, among other rewrites) — enable via `linters.enable: [modernize]`.
+
+**Misses:** identical blind spots to `go vet` + `staticcheck` combined, since that is what it runs.
+
+## `-race` — the only tool on this list that watches the program run
+
+`go run -race` and `go test -race` instrument every memory access and detect *actual* concurrent, unsynchronized access to the same memory during that specific run — not a theoretical possibility, an observed one.
+
+**Catches, in this catalog** — the `wg.Add`-inside-goroutine pattern, run with `-race`:
+
+```text
+WARNING: DATA RACE
+Write at 0x00c00013e000 by goroutine 7:
+  main.main.func1()
+      .../main.go:18 +0xf0
+Previous read at 0x00c00013e000 by main goroutine:
+  main.main()
+      .../main.go:24 +0x23c
+Found 1 data race(s)
+```
+
+**Misses:** any race that does not happen to occur on the specific run you tested — the race detector proves the presence of a race it observed, never the absence of one it didn't. It also has nothing to say about goroutine leaks, resource leaks, or any single-threaded logic bug; those are not races.
+
+## `govulncheck` — known CVEs, filtered to code you actually call
+
+`govulncheck` cross-references your dependencies against the Go vulnerability database, then narrows the result to vulnerabilities your code's call graph can actually reach — not just "a vulnerable version is somewhere in `go.sum`."
+
+**Real output**, a module depending on `golang.org/x/text@v0.3.0` and calling `language.Parse`:
+
+```text
+Vulnerability #1: GO-2021-0113
+    Out-of-bounds read in golang.org/x/text/language
+  More info: https://pkg.go.dev/vuln/GO-2021-0113
+  Module: golang.org/x/text
+    Found in: golang.org/x/text@v0.3.0
+    Fixed in: golang.org/x/text@v0.3.7
+    Example traces found:
+      #1: main.go:10:26: vulndemo.main calls language.Parse
+
+Your code is affected by 1 vulnerability from 1 module.
+This scan also found 1 vulnerability in packages you import and 2
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+```
+
+**Misses:** anything in this catalog. `govulncheck` answers one question only — "does a known, published CVE affect code I actually reach" — and has nothing to say about logic bugs, concurrency bugs, or API contract violations, whether they are yours or a dependency's undiscovered ones.
+
+## `gopls` — the same analysis your editor already runs, from the command line
+
+`gopls check <file>` runs the same diagnostics your editor shows inline, without opening one — useful in CI or over SSH. It includes `go vet`'s analyzers and adds a few of its own, like nilness analysis.
+
+**Real output**, on the `errors.As`-without-`&` file — `gopls` finds *both* the `errors.As` misuse and a second, consequential bug in the same file that no other tool in this list reported:
+
+```text
+main.go:19:5-23: second argument to errors.As must be a non-nil pointer to either a type that implements error, or to any interface type
+main.go:20:32: nil dereference in field selection
+```
+
+The second line is `gopls`'s own nilness analyzer: since `errors.As` will fail (per the first diagnostic), `ve` stays nil, and the next line's `ve.Field` is a guaranteed nil pointer dereference — a consequence `go vet` and `staticcheck` did not connect.
+
+**Misses:** the same categories as `go vet`, since it is built on the same analysis framework, plus anything needing whole-program or runtime information.
+
+## `go test -cover` — tells you what was never run, not what is broken
+
+`go test -cover` reports the percentage of statements executed during the test run. It is not a bug finder; it is a map of where your other tools — and your own reading — never even looked.
+
+**Real output**, a `Store.Set` method whose only test exercises `Get`:
+
+```text
+ok  	scratch/covdemo	0.474s	coverage: 66.7% of statements
+```
+
+The untested 33.3% is exactly `Set` — the method that panics on a nil map. Coverage did not find that bug; it found that nobody had looked.
+
+**Misses:** correctness entirely. 100% coverage proves every line ran at least once during some test — it proves nothing about whether the assertions in that test were the right ones, or whether the input that triggered the bug was ever tried.
+
+## Running the whole set in one command
+
+`golangci-lint run` already covers `go vet` and `staticcheck` together. Add `govulncheck` for dependency CVEs and `go test -race -cover` for runtime races and coverage, and one line covers everything on this page except `gopls` (which is interactive/editor-oriented, not a CI step):
+
+```bash
+golangci-lint run && govulncheck ./... && go test -race -cover ./...
+```
+
+## Mental Model
+
+```text
+                     Static (source only)         Dynamic (must run)
+                   ┌───────────────────────┐    ┌───────────────────────┐
+Structural bugs    │ go vet                 │    │                       │
+(type-provable)    │ (copylocks, waitgroup, │    │                       │
+                    │  errorsas, loopclosure)│    │                       │
+                    ├───────────────────────┤    │                       │
+Deeper static bugs  │ staticcheck            │    │                       │
+                    │ (SA*, ST*)             │    │                       │
+                    ├───────────────────────┤    ├───────────────────────┤
+Concurrency bugs    │                        │    │ -race                 │
+that actually occur │                        │    │ (only what ran)       │
+                    ├───────────────────────┤    ├───────────────────────┤
+Known CVEs reached  │ govulncheck            │    │                       │
+by your call graph  │                        │    │                       │
+                    ├───────────────────────┤    ├───────────────────────┤
+What ran vs. didn't │                        │    │ go test -cover        │
+                    └───────────────────────┘    └───────────────────────┘
+golangci-lint runs the whole top-left box (go vet + staticcheck + more) in one command.
+```
+
+<Callout title="Every tool here is a filter, not a verdict">
+A clean run across this entire page still leaves roughly half of the **[AI Bug Catalog](/go/en/reading-go/ai-bug-catalog/)** unaddressed — leaks, missing timeouts, unchecked status codes, context lifetime mistakes, and more. Run every tool, then still work through the **[Review Checklist](/go/en/reading-go/review-checklist/)** by eye.
+</Callout>
+
+export const quizVerificationTools = [
+  {
+    q: "A CI pipeline runs `golangci-lint run` and it passes with 0 issues. Which of these is still possible?",
+    options: [
+      "Nothing — a clean golangci-lint run guarantees the code has no bugs",
+      "A goroutine leak, a missing http.Client Timeout, or a data race that didn't occur during that particular run",
+      "Only style issues, never a correctness bug",
+      "golangci-lint always finds every bug go vet and staticcheck could find, so a clean run is complete"
+    ],
+    answer: 1,
+    explain: "golangci-lint's standard linters are all static analyzers over source text; leaks, missing timeouts, and races that didn't happen to trigger are runtime properties no static tool in that pass observes."
+  },
+  {
+    q: "Why did staticcheck fail with 'package requires newer Go version go1.27' against a module whose code uses no Go 1.27-specific syntax?",
+    options: [
+      "The code actually does use a 1.27 feature, even if it looks simple",
+      "staticcheck's own binary was built with an older Go toolchain than the one the target module's go.mod declares, and it cannot type-check against a newer stdlib than it was built with",
+      "staticcheck never supports go.mod files with a go directive above 1.20",
+      "This error means the code has a syntax error"
+    ],
+    answer: 1,
+    explain: "staticcheck (like govulncheck) needs to be built with a Go toolchain at least as new as the module it analyzes. If its own go.mod pins an older Go and go install used that, it cannot process a newer target module's stdlib — a tooling compatibility issue, not a code problem."
+  },
+  {
+    q: "gopls reported both an errors.As misuse and 'nil dereference in field selection' two lines later in the same file. What does the second diagnostic depend on?",
+    options: [
+      "Nothing — it is an unrelated, independent finding",
+      "gopls's nilness analysis traced that because the errors.As call will fail, the target variable stays nil, making the next line's field access a guaranteed nil dereference",
+      "It is a false positive that should be ignored",
+      "It only appears because -race was also enabled"
+    ],
+    answer: 1,
+    explain: "The two diagnostics are connected: gopls's nilness analyzer follows the consequence of the first bug (errors.As always failing) forward to the guaranteed nil dereference on the next line — a connection go vet and staticcheck did not make in this catalog."
+  },
+  {
+    q: "A file has 100% test coverage. What does that guarantee?",
+    options: [
+      "The code has no bugs",
+      "Every statement executed at least once across the test suite — nothing about whether the assertions or inputs were the right ones",
+      "The code is safe for concurrent use",
+      "go vet and staticcheck have nothing left to find"
+    ],
+    answer: 1,
+    explain: "Coverage measures what ran, not what was verified correct. A test can execute the buggy line and still pass because it never checks the specific value or path the bug affects."
+  }
+];
+
+<Quiz client:visible id="reading-go/verification-tools" questions={quizVerificationTools} />
+
+<ProgressTracker client:visible id="reading-go/verification-tools" />

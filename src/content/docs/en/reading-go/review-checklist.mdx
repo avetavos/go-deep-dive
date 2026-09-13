@@ -1,0 +1,113 @@
+---
+title: Review checklist
+description: 'A one-page, six-group checklist for reviewing Go code — each line links to the lesson that explains the underlying rule.'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+This is the checklist to run down — by eye, on any diff, yours or an AI's — after the tools in **[Verification Tools](/go/en/reading-go/verification-tools/)** have run and come back clean. It fits on one printed page on purpose: a checklist nobody actually opens during a review is worthless. Every line links to the lesson that explains *why*, so this page stays a list, not a re-run of the course.
+
+## Errors
+
+- Does every `error` return get checked before the value next to it is used?
+- Is any `error` handled twice — logged **and** returned up the stack? See **[Error Values](/go/en/errors-generics/error-values/)**.
+- Does a `:=` inside an `if`/`for` accidentally shadow an outer `err`? See **[Variables & Types](/go/en/basics/variables-types/)**.
+- Is a concrete error type ever assigned to an `error`-typed variable and returned as-is? See **[A nil pointer inside an interface is not nil](/go/en/methods-interfaces/interfaces/)**.
+- Does every `errors.As` call pass a pointer (`&target`), not the target itself? See **[Wrapping Errors](/go/en/errors-generics/wrapping/)**.
+- Is `recover()` called directly inside the deferred function — never through a helper one call away? See **[Panic and Recover](/go/en/errors-generics/panic-recover/)**.
+- Does any package outside `main` call `log.Fatal` or `os.Exit`, skipping its callers' `defer`s? See **[Panic and Recover](/go/en/errors-generics/panic-recover/)**.
+
+## Concurrency
+
+- Does every goroutine have a visible exit condition — a closed channel, a cancelled `ctx`, or a value it is waiting for? See **[Goroutines](/go/en/concurrency/goroutines/)**.
+- Is `wg.Add` called before the goroutine starts, from the same goroutine that calls `wg.Wait`? See **[Goroutines](/go/en/concurrency/goroutines/)**.
+- Does every goroutine that can panic recover from inside itself? See **[Panic and Recover](/go/en/errors-generics/panic-recover/)**.
+- Is any type containing a `sync.Mutex` (or similar) ever used or passed by value? See **[The sync package](/go/en/concurrency/sync-primitives/)**.
+- If a loop launches goroutines or defers closures, does the `go.mod` `go` directive actually guarantee per-iteration variables (1.22+), or is the loop var captured explicitly? See **[Functions](/go/en/basics/functions/)**.
+- Does a bare `break` inside `select` inside `for` actually reach the loop it looks like it targets? See **[Control Flow](/go/en/basics/control-flow/)**.
+- Does background work reuse a request-scoped `context.Context` it should have detached with `context.WithoutCancel`, or get stored in a struct field? See **[Context](/go/en/concurrency/context/)**.
+
+## Resources
+
+- Is every `defer` that closes/unlocks/releases something scoped to one acquisition, not accumulating across a loop? See **[io and bufio](/go/en/stdlib/io-bufio/)**.
+- Is a resource used (`resp.Body`, a file, a lock) only after the error from acquiring it has been checked? See **[The client side](/go/en/stdlib/net-http/)**.
+- Does every `http.Client` used outside a quick script set `Timeout`? See **[The client side](/go/en/stdlib/net-http/)**.
+
+## API contract
+
+- Is `resp.StatusCode` checked before the response body is trusted as data? See **[The client side](/go/en/stdlib/net-http/)**.
+- Does `omitempty` sit on a `time.Time` or struct field expecting it to omit the zero value? See **[encoding/json](/go/en/stdlib/encoding-json/)**.
+- Does every field the JSON contract needs actually get exported (and tagged)? See **[encoding/json](/go/en/stdlib/encoding-json/)**.
+- Is a nil slice returned where the contract requires `[]`, or vice versa? See **[encoding/json](/go/en/stdlib/encoding-json/)**.
+
+## Types
+
+- Does an `append` on a sub-slice risk overwriting a parent slice's backing array? See **[Slices](/go/en/types-data/slices/)**.
+- Is a map ever written to before it has been initialized with `make` or a literal? See **[Maps](/go/en/types-data/maps/)**.
+- Does any call site still assume `maps.Keys`/`maps.Values` return a slice instead of an `iter.Seq`? See **[Iterators](/go/en/errors-generics/iterators/)**.
+
+## Tooling & style
+
+- Is every `time.Sleep`/duration literal explicit about its unit (`5 * time.Second`, never a bare `5`)? See **[time](/go/en/stdlib/time/)**.
+- Does a new interface have more than one real implementation — or is `any`/a concrete type simpler? Is `interface{}` used where `any` reads better? Is a receiver named after the type, not `this`/`self`? See **[Interfaces](/go/en/methods-interfaces/interfaces/)** and **[Methods](/go/en/methods-interfaces/methods/)**.
+
+<Callout title="A checklist narrows the search, it does not replace it">
+Every line above maps to one of the 24 patterns in the **[AI Bug Catalog](/go/en/reading-go/ai-bug-catalog/)** — half of which no tool in this course catches automatically. Run this list on every diff regardless of how clean the linters came back.
+</Callout>
+
+export const quizReviewChecklist = [
+  {
+    q: "Which group does 'does every http.Client set Timeout' belong to, and why that group rather than 'API contract'?",
+    options: [
+      "API contract — it is about what a caller can expect from a response",
+      "Resources — a Client with no Timeout can hold a connection (a resource) open indefinitely",
+      "Types — http.Client is a struct type",
+      "Tooling & style — it is a matter of code style, not correctness"
+    ],
+    answer: 1,
+    explain: "The checklist groups by what fails, not by which package is involved: an unbounded Timeout is a resource-lifetime problem (the connection is held open forever), distinct from whether the response's status code or body shape honors a contract."
+  },
+  {
+    q: "Why does the checklist tell you to check 'is recover() called directly inside the deferred function' rather than just 'does the code call recover() somewhere'?",
+    options: [
+      "recover() only stops a panic when called directly by a deferred function — one level of indirection through a helper makes it silently ineffective",
+      "recover() is deprecated in modern Go",
+      "recover() must be called before defer, not after",
+      "There is no difference — both phrasings check the same thing"
+    ],
+    answer: 0,
+    explain: "A recover() call routed through an extra function call (defer wrapper(); func wrapper() { recover() }) does not stop the panic — the language spec requires recover to be called directly by the deferred function itself."
+  },
+  {
+    q: "The checklist says to check the go.mod `go` directive for loop-variable capture bugs. Why does the directive matter here?",
+    options: [
+      "It doesn't — this bug is identical on every Go version",
+      "Go 1.22 changed for-loop variables to be scoped per iteration, so the same capturing code is a bug pre-1.22 and correct at 1.22+",
+      "The go directive only affects which stdlib version is available",
+      "Older go directives disable goroutines entirely"
+    ],
+    answer: 1,
+    explain: "Whether `go func(){ use(v) }()` inside a range loop is a bug depends entirely on whether go.mod declares go 1.22 or later — the same source text has different, version-gated semantics."
+  },
+  {
+    q: "Why is 'does a new interface have more than one real implementation' on this checklist at all, given no linter can check it?",
+    options: [
+      "It shouldn't be — checklists should only contain things a tool can verify",
+      "A checklist is exactly for judgment calls no tool makes; that is the gap human review exists to fill",
+      "golangci-lint can check this if you enable enough linters",
+      "Interfaces with one implementation are always a compile error"
+    ],
+    answer: 1,
+    explain: "This module's central point is that roughly half of the patterns it covers have no automated check at all — the checklist exists precisely to carry the judgment calls that tooling cannot make, not just the ones it can."
+  }
+];
+
+<Quiz client:visible id="reading-go/review-checklist" questions={quizReviewChecklist} />
+
+<ProgressTracker client:visible id="reading-go/review-checklist" />

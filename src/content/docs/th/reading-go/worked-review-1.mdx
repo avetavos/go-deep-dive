@@ -1,0 +1,278 @@
+---
+title: 'Worked review 1: HTTP JSON API handler'
+description: 'HTTP API รายการ task พร้อม in-memory store สไตล์ที่ AI เขียน — หา bug ก่อน แล้วดูวิธีแก้ทีละตัว'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+นี่คือ HTTP API รายการ task เล็กๆ: `POST /tasks` สร้าง task, `GET /tasks/{id}` ดึงมาหนึ่งตัว เขียนด้วยสไตล์ที่มั่นใจและดูสมเหตุสมผลแบบที่ AI assistant ผลิตออกมาตั้งแต่ครั้งแรก — มัน compile ผ่าน, `go vet` ไม่บ่นอะไรเลย, และมันรันได้ อ่านมันก่อนรัน มันมี **bug จริง 5 ตัว**
+
+## The program
+
+<Playground code={wr1Code} />
+
+export const wr1Code = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+\t"io"
+\t"net/http"
+\t"net/http/httptest"
+\t"strconv"
+\t"strings"
+)
+
+type Task struct {
+\tID   int    \`json:"id"\`
+\tText string \`json:"text"\`
+}
+
+type Store struct {
+\ttasks  map[int]Task
+\tnextID int
+}
+
+func NewStore() *Store {
+\treturn &Store{tasks: map[int]Task{}, nextID: 1}
+}
+
+func (s Store) Add(text string) Task {
+\tt := Task{ID: s.nextID, Text: text}
+\ts.tasks[t.ID] = t
+\ts.nextID++
+\treturn t
+}
+
+func (s *Store) Get(id int) (Task, bool) {
+\tt, ok := s.tasks[id]
+\treturn t, ok
+}
+
+func newMux(store *Store) *http.ServeMux {
+\tmux := http.NewServeMux()
+\tmux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request) {
+\t\tvar body struct {
+\t\t\tText string \`json:"text"\`
+\t\t}
+\t\tjson.NewDecoder(r.Body).Decode(&body)
+\t\tt := store.Add(body.Text)
+\t\tjson.NewEncoder(w).Encode(t)
+\t\tw.WriteHeader(http.StatusCreated)
+\t})
+\tmux.HandleFunc("GET /tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
+\t\tid, _ := strconv.Atoi(r.PathValue("id"))
+\t\tt, ok := store.Get(id)
+\t\tif !ok {
+\t\t\tw.WriteHeader(http.StatusNotFound)
+\t\t}
+\t\tjson.NewEncoder(w).Encode(t)
+\t})
+\treturn mux
+}
+
+func main() {
+\tstore := NewStore()
+\tts := httptest.NewServer(newMux(store))
+\tdefer ts.Close()
+
+\tfor _, text := range []string{"buy milk", "write report"} {
+\t\tpayload := strings.NewReader(fmt.Sprintf(\`{"text":%q}\`, text))
+\t\tresp, _ := http.Post(ts.URL+"/tasks", "application/json", payload)
+\t\tbody, _ := io.ReadAll(resp.Body)
+\t\tfmt.Printf("POST /tasks status=%d body=%s\\n", resp.StatusCode, body)
+\t}
+
+\tresp, _ := http.Post(ts.URL+"/tasks", "application/json", strings.NewReader("not json"))
+\tbody, _ := io.ReadAll(resp.Body)
+\tfmt.Printf("POST /tasks (bad json) status=%d body=%s\\n", resp.StatusCode, body)
+
+\tresp, _ = http.Get(ts.URL + "/tasks/abc")
+\tbody, _ = io.ReadAll(resp.Body)
+\tfmt.Printf("GET /tasks/abc status=%d body=%s\\n", resp.StatusCode, body)
+
+\tresp, _ = http.Get(ts.URL + "/tasks/999")
+\tbody, _ = io.ReadAll(resp.Body)
+\tfmt.Printf("GET /tasks/999 status=%d body=%s\\n", resp.StatusCode, body)
+}`;
+
+## หา bug
+
+ลองรันดู ทุก response กลับมาเป็น `status=200`, `id` ของ task ตัวหนึ่งไม่เคยเปลี่ยนเลย และ 404 มี body แนบมาด้วย ไม่มีอันไหนตั้งใจเลยสักอย่าง ก่อนเปิดเฉลยด้านล่าง ลองระบุ bug อย่างน้อย 3 ใน 5 ตัวและบรรทัดที่ทำให้เกิดแต่ละอันดู
+
+<details>
+<summary>เฉลย 5 bug</summary>
+
+1. **`func (s Store) Add(...)` เป็น value receiver** `Add` แก้ `s.nextID` และเขียนลง `s.tasks` — แต่ `s` คือ copy ทั้งชุดของ `Store` ทุกครั้งที่เรียก การเขียน map รอดอยู่ (map value เป็น reference ที่แชร์กัน) แต่ `s.nextID++` เพิ่มแค่ copy เท่านั้น `Store.nextID` ตัวจริงไม่เคยขยับเกิน 1 เลย ทุก task ที่สร้างได้ `"id":1` ทับกันเงียบๆ ใน map output จริง: ทั้ง `buy milk` และ `write report` กลับมาเป็น `{"id":1,...}` — call ที่สองทับตัวแรกใน `store.tasks`
+2. **error ของ `json.NewDecoder(r.Body).Decode(&body)` ถูกทิ้ง** POST `"not json"` ไปไม่ fail เลย — `body.Text` แค่ยังเป็น `""` แล้ว handler ก็สร้าง task ที่มี text ว่างเปล่าอย่างสบายใจ แล้ว return 200
+3. **`w.WriteHeader(http.StatusCreated)` ถูกเรียก*หลัง*จาก `json.NewEncoder(w).Encode(t)`** `Encode` เรียก `Write` ข้างในตัวมันเอง และ `Write` ครั้งแรกบน `ResponseWriter` จะส่ง status `200` โดยปริยายถ้า `WriteHeader` ยังไม่ถูกเรียก พอ `WriteHeader(201)` รันถึง response ถูกส่งไปแล้ว — `go run` log `http: superfluous response.WriteHeader call` และ client เห็น `200` ไม่เคยเห็น `201`
+4. **branch 404 ไม่มี `return`** `if !ok { w.WriteHeader(http.StatusNotFound) }` ส่ง header 404 แล้ว execution ก็ตกไปที่ `json.NewEncoder(w).Encode(t)` ต่อไปอยู่ดี — encode `Task{}` ที่เป็น zero-value `GET /tasks/999` กลับมาเป็น `404` พร้อม body `{"id":0,"text":""}` ซึ่งดูเหมือน task ที่ผิดรูปแบบแต่มีอยู่จริง แทนที่จะเป็น "ไม่พบ"
+5. **error ของ `strconv.Atoi(r.PathValue("id"))` ถูกทิ้ง** `GET /tasks/abc` ไม่ return `400 Bad Request` — `id` กลายเป็น `0` เงียบๆ แล้ว handler ก็เดินหน้าไปหา task `0` เหมือนเป็น request ปกติที่ valid
+
+</details>
+
+## The corrected program
+
+<Playground code={wr1FixedCode} />
+
+export const wr1FixedCode = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+\t"io"
+\t"net/http"
+\t"net/http/httptest"
+\t"strconv"
+\t"strings"
+\t"sync"
+)
+
+type Task struct {
+\tID   int    \`json:"id"\`
+\tText string \`json:"text"\`
+}
+
+type Store struct {
+\tmu     sync.Mutex // fixed: guards tasks/nextID against concurrent handlers
+\ttasks  map[int]Task
+\tnextID int
+}
+
+func NewStore() *Store {
+\treturn &Store{tasks: map[int]Task{}, nextID: 1}
+}
+
+func (s *Store) Add(text string) Task { // fixed: pointer receiver — nextID actually persists
+\ts.mu.Lock()
+\tdefer s.mu.Unlock()
+\tt := Task{ID: s.nextID, Text: text}
+\ts.tasks[t.ID] = t
+\ts.nextID++
+\treturn t
+}
+
+func (s *Store) Get(id int) (Task, bool) {
+\ts.mu.Lock()
+\tdefer s.mu.Unlock()
+\tt, ok := s.tasks[id]
+\treturn t, ok
+}
+
+func newMux(store *Store) *http.ServeMux {
+\tmux := http.NewServeMux()
+\tmux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request) {
+\t\tvar body struct {
+\t\t\tText string \`json:"text"\`
+\t\t}
+\t\tif err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+\t\t\thttp.Error(w, "invalid JSON body", http.StatusBadRequest)
+\t\t\treturn
+\t\t}
+\t\tt := store.Add(body.Text)
+\t\tw.WriteHeader(http.StatusCreated) // fixed: header before the first Write
+\t\t_ = json.NewEncoder(w).Encode(t)
+\t})
+\tmux.HandleFunc("GET /tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
+\t\tid, err := strconv.Atoi(r.PathValue("id"))
+\t\tif err != nil {
+\t\t\thttp.Error(w, "invalid id", http.StatusBadRequest)
+\t\t\treturn
+\t\t}
+\t\tt, ok := store.Get(id)
+\t\tif !ok {
+\t\t\tw.WriteHeader(http.StatusNotFound)
+\t\t\treturn // fixed: stop here, do not also write a zero-value body
+\t\t}
+\t\t_ = json.NewEncoder(w).Encode(t)
+\t})
+\treturn mux
+}
+
+func main() {
+\tstore := NewStore()
+\tts := httptest.NewServer(newMux(store))
+\tdefer ts.Close()
+
+\tfor _, text := range []string{"buy milk", "write report"} {
+\t\tpayload := strings.NewReader(fmt.Sprintf(\`{"text":%q}\`, text))
+\t\tresp, _ := http.Post(ts.URL+"/tasks", "application/json", payload)
+\t\tbody, _ := io.ReadAll(resp.Body)
+\t\tfmt.Printf("POST /tasks status=%d body=%s\\n", resp.StatusCode, body)
+\t}
+
+\tresp, _ := http.Post(ts.URL+"/tasks", "application/json", strings.NewReader("not json"))
+\tbody, _ := io.ReadAll(resp.Body)
+\tfmt.Printf("POST /tasks (bad json) status=%d body=%s\\n", resp.StatusCode, body)
+
+\tresp, _ = http.Get(ts.URL + "/tasks/abc")
+\tbody, _ = io.ReadAll(resp.Body)
+\tfmt.Printf("GET /tasks/abc status=%d body=%s\\n", resp.StatusCode, body)
+
+\tresp, _ = http.Get(ts.URL + "/tasks/999")
+\tbody, _ = io.ReadAll(resp.Body)
+\tfmt.Printf("GET /tasks/999 status=%d body=%s\\n", resp.StatusCode, body)
+}`;
+
+รันเวอร์ชันที่แก้แล้ว: ID เพิ่มขึ้นเรื่อยๆ (`1` แล้ว `2`), body ที่ผิดรูปแบบตอนนี้ได้ `400 invalid JSON body`, `/tasks/abc` ได้ `400 invalid id` แทนที่จะเป็น `404` ปลอมๆ, และ `/tasks/999` ได้ `404` จริงพร้อม body ว่างเปล่า `go vet` และ `golangci-lint run` ทั้งคู่รายงาน 0 issue บนเวอร์ชันนี้ — `sync.Mutex` ที่เพิ่มเข้ามาก็ปิดช่องโหว่เรื่อง concurrency-safety ที่ `Store` แบบ pointer-receiver เฉยๆ ยังมีอยู่ภายใต้ traffic แบบ concurrent จริง (demo นี้ request รันทีละตัวตามลำดับ เลยไม่เห็น race ตรงนี้ แต่ traffic จริงจะไม่เป็นแบบนั้น)
+
+<Callout title="value receiver บน type ที่มี mutable state คือธีมที่วนกลับมาซ้ำๆ">
+bug ที่ 1 อย่างเดียวก็อธิบายได้แล้วว่าทำไม `Store.Add` ต้องใช้ pointer receiver: value receiver ทำให้ mutation หายไปเงียบๆ ทุกตัว ยกเว้นตัวที่ผ่าน reference type อย่าง map ดู **[Methods](/go/th/methods-interfaces/methods/)** และ pattern 13 ใน **[AI Bug Catalog](/go/th/reading-go/ai-bug-catalog/)**
+</Callout>
+
+export const quizWorkedReview1 = [
+  {
+    q: "In the buggy version, both POST requests return `{\"id\":1,...}`. What is the direct cause?",
+    options: [
+      "The Store's map has a maximum size of 1",
+      "Add has a value receiver, so `s.nextID++` increments a copy of nextID that is discarded when Add returns",
+      "The httptest server caches the first response",
+      "JSON encoding always resets numeric fields to 1"
+    ],
+    answer: 1,
+    explain: "Add(text string) Task ที่เป็น value receiver copy Store ทั้งชุดทุกครั้งที่เรียก การเขียน map รอดอยู่ (map เป็น reference type) แต่ field nextID เป็น int ธรรมดา — เพิ่มค่าใน copy ไม่มีผลกับ nextID ตัวจริงใน Store เดิม"
+  },
+  {
+    q: "Why does the buggy handler's client always see `status=200` instead of `201`, even though the code calls `w.WriteHeader(http.StatusCreated)`?",
+    options: [
+      "http.StatusCreated is actually the same value as 200",
+      "WriteHeader is called after Encode has already triggered an implicit 200 on the first Write",
+      "httptest.NewServer overrides all status codes to 200",
+      "The client library ignores status codes above 200"
+    ],
+    answer: 1,
+    explain: "การเรียก ResponseWriter.Write ครั้งแรก (ที่ json.Encoder.Encode เรียกข้างในตัวมันเอง) ส่ง status 200 โดยปริยายถ้า WriteHeader ยังไม่รัน การเรียก WriteHeader หลังจากนั้นไม่มีผลอะไร แค่ log 'superfluous response.WriteHeader call'"
+  },
+  {
+    q: "`GET /tasks/999` (a task that does not exist) returns 404 with body `{\"id\":0,\"text\":\"\"}` in the buggy version. What single missing keyword causes the body to be sent at all?",
+    options: [
+      "return — without it, execution falls through to the Encode call after WriteHeader(404)",
+      "break — the handler needs a labeled break",
+      "continue — the loop needs to skip an iteration",
+      "defer — the encode call should have been deferred"
+    ],
+    answer: 0,
+    explain: "if !ok { w.WriteHeader(http.StatusNotFound) } ไม่มี return statement ดังนั้น handler เดินหน้าไปที่ json.NewEncoder(w).Encode(t) ด้านล่างแบบไม่มีเงื่อนไข ไม่ว่าจะเจอ task หรือไม่ก็ตาม"
+  },
+  {
+    q: "The fixed version adds a sync.Mutex to Store even though this demo's sequential requests never actually raced. Why add it anyway?",
+    options: [
+      "It is required by the Go compiler for any struct with a map field",
+      "A real HTTP server handles requests concurrently; without a mutex, concurrent POST/GET calls would race on the shared map and nextID field even after the receiver bug is fixed",
+      "It has no real benefit — it was added only for symmetry with the AI Bug Catalog",
+      "sync.Mutex makes JSON encoding faster"
+    ],
+    answer: 1,
+    explain: "net/http เรียกแต่ละ handler ใน goroutine ของตัวเองต่อ request demo นี้บังเอิญยิง request ทีละตัว แต่ traffic จริงไม่เป็นแบบนั้น — mutex จำเป็นสำหรับความถูกต้องภายใต้ load แบบ concurrent จริง ไม่ใช่แค่เพื่อ output ของ demo นี้โดยเฉพาะ"
+  }
+];
+
+<Quiz client:visible id="reading-go/worked-review-1" questions={quizWorkedReview1} />
+
+<ProgressTracker client:visible id="reading-go/worked-review-1" />

@@ -74,6 +74,11 @@ export default defineConfig({
           items: [{ autogenerate: { directory: 'runtime-internals' } }],
         },
         {
+          label: 'Reading & Reviewing Go',
+          translations: { th: 'อ่านและรีวิวโค้ด Go' },
+          items: [{ autogenerate: { directory: 'reading-go' } }],
+        },
+        {
           label: 'Glossary',
           translations: { th: 'อภิธานศัพท์' },
           link: 'glossary',

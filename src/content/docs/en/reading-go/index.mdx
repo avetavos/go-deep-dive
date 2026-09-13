@@ -1,0 +1,183 @@
+---
+title: How to read Go you did not write
+description: 'A reading order for unfamiliar Go code — types and signatures first, then the error path, then goroutine lifetimes, then resource ownership.'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+Every earlier module in this course taught you to *write* Go. This module teaches the other half of the job the course promised from the start: reading Go someone — or something — else wrote, and deciding whether it is correct. An AI assistant will hand you code that compiles, runs, and looks exactly like the idiomatic examples you have been studying. Compiling and running are not the same as correct. The four sections below are the order experienced Go reviewers actually read code in, and every later lesson in this module drills one part of it.
+
+## Read types and signatures first
+
+Before you read a single line of a function's body, read its signature. In Go the signature is not decoration — it is a contract the compiler enforces, and it already answers most of the questions you would otherwise have to trace through the body to find:
+
+- **Does the first parameter take a `context.Context`?** The call is cancellable and may be running concurrently with something that can time it out.
+- **Is the receiver a pointer (`*T`) or a value (`T`)?** A pointer receiver can mutate the thing you passed in; a value receiver cannot — it works on a copy.
+- **Does it return an `error` as the last value?** Something in that function can fail, and Go's convention puts the failure signal in a place you cannot accidentally destructure away.
+- **Are the parameter and return types concrete or interfaces?** A function that accepts `io.Reader` promises to work with anything that satisfies it; a function that accepts `*os.File` has narrowed its own usefulness, on purpose or by accident.
+
+None of this requires running the code. A reviewer who reads `func (a *Account) Withdraw(ctx context.Context, amount int) error` before looking at the body already knows: this mutates `a`, it can be cancelled, and it can fail — so the next thing to check is whether every caller respects all three.
+
+## Follow the error path
+
+Go's `if err != nil` convention means the error path is usually the *majority* of the lines in a function, and it is also the path AI-generated code gets subtly wrong most often — because the happy path is what training data rewards looking correct. Reading a function well means tracing every `return` that carries a non-nil error, not just the final one:
+
+- Where does the error come from — a stdlib call, a wrapped lower-level error, a sentinel comparison?
+- Is it returned, logged, or both? Handling it twice (logging *and* returning) usually means the caller will log it again.
+- Does an early return leak a resource that a later line would have closed?
+- Is a zero value returned alongside the error, and does any caller use that zero value without checking the error first?
+
+The lesson that explains the mechanics behind these questions is **[Error Values](/go/en/errors-generics/error-values/)** and **[Wrapping Errors](/go/en/errors-generics/wrapping/)** — this module assumes you know `%w`, `errors.Is`, and `errors.As`, and instead trains you to spot where AI code violates them.
+
+## Follow goroutine lifetimes
+
+Every `go` keyword starts something whose lifetime you now have to track independently of the function that launched it. Reading concurrent code means answering, for every goroutine: what makes it stop, and who is waiting for it to stop?
+
+- Does it read from or write to a channel that might never be ready — a leak waiting to happen?
+- Does it hold a `context.Context` that gets cancelled — and does it actually check `ctx.Done()`?
+- Is it tracked by a `sync.WaitGroup`, and is `Add` called before the goroutine starts, from the same goroutine that will call `Wait`?
+- If it panics, is there a `recover` reachable from *inside that same goroutine* — a `recover` anywhere else does not help it?
+
+**[Goroutines](/go/en/concurrency/goroutines/)**, **[Channels](/go/en/concurrency/channels/)**, and **[The sync package](/go/en/concurrency/sync-primitives/)** cover the semantics; this module's catalog shows exactly how AI-generated code breaks each rule.
+
+## Follow resource ownership
+
+Anything with a `Close`, `Unlock`, or `Done` method has an owner, and Go never enforces who that is at compile time — the discipline is entirely on the code you are reading. For every acquired resource, ask:
+
+- Who calls the matching release — the acquirer, or something the acquirer hands the resource to?
+- Is the release guaranteed on every path, including early returns and panics — usually via `defer` placed immediately after the acquire succeeds?
+- Can the resource be used after it is released — a closed channel received from, a file read after `Close`, a mutex touched after the struct holding it was copied?
+
+<Playground code={readingOrderCode} />
+
+export const readingOrderCode = `package main
+
+import (
+\t"context"
+\t"errors"
+\t"fmt"
+)
+
+// The signature alone tells you three things before you read a line of the
+// body: ctx first means the call is cancellable, the pointer receiver means
+// Withdraw mutates the Account, and the error return means something here
+// can fail — go find out what before you trust a caller that ignores it.
+type Account struct {
+\tBalance int
+}
+
+func (a *Account) Withdraw(ctx context.Context, amount int) error {
+\tif err := ctx.Err(); err != nil {
+\t\treturn err // follow the error path: cancellation short-circuits the withdrawal
+\t}
+\tif amount > a.Balance {
+\t\treturn errors.New("insufficient funds")
+\t}
+\ta.Balance -= amount
+\treturn nil
+}
+
+func main() {
+\tacc := &Account{Balance: 100}
+\tctx := context.Background()
+
+\tif err := acc.Withdraw(ctx, 30); err != nil {
+\t\tfmt.Println("withdraw failed:", err)
+\t}
+\tfmt.Println("balance after first withdraw:", acc.Balance)
+
+\tif err := acc.Withdraw(ctx, 1000); err != nil {
+\t\tfmt.Println("withdraw failed:", err) // easy branch to miss when skimming the happy path
+\t}
+\tfmt.Println("balance after second withdraw:", acc.Balance)
+}`;
+
+## Mental Model
+
+```text
+Reading order for a function you did not write:
+
+1. Signature   → ctx? pointer or value receiver? error return? interface or concrete params?
+2. Error path  → every non-nil return, not just the last one
+3. Goroutines  → what stops each `go` statement, and who waits for it
+4. Ownership   → who calls Close/Unlock/cancel, and is it guaranteed on every path
+
+Skipping straight to "does it compile and run" answers none of these.
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Reading signatures first | Catches contract violations before you trace a single branch | Requires knowing what `context.Context`, pointer receivers, and `error` returns actually promise |
+| Tracing the whole error path | Finds the swallowed/duplicated/leaking errors AI code hides | Slower than reading only the happy path |
+| Tracking goroutine lifetimes explicitly | Finds leaks and lost panics before they page someone at 3am | Requires holding more state in your head while reading |
+| Checking ownership on every acquire | Finds resource leaks and use-after-close bugs | Tedious on code with many small helper functions |
+
+## Common Misconceptions
+
+- **"It compiled and the output looked right, so it's correct."** Every pattern in this module's catalog compiles and produces plausible output on its happy path — that is exactly what makes it dangerous.
+- **"Reading the happy path is reading the function."** In idiomatic Go the error-handling lines usually outnumber the happy-path lines; skipping them is skipping most of the function.
+- **"If a human wrote it, it's fine; only AI code needs this scrutiny."** Every pattern here also appears in human-written Go — AI just produces it at a much higher and more confident-looking volume.
+- **"A code reviewer's job is to find bugs by running the code."** Most of the bugs in this module's catalog never crash on the input you happen to try; they crash later, under load, or under cancellation.
+
+<Callout title="Read for the contract, not for the vibe">
+Every rule in this module ends at something concrete: a compiler error, a `go vet` message, a runtime panic, or a specific line where a resource is never released. When you review code — your own or an AI's — look for the concrete violation, not just whether the code "feels" idiomatic.
+</Callout>
+
+export const quizReadingGoIndex = [
+  {
+    q: "You see `func Save(ctx context.Context, r io.Reader) (*Record, error)` before reading the body. What have you already learned?",
+    options: [
+      "Nothing — you must read the body first",
+      "The call is cancellable, accepts any byte stream (not just a file), and can fail",
+      "The function is guaranteed to be safe for concurrent use",
+      "The function never allocates on the heap"
+    ],
+    answer: 1,
+    explain: "ctx as the first parameter signals cancellability, io.Reader signals the function works with any byte source, and the error return signals a failure path exists — all readable from the signature alone."
+  },
+  {
+    q: "Why is the error path usually more important to read carefully than the happy path?",
+    options: [
+      "Go requires more lines of code for error handling than success handling",
+      "The happy path is what training data and quick testing reward looking correct, so mistakes concentrate in the error path",
+      "The compiler does not check the error path",
+      "Error paths are always executed first"
+    ],
+    answer: 1,
+    explain: "The happy path is exercised by casual testing and looks right in demos; the error path — early returns, resource cleanup on failure, what gets logged vs. returned — is where AI-generated code most often hides a subtle bug."
+  },
+  {
+    q: "For a goroutine started with `go worker(ctx)`, which question matters most when reviewing it?",
+    options: [
+      "Whether the function name is descriptive",
+      "What makes the goroutine stop, and who is waiting for it to stop",
+      "Whether it uses tabs or spaces for indentation",
+      "How many lines long the function is"
+    ],
+    answer: 1,
+    explain: "A goroutine's lifetime is invisible to the compiler — reviewing it means manually verifying it has an exit condition (ctx.Done(), a closed channel, a WaitGroup) and that something actually tracks its completion."
+  },
+  {
+    q: "```go\nfunc open() (*os.File, error) {\n    f, err := os.Open(\"data.txt\")\n    return f, err\n}\n```\nWhat should a reviewer check next about every caller of `open`?",
+    options: [
+      "That the caller reads the file within 100ms",
+      "That the caller checks err before using f, and calls f.Close() once it is done — on every return path",
+      "That the caller renames f to something more descriptive",
+      "Nothing — os.Open never fails"
+    ],
+    answer: 1,
+    explain: "open() hands resource ownership to its caller. The reviewer's job is to confirm every caller checks the error before touching f (a nil *os.File on error) and closes it on every exit path, not just the successful one."
+  }
+];
+
+<Quiz client:visible id="reading-go/index" questions={quizReadingGoIndex} />
+
+<ProgressTracker client:visible id="reading-go/index" />

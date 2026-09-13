@@ -1,0 +1,239 @@
+---
+title: Verification tools
+description: 'go vet, staticcheck, golangci-lint, -race, govulncheck, gopls, และ go test -cover แต่ละตัวจับอะไรได้จริง — และพลาดอะไร — พร้อม output จริงบน bug จาก catalog'
+sidebar:
+  order: 4
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+output ทุกอันด้านล่างเป็นของจริง จากการรันแต่ละเครื่องมือกับ pattern ใน **[AI Bug Catalog](/go/th/reading-go/ai-bug-catalog/)** จริงๆ ไม่มีเครื่องมือไหน overlap กันสมบูรณ์ และไม่มีตัวไหนใกล้เคียงคำว่าครบถ้วนเลย — ประเด็นของบทนี้คือให้รู้ชัดเจนว่าแต่ละตัวครอบคลุมถึงตรงไหน เพื่อให้รู้ว่าส่วนที่เหลือยังเป็นหน้าที่ของคุณอยู่
+
+## `go vet` — มากับ `go test` เลย จับ bug เชิงโครงสร้างได้ฟรี
+
+`go vet` มากับ Go toolchain และรันอัตโนมัติก่อน `go test` มันรายงานเฉพาะสิ่งที่พิสูจน์ได้จาก type system กับชุด analyzer ที่กำหนดตายตัวเท่านั้น — ไม่มีความเห็นเรื่อง style, false positive น้อยมาก และไม่ต้อง config เลย
+
+**จับได้แบบไม่มีเงื่อนไข ใน catalog นี้:**
+
+```text
+copylocks: Inc passes lock by value: main.Counter contains sync.Mutex
+waitgroup: WaitGroup.Add called from inside new goroutine
+errorsas: second argument to errors.As must be a non-nil pointer to either a type that implements error, or to any interface type
+main.go:10:8: using resp before checking for errors
+```
+
+**จับได้เฉพาะกับ `go.mod` directive ที่มันใช้:** analyzer `loopclosure` จับ goroutine ที่ capture loop variable — แต่เฉพาะภายใต้ `go` directive ที่เก่ากว่า 1.22 เท่านั้น เพราะตัว bug เองก็มีอยู่แค่ในกรณีนั้น
+
+**พลาด:** ทุกอย่างที่ต้องพิสูจน์เรื่อง*พฤติกรรม*ของโปรแกรม ไม่ใช่*โครงสร้าง* — leak, การเขียน nil map ที่พิสูจน์ไม่ได้ว่า nil เสมอ, ไม่เช็ก status code, ไม่มี `Timeout` field, `err` shadowing (analyzer `shadow` มีอยู่จริงแต่ไม่รันโดย default — เปิดเองด้วย `go vet -vettool=$(which shadow)` หรือ setting `govet.enable: [shadow]` ของ `golangci-lint`)
+
+## `staticcheck` — static analysis ที่ลึกกว่า ไม่มีเรื่องพลาดที่น่าอาย
+
+`staticcheck` ครอบคลุม check ของ `go vet` ทั้งหมดแล้วเพิ่มอีกหลายร้อยตัว จัดเป็น `SA*` (bug), `ST*` (style), และ prefix อื่นๆ มันช้ากว่าและบางครั้ง flag สิ่งที่ตั้งใจไว้ แต่มันจับ bug จริงที่ `go vet` จับไม่ได้เชิงโครงสร้าง
+
+**จับได้ ใน catalog นี้:**
+
+```text
+SA4023: this comparison is always true          (typed-nil error, when provable)
+SA2000: should call wg.Add(1) before starting the goroutine to avoid a race
+SA5000: assignment to nil map                    (only when provably always-nil)
+SA4011: ineffective break statement. Did you mean to break out of the outer loop?
+SA1004: sleeping for 5 nanoseconds is probably a bug; be explicit if it isn't
+ST1006: receiver name should be a reflection of its identity; don't use generic names such as "this" or "self"
+```
+
+**พลาด:** หมวดที่ต้องรันจริงเหมือนที่ `go vet` พลาด บวกกับอะไรก็ตามที่ต้องรู้ทั้ง codebase — ที่เด่นที่สุดคือ interface มี implementation กี่ตัว
+
+<Callout title="ข้อจำกัดของ environment จริง คุ้มค่าที่จะรู้ไว้ก่อนเจอเอง">
+`staticcheck` (และ `govulncheck`) ต้องถูก build ด้วย Go toolchain ที่ใหม่อย่างน้อยเท่ากับที่ `go.mod` ของ module เป้าหมายกำหนด บน toolchain ของคอร์สนี้เอง `staticcheck` ที่ build ด้วย Go 1.26.5 ปฏิเสธที่จะวิเคราะห์ module ที่ประกาศ `go 1.27`: `package requires newer Go version go1.27 (application built with go1.26)` การ build เครื่องมือใหม่ด้วย toolchain ที่ใหม่กว่า (`GOTOOLCHAIN=go1.27.0 go install ...@latest`) แก้ปัญหานี้ได้สำหรับเครื่องมือที่รองรับ ส่วน `go.mod` ของ `staticcheck` เองตอนนี้ยังตรึง Go เวอร์ชันเก่าไว้ ดังนั้น ณ เวลาที่เขียนนี้มันวิเคราะห์ได้เฉพาะ module ที่เป็น `go 1.26` ลงมาเท่านั้น ไม่ว่าจะติดตั้งยังไงก็ตาม เช็ก version compatibility ของ linter ก่อนเชื่อผลลัพธ์ "สะอาด" แบบเงียบๆ เสมอ
+</Callout>
+
+## `golangci-lint` v2 — รัน `go vet`, `staticcheck`, และอีกหลายสิบตัวในครั้งเดียว
+
+`golangci-lint` เป็น meta-linter: `linters.default: standard` ใน config รันชุดที่คัดมาแล้วซึ่งมี `go vet` (ในชื่อ `govet`) และ `staticcheck` รวมอยู่ พร้อม `errcheck`, `unused`, และอื่นๆ คำสั่งเดียวแทนที่การรันแต่ละเครื่องมือเอง
+
+```yaml
+version: "2"
+linters:
+  default: standard
+```
+
+**จับทุกอย่างที่ `go vet` และ `staticcheck` จับด้านบน** โดยรายงานภายใต้ linter ที่เจอมัน — `golangci-lint run` บนไฟล์ `errors.As` ที่ขาด `&` รายงานว่า:
+
+```text
+main.go:19:5: errorsas: second argument to errors.As must be a non-nil pointer to either a type that implements error, or to any interface type (govet)
+```
+
+**จับได้ด้วย ผ่าน `errcheck`** (อยู่ใน `standard`) — ค่า return ที่ไม่ถูกเช็ก ซึ่งเป็นคนละ bug กับตัวที่มันบังเอิญอยู่ข้างๆ ใน catalog นี้:
+
+```text
+main.go:10:23: Error return value of `resp.Body.Close` is not checked (errcheck)
+```
+
+**ต้อง opt-in เอง แม้ analyzer จะมีอยู่ใน toolbox ของ `golangci-lint` แล้ว:**
+
+- `shadow` (check เรื่อง `err` shadowing) — เปิดด้วย `linters.settings.govet.enable: [shadow]`
+- `modernize` (flag `interface{}` ในจุดที่ `any` อ่านง่ายกว่า และการ rewrite อื่นๆ) — เปิดด้วย `linters.enable: [modernize]`
+
+**พลาด:** จุดบอดเดียวกับ `go vet` + `staticcheck` รวมกัน เพราะนั่นคือสิ่งที่มันรัน
+
+## `-race` — เครื่องมือเดียวในลิสต์นี้ที่เฝ้าดูโปรแกรมตอนรันจริง
+
+`go run -race` และ `go test -race` ใส่ instrumentation ให้ทุก memory access และตรวจจับการเข้าถึง memory เดียวกันแบบ concurrent ที่ไม่ sync กัน*จริงๆ*ระหว่างการรันครั้งนั้น — ไม่ใช่ความเป็นไปได้ทางทฤษฎี แต่เป็นสิ่งที่สังเกตเห็นจริง
+
+**จับได้ ใน catalog นี้** — pattern `wg.Add` ข้างใน goroutine รันด้วย `-race`:
+
+```text
+WARNING: DATA RACE
+Write at 0x00c00013e000 by goroutine 7:
+  main.main.func1()
+      .../main.go:18 +0xf0
+Previous read at 0x00c00013e000 by main goroutine:
+  main.main()
+      .../main.go:24 +0x23c
+Found 1 data race(s)
+```
+
+**พลาด:** race ไหนก็ตามที่บังเอิญไม่เกิดขึ้นในการรันครั้งที่คุณทดสอบ — race detector พิสูจน์ได้แค่ว่ามี race ที่มันสังเกตเห็น ไม่เคยพิสูจน์ว่าไม่มี race ที่มันไม่เห็น มันก็ไม่มีอะไรจะพูดเกี่ยวกับ goroutine leak, resource leak, หรือ bug ทาง logic แบบ single-threaded ด้วย — พวกนั้นไม่ใช่ race
+
+## `govulncheck` — CVE ที่รู้จักแล้ว กรองเหลือแค่โค้ดที่คุณเรียกใช้จริง
+
+`govulncheck` เทียบ dependency ของคุณกับ Go vulnerability database แล้วกรองผลลัพธ์ให้เหลือเฉพาะ vulnerability ที่ call graph ของโค้ดคุณเข้าถึงได้จริง — ไม่ใช่แค่ "มี version ที่มีช่องโหว่อยู่ใน `go.sum` ที่ไหนสักแห่ง"
+
+**output จริง** module ที่ depend on `golang.org/x/text@v0.3.0` และเรียก `language.Parse`:
+
+```text
+Vulnerability #1: GO-2021-0113
+    Out-of-bounds read in golang.org/x/text/language
+  More info: https://pkg.go.dev/vuln/GO-2021-0113
+  Module: golang.org/x/text
+    Found in: golang.org/x/text@v0.3.0
+    Fixed in: golang.org/x/text@v0.3.7
+    Example traces found:
+      #1: main.go:10:26: vulndemo.main calls language.Parse
+
+Your code is affected by 1 vulnerability from 1 module.
+This scan also found 1 vulnerability in packages you import and 2
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+```
+
+**พลาด:** ทุกอย่างใน catalog นี้ `govulncheck` ตอบคำถามเดียวเท่านั้น — "มี CVE ที่รู้จักแล้วส่งผลกับโค้ดที่คุณเรียกใช้จริงไหม" — และไม่มีอะไรจะพูดเกี่ยวกับ bug ทาง logic, bug ทาง concurrency, หรือการละเมิด API contract เลย ไม่ว่าจะเป็นของคุณเองหรือของ dependency ที่ยังไม่มีใครค้นพบ
+
+## `gopls` — analysis แบบเดียวกับที่ editor ของคุณรันอยู่แล้ว แต่จาก command line
+
+`gopls check <file>` รัน diagnostic แบบเดียวกับที่ editor ของคุณแสดง inline โดยไม่ต้องเปิดมันขึ้นมา — มีประโยชน์ใน CI หรือผ่าน SSH มันมี analyzer ของ `go vet` รวมอยู่และเพิ่มของตัวเองอีกนิดหน่อย เช่น nilness analysis
+
+**output จริง** บนไฟล์ `errors.As` ที่ขาด `&` — `gopls` เจอ*ทั้ง*การใช้ `errors.As` ผิดและ bug ที่เป็นผลตามมาอีกตัวในไฟล์เดียวกัน ที่ไม่มีเครื่องมือไหนในลิสต์นี้รายงาน:
+
+```text
+main.go:19:5-23: second argument to errors.As must be a non-nil pointer to either a type that implements error, or to any interface type
+main.go:20:32: nil dereference in field selection
+```
+
+บรรทัดที่สองคือ nilness analyzer ของ `gopls` เอง: เนื่องจาก `errors.As` จะ fail (ตามที่ diagnostic แรกบอก) `ve` จึงยังเป็น nil และบรรทัดถัดไปที่เข้าถึง `ve.Field` คือ nil pointer dereference ที่เกิดขึ้นแน่นอน — ผลลัพธ์ที่ `go vet` และ `staticcheck` ไม่ได้เชื่อมโยงให้
+
+**พลาด:** หมวดเดียวกับ `go vet` เพราะมันสร้างบน analysis framework เดียวกัน บวกกับอะไรก็ตามที่ต้องรู้ทั้ง codebase หรือข้อมูลตอน runtime
+
+## `go test -cover` — บอกว่าอะไรไม่เคยถูกรัน ไม่ใช่บอกว่าอะไรพัง
+
+`go test -cover` รายงานเปอร์เซ็นต์ของ statement ที่ถูก execute ระหว่างรัน test มันไม่ใช่ bug finder มันคือแผนที่บอกว่าเครื่องมืออื่นๆ — และการอ่านของคุณเอง — ไม่เคยดูตรงไหนเลย
+
+**output จริง** method `Store.Set` ที่ test มีแค่ทดสอบ `Get`:
+
+```text
+ok  	scratch/covdemo	0.474s	coverage: 66.7% of statements
+```
+
+33.3% ที่ไม่ถูกทดสอบคือ `Set` เป๊ะๆ — method ที่ panic บน nil map coverage ไม่ได้เจอ bug นั้น มันแค่เจอว่าไม่มีใครดูตรงนั้นเลย
+
+**พลาด:** ความถูกต้องทั้งหมด coverage 100% พิสูจน์แค่ว่าทุกบรรทัดถูกรันอย่างน้อยหนึ่งครั้งระหว่าง test บางตัว มันไม่พิสูจน์อะไรเลยว่า assertion ใน test นั้นถูกต้องหรือเปล่า หรือ input ที่ทำให้เกิด bug เคยถูกลองหรือยัง
+
+## รันทั้งชุดในคำสั่งเดียว
+
+`golangci-lint run` ครอบคลุม `go vet` และ `staticcheck` พร้อมกันอยู่แล้ว เพิ่ม `govulncheck` สำหรับ CVE ของ dependency และ `go test -race -cover` สำหรับ race ตอน runtime กับ coverage แล้วบรรทัดเดียวครอบคลุมทุกอย่างในหน้านี้ ยกเว้น `gopls` (ซึ่งเป็นแบบ interactive/editor-oriented ไม่ใช่ CI step):
+
+```bash
+golangci-lint run && govulncheck ./... && go test -race -cover ./...
+```
+
+## Mental Model
+
+```text
+                     Static (ดูแค่ source)         Dynamic (ต้องรันจริง)
+                   ┌───────────────────────┐    ┌───────────────────────┐
+Bug เชิงโครงสร้าง    │ go vet                 │    │                       │
+(พิสูจน์จาก type ได้) │ (copylocks, waitgroup, │    │                       │
+                    │  errorsas, loopclosure)│    │                       │
+                    ├───────────────────────┤    │                       │
+Bug static ที่ลึกกว่า │ staticcheck            │    │                       │
+                    │ (SA*, ST*)             │    │                       │
+                    ├───────────────────────┤    ├───────────────────────┤
+Bug concurrency     │                        │    │ -race                 │
+ที่เกิดขึ้นจริง       │                        │    │ (เฉพาะที่รันเจอ)        │
+                    ├───────────────────────┤    ├───────────────────────┤
+CVE ที่รู้จักแล้วและ  │ govulncheck            │    │                       │
+call graph เข้าถึง   │                        │    │                       │
+                    ├───────────────────────┤    ├───────────────────────┤
+อะไรถูกรัน vs ไม่ถูกรัน│                        │    │ go test -cover        │
+                    └───────────────────────┘    └───────────────────────┘
+golangci-lint รันทั้งกล่องซ้ายบน (go vet + staticcheck + อื่นๆ) ในคำสั่งเดียว
+```
+
+<Callout title="ทุกเครื่องมือในนี้คือตัวกรอง ไม่ใช่คำตัดสิน">
+รันทั้งหน้านี้สะอาดครบ ก็ยังเหลือประมาณครึ่งหนึ่งของ **[AI Bug Catalog](/go/th/reading-go/ai-bug-catalog/)** ที่ยังไม่ถูกแตะ — leak, timeout ที่หายไป, status code ที่ไม่ถูกเช็ก, ความผิดพลาดเรื่อง context lifetime และอื่นๆ รันทุกเครื่องมือ แล้วก็ยังต้องไล่ **[Review Checklist](/go/th/reading-go/review-checklist/)** ด้วยตาอยู่ดี
+</Callout>
+
+export const quizVerificationTools = [
+  {
+    q: "A CI pipeline runs `golangci-lint run` and it passes with 0 issues. Which of these is still possible?",
+    options: [
+      "Nothing — a clean golangci-lint run guarantees the code has no bugs",
+      "A goroutine leak, a missing http.Client Timeout, or a data race that didn't occur during that particular run",
+      "Only style issues, never a correctness bug",
+      "golangci-lint always finds every bug go vet and staticcheck could find, so a clean run is complete"
+    ],
+    answer: 1,
+    explain: "linter มาตรฐานของ golangci-lint ล้วนเป็น static analyzer บน source text ทั้งหมด leak, timeout ที่หายไป, และ race ที่บังเอิญไม่เกิดขึ้น ล้วนเป็นคุณสมบัติตอน runtime ที่ static tool ในชุดนั้นไม่มีทางเห็น"
+  },
+  {
+    q: "Why did staticcheck fail with 'package requires newer Go version go1.27' against a module whose code uses no Go 1.27-specific syntax?",
+    options: [
+      "The code actually does use a 1.27 feature, even if it looks simple",
+      "staticcheck's own binary was built with an older Go toolchain than the one the target module's go.mod declares, and it cannot type-check against a newer stdlib than it was built with",
+      "staticcheck never supports go.mod files with a go directive above 1.20",
+      "This error means the code has a syntax error"
+    ],
+    answer: 1,
+    explain: "staticcheck (เหมือน govulncheck) ต้องถูก build ด้วย Go toolchain ที่ใหม่อย่างน้อยเท่ากับ module ที่มันวิเคราะห์ ถ้า go.mod ของมันเองตรึง Go เวอร์ชันเก่าไว้และ go install ใช้อันนั้น มันจะประมวลผล stdlib ของ module เป้าหมายที่ใหม่กว่าไม่ได้ — เป็นปัญหาความเข้ากันได้ของเครื่องมือ ไม่ใช่ปัญหาของโค้ด"
+  },
+  {
+    q: "gopls reported both an errors.As misuse and 'nil dereference in field selection' two lines later in the same file. What does the second diagnostic depend on?",
+    options: [
+      "Nothing — it is an unrelated, independent finding",
+      "gopls's nilness analysis traced that because the errors.As call will fail, the target variable stays nil, making the next line's field access a guaranteed nil dereference",
+      "It is a false positive that should be ignored",
+      "It only appears because -race was also enabled"
+    ],
+    answer: 1,
+    explain: "diagnostic ทั้งสองเชื่อมกัน: nilness analyzer ของ gopls ตาม consequence ของ bug แรก (errors.As fail เสมอ) ต่อไปถึง nil dereference ที่เกิดแน่นอนบนบรรทัดถัดไป — การเชื่อมโยงที่ go vet กับ staticcheck ไม่ได้ทำใน catalog นี้"
+  },
+  {
+    q: "A file has 100% test coverage. What does that guarantee?",
+    options: [
+      "The code has no bugs",
+      "Every statement executed at least once across the test suite — nothing about whether the assertions or inputs were the right ones",
+      "The code is safe for concurrent use",
+      "go vet and staticcheck have nothing left to find"
+    ],
+    answer: 1,
+    explain: "coverage วัดว่าอะไรถูกรัน ไม่ใช่ว่าอะไรถูก verify ว่าถูกต้อง test อาจ execute บรรทัดที่มี bug แล้วยังผ่านอยู่ดี เพราะมันไม่เคยเช็กค่าหรือ path เฉพาะที่ bug นั้นส่งผล"
+  }
+];
+
+<Quiz client:visible id="reading-go/verification-tools" questions={quizVerificationTools} />
+
+<ProgressTracker client:visible id="reading-go/verification-tools" />
