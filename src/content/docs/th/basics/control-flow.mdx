@@ -1,14 +1,16 @@
 ---
 title: 'Control Flow'
-description: 'if พร้อม init statement, for ในทุกรูปแบบ, range, switch, และ switch-true pattern'
+description: 'if พร้อม init statement, for ในทุกรูปแบบ, labeled break/continue, range semantics, และ switch ที่ไม่มี fallthrough อัตโนมัติ'
 sidebar:
-  order: 4
+  order: 3
 ---
 
 import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## if — พร้อม Init Statement
 
@@ -83,6 +85,8 @@ for i, r := range "Go!" {
 
 `range` ยังใช้กับ map (key, value) และ channel (value จนกว่าปิด) ได้ด้วย
 
+ตั้งแต่ Go 1.23 `range` ยังขับเคลื่อน `for` loop บน function ที่มี signature พิเศษได้ด้วย — นี่คือรากฐานของ package `iter` และ custom iterator ซึ่งอธิบายเต็มในบท Iterators เมื่อคุณเห็น type system มากขึ้นแล้ว
+
 ## Range บน integer และ loop variable แบบต่อรอบ
 
 ตั้งแต่ Go 1.22 `range` รับ integer ได้ด้วย ใช้แทน counting loop แบบเดิมเมื่อต้องการแค่ index:
@@ -96,40 +100,160 @@ for range 3 {             // repeat three times, no variable
 }
 ```
 
-Go 1.22 ยังเปลี่ยน semantics ของ loop variable ด้วย: แต่ละรอบได้ `i` (และ `v`) **ตัวใหม่** ดังนั้น closure และ goroutine ที่สร้างใน loop จะไม่เห็นค่าสุดท้ายพร้อมกันอีกต่อไป การเขียน `i := i` เพื่อ copy จึงไม่จำเป็นแล้วใน module ที่ `go.mod` ระบุ `go 1.22` ขึ้นไป
+Go 1.22 ยังเปลี่ยน semantics ของ loop variable ด้วย: แต่ละรอบได้ `i` (และ `v`) **ตัวใหม่** ดังนั้น closure และ goroutine ที่สร้างใน loop จะไม่เห็นค่าสุดท้ายพร้อมกันอีกต่อไป การเขียน `i := i` เพื่อ copy จึงไม่จำเป็นแล้วใน module ที่ `go.mod` ระบุ `go 1.22` ขึ้นไป — การเทียบก่อน/หลังแบบเต็มพร้อม output จริงทั้งสองแบบอยู่ในบท Functions
+
+## Labeled `break` และ `continue`
+
+`break` หรือ `continue` ธรรมดาจะใช้กับ `for` ที่อยู่ในสุดเสมอ **Label** — identifier ตามด้วย colon วางไว้บรรทัดก่อน `for` — ให้คุณตั้งชื่อ loop นั้นและเล็งเป้าจาก loop ที่ซ้อนอยู่ข้างในได้:
+
+```go
+outer:
+for i := 0; i < 3; i++ {
+    for j := 0; j < 3; j++ {
+        if j == 1 {
+            continue outer // skip to the next i, not the next j
+        }
+        if i == 2 {
+            break outer // exit both loops entirely
+        }
+        fmt.Println(i, j)
+    }
+}
+```
+
+`continue outer` ข้ามส่วนที่เหลือของ loop ข้างในไปพร้อมกับส่วนที่เหลือของ iteration นั้นใน loop ข้างนอกด้วย; `break outer` ออกจากทั้งสอง loop ทันที
+
+## `break` ใน `switch` หรือ `select` ไม่ออกจาก Loop
+
+นี่คือหนึ่งใน bug ที่พบบ่อยที่สุดใน Go code ที่ generate มา `break` ธรรมดาจะออกจาก **`switch` หรือ `select` ที่อยู่ในสุด** เท่านั้น ไม่ใช่ `for` ที่ครอบอยู่ — แม้ว่าคนส่วนใหญ่ที่เขียนมันตั้งใจจะหยุด loop ก็ตาม:
+
+```go
+for i := 0; i < 3; i++ {
+    switch i {
+    case 1:
+        break // exits only this switch — the loop keeps going
+    default:
+        fmt.Println("processing", i)
+    }
+}
+```
+
+โค้ดนี้ print `processing 0` แล้วตามด้วย `processing 2` — `case 1` รัน `break` ของมัน ซึ่งไม่ทำอะไรนอกจากออกจาก `switch` แล้ว `for` loop ก็เดินหน้าไปที่ `i = 2` ตามปกติ กฎเดียวกันใช้กับ `select` ที่อยู่ใน `for` ด้วย (อธิบายในโมดูล concurrency เมื่อ channel ถูกสอนแล้ว): `break` ใน case ใด case หนึ่งของมันออกจาก `select` เท่านั้น ถ้าต้องการหยุด loop จริง ๆ ต้อง label loop แล้ว break label นั้น:
+
+```go
+loop:
+for i := 0; i < 5; i++ {
+    switch {
+    case i == 3:
+        break loop // this one really does exit the for
+    default:
+        fmt.Println(i)
+    }
+}
+```
+
+<Mermaid code={breakScopeDiagram} title="break ธรรมดาออกจากแค่ switch; break ที่มี label ออกจาก for ที่ label นั้นชี้ไป" />
+
+export const breakScopeDiagram = `flowchart LR
+  subgraph Unlabeled["plain break inside a switch"]
+    direction TB
+    U1["for i := ..."] --> U2["switch i { case: break }"]
+    U2 -->|"exits switch only"| U3["loop continues to next i"]
+  end
+  subgraph Labeled["break loop (labeled)"]
+    direction TB
+    L1["loop: for i := ..."] --> L2["switch i { case: break loop }"]
+    L2 -->|"exits the labeled for"| L3["loop stops entirely"]
+  end`;
+
+## `range` Copy Element และ Evaluate Expression แค่ครั้งเดียว
+
+`range` มีสอง behavior ที่คนใหม่มักแปลกใจ และทั้งสองสำคัญตอนอ่าน generated code:
+
+**มัน copy แต่ละ element เข้า loop variable** การแก้ตัวแปรนั้นไม่เปลี่ยน collection ต้นฉบับเลย:
+
+```go
+nums := []int{1, 2, 3}
+for _, v := range nums {
+    v *= 10 // modifies the local copy only
+}
+fmt.Println(nums) // [1 2 3] — unchanged
+```
+
+**มัน evaluate expression ที่ range อยู่แค่ครั้งเดียว ตอนเริ่ม loop** สำหรับ slice หมายความว่าขอบเขตของ loop ถูกกำหนดตายตัวเป็นความยาวของ slice *ณ ตอนนั้น* — การ `append` เข้า slice ระหว่าง loop body ไม่ทำให้ loop ไปเยี่ยม element ใหม่:
+
+```go
+s := []int{1, 2, 3}
+for i, v := range s {
+    if i == 0 {
+        s = append(s, 4) // extends s, but range already captured the original length
+    }
+    fmt.Println(i, v)
+}
+// loop body still only runs for i = 0, 1, 2 — the appended 4 is never visited
+```
 
 ## switch
 
-`switch` ใน Go ไม่มี **automatic fallthrough** ต่างจาก C/Java ทุก case หยุดโดยอัตโนมัติ ถ้าต้องการ fallthrough ต้องระบุ `fallthrough` keyword อย่างชัดเจน:
+`switch` ใน Go evaluate case จากบนลงล่างและ **หยุดที่ case แรกที่ตรง** — ไม่มี fallthrough อัตโนมัติไปยัง case ถัดไป ไม่ต้องเขียน `break` ท้าย case:
 
 ```go
-day := "Monday"
 switch day {
-case "Saturday", "Sunday":   // multiple values in one case
-    fmt.Println("weekend")
-case "Monday":
-    fmt.Println("start of week")
-default:
+case "Monday", "Tuesday", "Wednesday", "Thursday", "Friday":
     fmt.Println("weekday")
+case "Saturday", "Sunday":
+    fmt.Println("weekend")
+default:
+    fmt.Println("unknown")
 }
 ```
 
-**Switch-true pattern** ใช้แทน if-else chain ที่ซับซ้อน:
+เหมือนกับ `if`, `switch` รับ **init statement** ก่อน condition ได้ scope ครอบทั้ง switch — สะดวกสำหรับคำนวณค่าที่จะ branch ตรงที่ switch เอง:
 
 ```go
-switch {
-case score >= 90:
-    fmt.Println("A")
-case score >= 80:
-    fmt.Println("B")
-case score >= 70:
-    fmt.Println("C")
+switch x := score(); {
+case x > 10:
+    fmt.Println("big")
+case x > 5:
+    fmt.Println("medium")
 default:
-    fmt.Println("F")
+    fmt.Println("small")
 }
 ```
 
-เมื่อ `switch` ไม่มี expression (switch บน `true`) แต่ละ case เป็น boolean expression ที่ evaluate ตามลำดับ
+**Switch-true pattern** (expressionless switch อย่างที่เห็นด้านบน) ทำหน้าที่เหมือน if-else chain ที่สะอาดกว่า แต่ละ case เป็น boolean expression อิสระ ถ้าต้องการจับหลายค่าใน case เดียว ให้ list ด้วย comma
+
+## ข้อจำกัดของ Fallthrough
+
+ถ้าต้องการ fallthrough ไปยัง case ถัดไปอย่างชัดเจน ใช้ `fallthrough` เป็น statement สุดท้ายใน case มันไม่มีเงื่อนไข — มันรัน body ของ case ถัดไปไม่ว่า condition ของ case นั้นจะเป็นอย่างไร:
+
+```go
+switch x := score(); {
+case x > 10:
+    fmt.Println("big")
+    fallthrough
+case x > 5:
+    fmt.Println("medium-or-big") // runs even though this case's own test was never evaluated
+default:
+    fmt.Println("other")
+}
+```
+
+`fallthrough` มีข้อจำกัดสองอย่างที่ compiler บังคับ มันปรากฏใน case **สุดท้าย** ของ switch ไม่ได้:
+
+```text
+./main.go:9:3: cannot fallthrough final case in switch
+```
+
+และใช้ใน **type switch** ไม่ได้เลย:
+
+```text
+./main.go:10:3: cannot fallthrough in type switch
+```
+
+## `goto` ในหนึ่งประโยค
+
+`goto` กระโดดไปยัง labeled statement ใน function เดียวกัน มีไว้สำหรับ generated code และ cleanup pattern ที่พบไม่บ่อยเป็นหลัก — Go code ที่เขียนมือแบบ idiomatic แทบไม่ใช้มันเลย มักใช้ labeled loop, early `return`, หรือปรับโครงสร้าง function แทน
 
 export const controlFlowCode = `package main
 
@@ -187,19 +311,126 @@ func main() {
 
 <Playground code={controlFlowCode} />
 
+Playground ตัวที่สองสาธิตทุก depth topic ข้างต้นในโปรแกรมรันได้ตัวเดียว: labeled break/continue, break ที่ติดอยู่ใน switch, พฤติกรรม copy-และ-evaluate-once ของ range, และ switch ที่มี init statement พร้อม `fallthrough`
+
+export const controlFlowDepthCode = `package main
+
+import "fmt"
+
+func score() int { return 12 }
+
+func main() {
+\t// Labeled break and continue reach an outer loop by name.
+\tfmt.Println("-- labeled continue/break --")
+outer:
+\tfor i := 0; i < 3; i++ {
+\t\tfor j := 0; j < 3; j++ {
+\t\t\tif j == 1 {
+\t\t\t\tcontinue outer
+\t\t\t}
+\t\t\tif i == 2 {
+\t\t\t\tbreak outer
+\t\t\t}
+\t\t\tfmt.Println(i, j)
+\t\t}
+\t}
+
+\t// A plain break inside a switch only exits the switch, not the loop.
+\tfmt.Println("-- break inside switch inside for --")
+\tfor i := 0; i < 3; i++ {
+\t\tswitch i {
+\t\tcase 1:
+\t\t\tbreak // exits only this switch — the loop keeps going
+\t\tdefault:
+\t\t\tfmt.Println("processing", i)
+\t\t}
+\t}
+
+\t// A labeled break reaches all the way out of the for.
+\tfmt.Println("-- labeled break exits the for --")
+loop:
+\tfor i := 0; i < 5; i++ {
+\t\tswitch {
+\t\tcase i == 3:
+\t\t\tbreak loop
+\t\tdefault:
+\t\t\tfmt.Println(i)
+\t\t}
+\t}
+
+\t// range copies each element; mutating v does not change the slice.
+\tfmt.Println("-- range copies elements --")
+\tnums := []int{1, 2, 3}
+\tfor _, v := range nums {
+\t\tv *= 10
+\t}
+\tfmt.Println(nums)
+
+\t// range evaluates its expression once: appending during the loop does
+\t// not extend how many times the loop runs.
+\tfmt.Println("-- range evaluates its expression once --")
+\ts := []int{1, 2, 3}
+\tfor i, v := range s {
+\t\tif i == 0 {
+\t\t\ts = append(s, 4)
+\t\t}
+\t\tfmt.Println(i, v)
+\t}
+\tfmt.Println("final s:", s)
+
+\t// switch with an init statement, and fallthrough running the next
+\t// case unconditionally.
+\tfmt.Println("-- switch init + fallthrough --")
+\tswitch x := score(); {
+\tcase x > 10:
+\t\tfmt.Println("big")
+\t\tfallthrough
+\tcase x > 5:
+\t\tfmt.Println("medium-or-big")
+\tdefault:
+\t\tfmt.Println("other")
+\t}
+}`;
+
+<Playground code={controlFlowDepthCode} />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
 | `for` keyword เดียว | เรียนรู้น้อยกว่า, code สม่ำเสมอ | ต้องจำรูปแบบสามแบบ (C-style, condition-only, infinite) |
-| `for range` | อ่านง่าย ไม่ต้องจัดการ index เอง | range copy value — mutation ใน loop body ไม่กระทบ original slice |
-| `switch` ไม่มี fallthrough อัตโนมัติ | ลด bug จาก forgotten `break` | ต้องเขียน `fallthrough` ชัดเจนถ้าต้องการ (rare) |
-| if init statement | scope ของ `err` แคบที่สุด | syntax แปลกสำหรับ developer ที่มาจากภาษาอื่น |
+| `for range` | อ่านง่าย ไม่ต้องจัดการ index เอง | range copy value และ evaluate expression แค่ครั้งเดียว — ทั้งคู่ทำให้แปลกใจกับ code ที่แก้ในตัวหรือ append ระหว่าง loop |
+| `switch` ไม่มี fallthrough อัตโนมัติ | ลด bug จาก forgotten `break` | ต้องเขียน `fallthrough` ชัดเจนถ้าต้องการ (rare) และใช้ใน case สุดท้ายหรือ type switch ไม่ได้ |
+| `if`/`switch` init statement | scope ของ `err` แคบที่สุด | syntax แปลกสำหรับ developer ที่มาจากภาษาอื่น |
+| Labeled break/continue | ควบคุมได้แม่นยำว่า jump จะไปที่ loop ไหน | `break` ธรรมดาใน `switch`/`select` ที่อยู่ใน `for` เป็น bug คลาสสิกที่เงียบมาก |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
 - **"`range` copy ทั้ง slice"** — range copy เฉพาะ value ของแต่ละ element เท่านั้น ไม่ copy ทั้ง slice และ slice header ก็ถูก evaluate แค่ครั้งเดียวตอนเริ่ม loop
 - **"Go `for` loop ต้องใช้ semicolon เหมือน C"** — `for i := 0; i < n; i++` ใช้ semicolon แต่ `for range` และ condition-only loop ไม่ต้องใช้
+- **"`break` ใน `switch` ที่อยู่ใน `for` หยุด loop"** — มันแค่ออกจาก `switch` (หรือ `select`) เท่านั้น — loop ยังทำงานต่อไป ใช้ labeled `break` เมื่อต้องการหยุด loop จริง ๆ
+- **"append เข้า slice ระหว่าง range ทำให้ loop เห็น element ใหม่"** — ไม่จริง `range` evaluate ความยาวของ slice แค่ครั้งเดียวก่อน iteration แรก
+
+## อ่านโค้ดที่ AI เขียน
+
+Bug เรื่อง control-flow เป็นหนึ่งใน bug ที่ generated code ซ่อนได้ง่ายที่สุด เพราะ program ยัง compile ผ่านและมักยังรันได้ — มันแค่วนจำนวนรอบผิดหรือออกจากสิ่งที่ผิด:
+
+- มี `break` ธรรมดาอยู่ใน `switch` (หรือ `select`) ที่ตัวมันเองอยู่ใน `for` หรือเปล่า? ตรวจว่าตั้งใจจะหยุด loop ไหม ถ้าใช่ต้องมี label
+- `for range` loop แก้ตัวแปร value ของมันหรือเปล่า (`for _, v := range s { v = ... }`) โดยคาดหวังว่า slice ต้นฉบับจะเปลี่ยน? มันจะไม่มีวันเปลี่ยน
+- loop `append` เข้า slice ตัวเดียวกับที่มัน range อยู่ โดยคาดว่าจะไปเยี่ยม element ที่เพิ่งเพิ่มหรือเปล่า? `range` กำหนดจำนวนรอบไว้แล้วก่อนที่ append แรกจะรันด้วยซ้ำ
+- `fallthrough` อยู่ใน case ที่กลายเป็น case สุดท้าย หรืออยู่ใน type switch หรือเปล่า? ทั้งคู่เป็น compile error ไม่ใช่ runtime surprise
+- labeled `continue`/`break` ถูกใช้ในที่ที่ตั้งใจจะใช้ตัวธรรมดา หรือกลับกัน — ตรวจว่า label นั้นชี้ไป loop ไหนจริง ๆ
+
+<SpotTheBug code={`for i := 0; i < 3; i++ {
+	switch i {
+	case 1:
+		break
+	default:
+		fmt.Println("processing", i)
+	}
+}`}>
+`break` ข้างใน `case 1` ออกจาก `switch` statement เท่านั้น — ไม่มีผลต่อ `for` loop ที่ครอบอยู่ ซึ่งยังทำงานต่อตามปกติ output จริงคือ `processing 0` ตามด้วย `processing 2`: `i == 1` ไม่ทำอะไรนอกจากออกจาก switch แล้ว loop ก็เดินหน้าไปที่ `i == 2` เลย ถ้าตั้งใจจะหยุด loop ทั้งหมดที่ `i == 1` ต้อง label loop แล้วเขียน `break loop` แทน: `loop: for i := 0; i < 3; i++ { switch i { case 1: break loop; ... } }`
+</SpotTheBug>
 
 <Callout title="`for` คือ Loop Keyword เดียวของ Go">
 Go ไม่มี `while`, `do-while`, หรือ `loop` ทุกการวนซ้ำใช้ `for` สามรูปแบบ ได้แก่ C-style (init; condition; post), condition-only (เทียบเท่า while), และ infinite loop (`for` เปล่า) ครอบคลุมทุก iteration pattern ที่คุณต้องการ
@@ -214,7 +445,8 @@ export const quizControlFlow = [
       "loop condition { }",
       "for ; condition ; { }"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Go มี loop keyword เดียว การตัด init กับ post clause ออกจาก C-style for แล้วเหลือแค่ condition ก็ได้ behavior แบบ while loop"
   },
   {
     q: "ใน Go switch statement เมื่อ case ตรงกันและไม่มี fallthrough keyword จะเกิดอะไร?",
@@ -224,7 +456,8 @@ export const quizControlFlow = [
       "execution หยุดที่สิ้นสุด case ที่ตรงและออกจาก switch",
       "default case ทำงานเสมอหลัง case ที่ตรง"
     ],
-    answer: 2
+    answer: 2,
+    explain: "ต่างจาก C หรือ Java, Go switch case ไม่ fall through โดย default — แต่ละ case มี break โดยนัยหลังจบตัวมันเอง"
   },
   {
     q: "ตัวแปรที่ประกาศใน if init statement มี scope อย่างไร?",
@@ -234,7 +467,8 @@ export const quizControlFlow = [
       "ทั้ง function ที่ครอบอยู่",
       "เฉพาะ if/else block รวมทุก branch"
     ],
-    answer: 3
+    answer: 3,
+    explain: "ตัวแปรของ init statement อยู่ได้แค่ใน if/else chain นั้น — รวมทุก else-if และ else branch — แล้วหายไปเมื่อ chain จบ"
   },
   {
     q: "เมื่อ range over string ด้วย `for i, r := range s` ตัวแปร r มี type อะไร?",
@@ -244,7 +478,30 @@ export const quizControlFlow = [
       "string",
       "int"
     ],
-    answer: 1
+    answer: 1,
+    explain: "range บน string จะ decode UTF-8 แล้วคืนค่าเป็น rune โดย i คือ byte offset ที่ rune แต่ละตัวเริ่มต้น — ไม่ใช่การเดินทีละ byte"
+  },
+  {
+    q: "```go\nfor i := 0; i < 3; i++ {\n    switch i {\n    case 1:\n        break\n    default:\n        fmt.Println(\"processing\", i)\n    }\n}\n```\nโค้ดนี้ print อะไร?",
+    options: [
+      "processing 0",
+      "processing 0 แล้วตามด้วย processing 2",
+      "processing 0, processing 1, processing 2",
+      "ไม่มีอะไร — เป็น compile error"
+    ],
+    answer: 1,
+    explain: "break ออกจากแค่ switch ไม่ใช่ for ตอน i == 1 มันชน break แล้วไม่ทำอะไรต่อ จากนั้น loop ก็ทำงานต่อปกติไปที่ i == 2"
+  },
+  {
+    q: "```go\ns := []int{1, 2, 3}\nfor i, v := range s {\n    if i == 0 {\n        s = append(s, 4)\n    }\n    fmt.Println(i, v)\n}\n```\nโค้ดนี้ print กี่บรรทัด?",
+    options: [
+      "3 — range กำหนดความยาว loop ไว้แล้วก่อน append",
+      "4 — element ที่ append เข้าไปก็ถูกเยี่ยมด้วย",
+      "loop ไม่มีที่สิ้นสุด — append ทำให้ range เห็นค่าเพิ่มขึ้นเรื่อย ๆ",
+      "compile error: s ถูกแก้ระหว่าง range อยู่"
+    ],
+    answer: 0,
+    explain: "range evaluate ความยาวของ s แค่ครั้งเดียวก่อน iteration แรก การ append ระหว่าง loop ทำให้ slice ต้นฉบับยาวขึ้น แต่ตัว loop เองยังวนแค่ i = 0, 1, 2"
   }
 ];
 

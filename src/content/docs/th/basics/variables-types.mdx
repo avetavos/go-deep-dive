@@ -1,14 +1,16 @@
 ---
 title: 'Variables และ Types'
-description: 'var, :=, zero values, type พื้นฐาน, constants, iota, และการแปลง type'
+description: 'var, :=, zero values, type พื้นฐาน, constants, iota, overflow, และทำไม string คือ sequence ของ byte'
 sidebar:
-  order: 3
+  order: 2
 ---
 
 import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## การประกาศตัวแปร
 
@@ -30,7 +32,7 @@ age  := 30         // Go infers the type as int
 pi   := 3.14159    // Go infers the type as float64
 ```
 
-`:=` ต้องมีตัวแปรใหม่อย่างน้อยหนึ่งตัวทางซ้าย ถ้าทุกตัวมีอยู่แล้วต้องใช้ `=`
+`:=` ต้องมีตัวแปรใหม่อย่างน้อยหนึ่งตัวทางซ้าย ถ้าทุกตัวมีอยู่แล้วต้องใช้ `=` กฎ "ต้องมีตัวใหม่อย่างน้อยหนึ่งตัว" นี่เองที่ทำให้เกิด shadowing โดยไม่ตั้งใจได้ง่าย — ดูหัวข้อด้านล่าง
 
 ## Zero Values
 
@@ -41,15 +43,20 @@ pi   := 3.14159    // Go infers the type as float64
 | `int`, `int8`, `int16`, `int32`, `int64` | `0` |
 | `uint`, `uint8`, `uint16`, `uint32`, `uint64` | `0` |
 | `float32`, `float64` | `0.0` |
+| `string` | `""` |
 | `bool` | `false` |
-| `string` | `""` (string ว่าง) |
 | `rune` (alias สำหรับ `int32`) | `0` |
 | `byte` (alias สำหรับ `uint8`) | `0` |
+| array `[N]T` | array ของ zero value ของ `T` จำนวน `N` ตัว |
+| struct | ทุก field ตั้งเป็น zero value ของ type ตัวเอง |
+| interface (รวม `error`) | `nil` |
 | pointer, slice, map, channel, function | `nil` |
+
+สิ่งนี้รับประกันว่าคุณใช้ตัวแปรได้อย่างปลอดภัยทันทีหลังประกาศ แม้ไม่มี initializer มีจุดหนึ่งที่ควรเก็บไว้ในใจสำหรับบทต่อไป: `nil` เองเป็น untyped และ zero value ของตัวแปร interface คือ `nil` — แต่ pointer ที่เป็น `nil` และถูกเก็บอยู่ใน interface ไม่ใช่ `nil` ตัวเดียวกันเสมอไป กับดักนี้อธิบายละเอียดใน Interfaces ตอนนี้แค่รู้ว่า `var err error` เริ่มต้นเป็น `nil` จริง ๆ
 
 ## Types พื้นฐาน
 
-Go มี numeric types ที่หลากหลายพร้อมขนาดที่ชัดเจน:
+Go มี numeric types ที่หลากหลายพร้อมขนาดที่ชัดเจน ส่วน `int`/`uint` ที่ไม่ระบุขนาดจะเท่ากับ word size ของ platform (32 หรือ 64 bit ขึ้นกับ `GOARCH` ไม่ใช่ OS):
 
 ```go
 var i   int     // size depends on platform (32 or 64 bit)
@@ -66,26 +73,50 @@ var bt  byte    // raw byte (uint8)
 
 ## Constants และ iota
 
-Constants ใน Go ยังไม่มี type จนกว่าจะนำไปใช้ (untyped constants) ทำให้ใช้ได้ยืดหยุ่น:
+Constants ประกาศด้วย `const` และถูก evaluate ตอน compile time `const` block ที่มี `iota` สร้าง sequence เพิ่มค่าอัตโนมัติ — วิธี idiomatic ของ Go สำหรับสร้าง enumeration:
 
 ```go
-const Pi    = 3.14159   // untyped float constant
-const Limit = 100       // untyped integer constant
-const Greeting = "hi"   // untyped string constant
-```
+const Pi = 3.14159
 
-**`iota`** คือ counter พิเศษใน `const` block ที่เริ่มจาก 0 และ increment ทีละ 1 ทุก constant:
-
-```go
 type Direction int
 
 const (
-    North Direction = iota   // 0
-    East                     // 1
-    South                    // 2
-    West                     // 3
+    North Direction = iota // 0
+    East                   // 1
+    South                  // 2
+    West                   // 3
 )
 ```
+
+`iota` reset กลับเป็นศูนย์ทุกครั้งที่เริ่ม `const` block ใหม่ และเพิ่มทีละ 1 ในแต่ละบรรทัดของ constant ภายใน block
+
+## Untyped Constants และเลขคณิตของ Constant
+
+Constant จะยังไม่มี type ที่แน่นอนจนกว่าจะถูกนำไปใช้ — มันเป็น **untyped constant** ที่ปรับตัวไปตาม numeric type ที่ context ต้องการ ทำให้ `const Pi = 3.14159` ตัวเดียวกันนำไปกำหนดให้ตัวแปร `float32` หรือ `float64` ได้เลยโดยไม่ต้องแปลง นี่คือเหตุผลที่ `const Timeout = 5 * time.Second` ใช้ได้ด้วย: `5` เป็น untyped integer constant การคูณเกิดขึ้นตอน compile time และผลลัพธ์ untyped จะกลายเป็น type `time.Duration` ก็ต่อเมื่อถูก assign เท่านั้น
+
+Untyped constant ถูกคำนวณด้วย precision แบบไม่จำกัดตอน compile time ทำให้เขียนค่าที่เกินขนาดของ type จริงบนเครื่องได้ ตราบใดที่ไม่แปลงมันเป็น type ที่เล็กเกินไป:
+
+```go
+const big = 1 << 62 // fine — an untyped constant, not yet any concrete int size
+_ = int32(big)       // compile error: constant 4611686018427387904 overflows int32
+```
+
+การ compile บรรทัดที่สองด้วย Go 1.26.5 ให้ error message ตรงตามนี้จริง overflow ถูกจับตอน compile time เพราะ `big` เป็น untyped — compiler รู้ค่าที่แน่นอนของมันและรู้ว่ามันไม่พอดีกับ `int32`
+
+## `iota` แบบนอกเหนือจาก +1
+
+`iota` ไม่ได้จำกัดแค่ "เพิ่มทีละหนึ่ง" — มันเป็นแค่ counter ที่ใช้ใน expression ใดก็ได้ และคุณข้ามค่าบางค่าได้ด้วย blank identifier:
+
+```go
+const (
+    _  = iota             // skip 0
+    KB = 1 << (10 * iota) // 1 << 10  == 1024
+    MB                    // 1 << 20  == 1048576
+    GB                    // 1 << 30  == 1073741824
+)
+```
+
+แต่ละบรรทัดถัดไปที่ไม่มี expression ชัดเจนจะทำซ้ำ expression ของบรรทัดก่อนหน้า โดยแทนค่า `iota` ใหม่เข้าไป `const ( ... )` block ใหม่จะ reset `iota` กลับเป็น `0` เสมอ ไม่ว่า block ก่อนหน้าจะจบที่ค่าอะไร
 
 ## การแปลง Type แบบ Explicit
 
@@ -99,6 +130,75 @@ var z int     = int(y)              // truncates the decimal, does not round
 s := strconv.Itoa(x)    // int → string
 n, _ := strconv.Atoi(s) // string → int (error ignored with _)
 ```
+
+## Integer Overflow และ `uint` Underflow
+
+Fixed-width integer ของ Go wrap รอบตัวเองอย่างเงียบ ๆ เมื่อ overflow — ไม่มี panic ไม่มี error มีแค่ค่าที่เกินขอบเขตไปเฉย ๆ:
+
+```go
+var small int8 = 127
+small++
+fmt.Println(small) // -128, not a compile error or a panic
+```
+
+เหตุการณ์เดียวกันเกิดที่ขอบล่างของ unsigned type ด้วย นี่เป็น bug ที่พบบ่อยเมื่อคำนวณ index จาก `len(...)`: การลบค่าออกจาก unsigned value ที่อาจเป็นศูนย์จะ wrap กลายเป็นเลขบวกมหาศาลแทนที่จะติดลบ:
+
+```go
+s := ""
+var lastIndex uint = uint(len(s)) - 1
+fmt.Println(lastIndex) // 18446744073709551615 on a 64-bit platform, not -1
+```
+
+`len` เองคืนค่าเป็น `int` ที่มีเครื่องหมาย ดังนั้น `len(s)-1` บน `int` ก็ได้ `-1` ตามปกติ — bug จะปรากฏก็ต่อเมื่อค่านั้นถูกเก็บลง (หรือส่งเป็น) unsigned type เท่านั้น ให้ระวังเมื่อเห็น `uint`, `uint32`, หรือ type คล้ายกันโผล่ในเลขคณิตของ size/index/count ที่อยู่ใกล้ศูนย์
+
+## String คือ Bytes
+
+String ใน Go คือ sequence ของ byte ที่อ่านได้อย่างเดียว โดยทั่วไป (แต่ไม่เสมอไป) เก็บข้อความแบบ UTF-8 `len`, การ index ด้วย `s[i]`, และ `range` ล้วนทำงานกับมัน แต่ไม่ได้เห็นตรงกันว่า "ตัวอักษร" หนึ่งตัวคืออะไร:
+
+- `len(s)` นับ **byte**
+- `s[i]` คืนค่า **byte** ที่ตำแหน่ง `i` ไม่ใช่ตัวอักษร
+- `range s` คืนค่าเป็น **rune** (Unicode code point) พร้อม *byte offset* ที่ rune นั้นเริ่มต้น ซึ่งเป็นเหตุผลที่ลำดับ index มีช่องว่างสำหรับตัวอักษรที่ใช้หลาย byte
+
+```go
+word := "héllo" // é encodes to 2 bytes in UTF-8
+fmt.Println(len(word))     // 6 — byte length, not 5 characters
+fmt.Println(word[1])       // 195 — one byte of é's two-byte encoding, not 'é'
+for i, r := range word {
+    fmt.Printf("byte offset %d: %q\n", i, r)
+}
+```
+
+<Mermaid code={stringBytesDiagram} title="len(word) นับได้ 6 byte; range word เข้าเยี่ยม 5 rune ที่ byte offset 0, 1, 3, 4, 5" />
+
+export const stringBytesDiagram = `flowchart TB
+  subgraph Bytes["len(word) = 6 bytes"]
+    direction LR
+    B0["byte 0: 'h'"] --> B1["byte 1: 0xC3"] --> B2["byte 2: 0xA9"] --> B3["byte 3: 'l'"] --> B4["byte 4: 'l'"] --> B5["byte 5: 'o'"]
+  end
+  subgraph Runes["range word = 5 runes"]
+    direction LR
+    R0["offset 0: 'h'"] --> R1["offset 1: 'é'"] --> R2["offset 3: 'l'"] --> R3["offset 4: 'l'"] --> R4["offset 5: 'o'"]
+  end`;
+
+ถ้าต้องการจำนวน "ตัวอักษร" จริง ๆ ใช้ `utf8.RuneCountInString(s)` หรือแปลงด้วย `[]rune(s)` — ทั้งสองแบบใช้เวลา O(n) เพราะ Go ไม่ได้คำนวณจำนวน rune ไว้ล่วงหน้า
+
+## Shadowing ด้วย `:=`
+
+เพราะ `:=` ต้องการแค่ตัวแปรใหม่ *หนึ่งตัว* ทางซ้าย มันจึงประกาศตัวแปรใหม่ชื่อซ้ำกับตัวแปรใน scope ภายนอกได้ง่ายโดยไม่ตั้งใจ แทนที่จะใช้ตัวเดิมซ้ำ อันตรายที่สุดคือกับ `err` ภายใน `if`:
+
+```go
+func run() error {
+    var err error
+    if v, err := step(); err != nil { // := declares a NEW err here, shadowing the outer one
+        fmt.Println("inner saw:", v, err)
+    }
+    return err // the outer err was never touched — still nil
+}
+```
+
+`step()` ล้มเหลวจริง และ body ของ `if` ก็ print error ออกมาถูกต้อง — แต่ `run()` ยัง return `nil` เพราะ `err` ที่ถูกตรวจและ print ข้างใน `if` เป็นคนละตัวกับ `err` ที่ประกาศด้วย `var` บรรทัดก่อนหน้าโดยสิ้นเชิง compiler ยอมรับโค้ดนี้แบบเงียบ ๆ เพราะ `err` ทั้งสองตัวถูกใช้งาน จึงไม่มี "declared and not used" error มาเตือน
+
+`go vet` **ไม่** จับ bug นี้โดย default — shadow check ถูกเอาออกจาก vet ชุดมาตรฐานเพราะมันแจ้งเตือน false positive มากเกินไป ถ้าต้องการจับให้ตั้งใจติดตั้ง analyzer แยกแล้วรันเอง: `go install golang.org/x/tools/go/analysis/passes/shadow/cmd/shadow@latest` แล้ว `go vet -vettool=$(which shadow) ./...` `golangci-lint` ก็มี setting `govet` ที่เปิด `shadow` check เดียวกันได้ แต่นิสัยที่ปลอดภัยกว่าคือหลีกเลี่ยงการใช้ `:=` ใน `if`/`for` เมื่อมีตัวแปรชื่อเดียวกันอยู่ใน scope ภายนอกแล้ว — ประกาศด้วย `var` ไว้ข้างนอก แล้วใช้ `=` ธรรมดาข้างใน
 
 export const variablesCode = `package main
 
@@ -148,6 +248,67 @@ func main() {
 
 <Playground code={variablesCode} />
 
+Playground ตัวที่สองด้านล่างรวมทุกจุดในหน้านี้ที่พังแบบเงียบ ๆ ได้: shadowing, overflow, underflow, และ strings-as-bytes
+
+export const variablesDepthCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+\t"unicode/utf8"
+)
+
+// step simulates an operation that can fail.
+func step() (int, error) {
+\treturn 0, errors.New("boom")
+}
+
+// run demonstrates := shadowing: the if-statement's err is a NEW variable,
+// not the outer one declared with var.
+func run() error {
+\tvar err error
+\tif v, err := step(); err != nil { // shadows the outer err
+\t\tfmt.Println("inner saw:", v, err)
+\t}
+\treturn err // outer err was never touched — still nil
+}
+
+const (
+\t_  = iota             // skip 0
+\tKB = 1 << (10 * iota) // 1 << 10
+\tMB                    // 1 << 20
+\tGB                    // 1 << 30
+)
+
+func main() {
+\t// := shadowing: a classic silent bug.
+\tfmt.Println("run() returned:", run())
+
+\t// Silent integer overflow: int8 wraps instead of panicking.
+\tvar small int8 = 127
+\tsmall++
+\tfmt.Println("int8(127)+1 =", small)
+
+\t// uint underflow: subtracting past zero wraps to a huge number.
+\ts := ""
+\tvar lastIndex uint = uint(len(s)) - 1
+\tfmt.Println("uint(len(\\"\\"))-1 =", lastIndex)
+
+\t// Strings are bytes: len, indexing, and range disagree on multi-byte runes.
+\tword := "héllo"
+\tfmt.Println("len(word) =", len(word))
+\tfmt.Println("word[1] =", word[1])
+\tfmt.Println("rune count =", utf8.RuneCountInString(word))
+\tfor i, r := range word {
+\t\tfmt.Printf("  byte offset %d: %q\\n", i, r)
+\t}
+
+\t// iota beyond +1: bit-shift pattern for size constants.
+\tfmt.Println("KB, MB, GB =", KB, MB, GB)
+}`;
+
+<Playground code={variablesDepthCode} />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -156,16 +317,43 @@ func main() {
 | zero values | ไม่มี uninitialized variable, ไม่มี null dereference | nil pointer / nil map ยัง panic ได้ — zero value ปลอดภัยเฉพาะ type ที่ออกแบบให้ใช้ได้ทันที |
 | no implicit conversion | ไม่มี hidden precision loss | ต้องเขียน `float64(x)` ทุกครั้งที่แปลง type |
 | `iota` enum | สร้าง enum ได้กระชับ | ไม่มี built-in string representation — ต้องเขียน `String()` method เอง |
+| fixed-width integer | ขนาดและ layout คาดเดาได้ | overflow wrap เงียบ ๆ แทนที่จะ panic — ไม่มี bounds check ในเลขคณิตให้อัตโนมัติ |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
 - **"`int` มีขนาด 32-bit เสมอ"** — ขนาดของ `int` ขึ้นกับ `GOARCH` (amd64/arm64 = 64-bit, 386/arm = 32-bit) ไม่ใช่ OS ถ้าต้องการ size คงที่ ใช้ `int32` หรือ `int64`
 - **"`var x = y` กับ `x := y` เหมือนกันเสมอ"** — `:=` ใช้ได้เฉพาะใน function scope เท่านั้น ไม่สามารถใช้ที่ package scope ได้
 - **"zero value ของ pointer คือ 0"** — zero value ของ pointer, slice, map, channel, และ function คือ `nil` ไม่ใช่ตัวเลข 0
+- **"integer overflow panic เหมือน nil dereference"** — ไม่จริง Go's fixed-width integer wrap รอบตัวเองอย่างเงียบ ๆ ไม่มีอะไรหยุดตอน runtime มาบอกคุณ
+- **"`len(s)` บอกจำนวนตัวอักษรใน `s`"** — มันบอกความยาวเป็น byte string ที่มี rune หลาย byte จะมี byte มากกว่าตัวอักษร
 
 <Callout title="ไม่มีการแปลงตัวเลขแบบ Implicit">
 ใน Go คุณไม่สามารถบวก `int` กับ `float64` ได้โดยตรง ต้องแปลงอย่างชัดเจน เช่น `float64(x)` หรือ `int(y)` ซึ่งป้องกัน bug ที่เกิดจาก precision loss และทำให้ code บอกความตั้งใจได้ชัดเจนกว่า หากพยายาม compile โดยไม่แปลง compiler จะ error ทันที
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ generate มาซึ่งแตะเรื่อง variable และ basic type มักซ่อน bug พวกนี้ไว้:
+
+- `if`/`for` header ใช้ `:=` กับชื่อ (บ่อยครั้งคือ `err`) ที่มีอยู่แล้วใน scope ภายนอกหรือเปล่า? ตรวจดูว่ามันตั้งใจใช้ตัวแปรเดิมหรือแอบ shadow มันอยู่
+- เลขคณิตบน fixed-width type (`int8`, `uint16`, byte count, …) เข้าใกล้ค่า minimum/maximum ของ type นั้นหรือเปล่า? ไม่มี overflow check อัตโนมัติ
+- `uint` (หรือ `uint32`/`uint64`) ถูกสร้างจากการลบค่าออกจาก `len(...)` หรือค่าอื่นที่อาจเป็น `0` หรือเปล่า? นี่คือ bug underflow-กลายเป็นเลขมหาศาลแบบคลาสสิก
+- โค้ด index string ด้วย `s[i]` หรือเทียบ `len(s)` กับ "จำนวนตัวอักษร" ทั้งที่ string อาจมีข้อความที่ไม่ใช่ ASCII หรือเปล่า?
+- `iota` block เริ่มด้วย identifier ธรรมดาแทนที่จะเป็น `_` ทั้งที่ค่าตัวที่ศูนย์ควรถูกข้ามหรือถือว่า "invalid" หรือเปล่า?
+
+<SpotTheBug code={`func step() (int, error) {
+	return 0, errors.New("boom")
+}
+
+func run() error {
+	var err error
+	if v, err := step(); err != nil {
+		fmt.Println("inner saw:", v, err)
+	}
+	return err
+}`}>
+`:=` ใน `if` ประกาศ `err` *ตัวใหม่* ที่ scope อยู่แค่ใน `if` block — มันไม่ได้ assign ให้ `err` ตัวนอกที่ประกาศด้วย `var` `step()` ล้มเหลวจริง และ `fmt.Println` ข้างใน `if` ก็ print error จริง แต่ `run()` ยัง return `nil` เพราะ `err` ตัวนอกไม่เคยถูก assign ใหม่ แก้ได้โดยไม่ shadow: ใช้ `err` ตัวที่ประกาศไว้แล้วด้วยการเขียน `var v int; v, err = step()` แล้วเช็ค `err` แยกบรรทัดหลังจากนั้น
+</SpotTheBug>
 
 export const quizVariables = [
   {
@@ -176,7 +364,8 @@ export const quizVariables = [
       "\"\" (string ว่าง)",
       "undefined"
     ],
-    answer: 2
+    answer: 2,
+    explain: "ทุก type ใน Go มี zero value ที่พร้อมใช้ทันทีโดยไม่ต้อง initialize; สำหรับ string คือ empty string ไม่ใช่ nil"
   },
   {
     q: "กำหนด `const ( A = iota; B; C )` ค่าของ C คือเท่าไร?",
@@ -186,17 +375,8 @@ export const quizVariables = [
       "2",
       "3"
     ],
-    answer: 2
-  },
-  {
-    q: "ข้อใดแปลง int เป็น float64 ได้ถูกต้องใน Go?",
-    options: [
-      "(float64) x",
-      "float64(x)",
-      "x as float64",
-      "cast(x, float64)"
-    ],
-    answer: 1
+    answer: 2,
+    explain: "iota เริ่มที่ 0 สำหรับ A และเพิ่มทีละ 1 ต่อบรรทัดใน block ดังนั้น B คือ 1 และ C คือ 2"
   },
   {
     q: "ตรงไหนที่ **ไม่สามารถ** ใช้ short declaration `:=` ได้?",
@@ -206,7 +386,41 @@ export const quizVariables = [
       "ที่ package scope",
       "ใน function body"
     ],
-    answer: 2
+    answer: 2,
+    explain: ":= ใช้ได้เฉพาะภายใน function body (รวม block ที่ซ้อนอยู่ข้างใน) เท่านั้น — การประกาศระดับ package ต้องใช้ var"
+  },
+  {
+    q: "```go\nfunc run() error {\n    var err error\n    if v, err := step(); err != nil {\n        fmt.Println(v, err)\n    }\n    return err\n}\n```\nถ้า step() คืนค่า error ที่ไม่เป็น nil เสมอ run() จะ return อะไร?",
+    options: [
+      "error ที่ step() คืนมา",
+      "nil เพราะ err ใน if shadow ตัวนอก",
+      "compile error: err redeclared in this block",
+      "compile error: err declared and not used"
+    ],
+    answer: 1,
+    explain: ":= ใน if ต้องการแค่ตัวแปรใหม่หนึ่งตัว (v) มันจึงประกาศ err ตัวใหม่ที่ scope อยู่แค่ใน if block err ตัวนอกไม่เคยถูกแตะต้อง ดังนั้น run() คืน nil แม้ step() จะล้มเหลวจริง"
+  },
+  {
+    q: "```go\nvar small int8 = 127\nsmall++\nfmt.Println(small)\n```\nโค้ดนี้ print อะไร?",
+    options: [
+      "128",
+      "-128",
+      "compile error: constant overflows int8",
+      "runtime panic: integer overflow"
+    ],
+    answer: 1,
+    explain: "int8 มีช่วง -128 ถึง 127 การเพิ่มค่าเกิน 127 จะ wrap เงียบ ๆ กลับไปเป็น -128 — Go ไม่มี runtime overflow check บนเลขคณิตปกติ"
+  },
+  {
+    q: "```go\nconst big = 1 << 62\nvar v int32 = int32(big)\n```\nโค้ดนี้ compile ผ่านไหม?",
+    options: [
+      "ผ่าน v จะได้ 0 หลังถูก truncate",
+      "ผ่าน v จะได้เลขลบที่ wrap มา",
+      "ไม่ผ่าน — constant 4611686018427387904 overflows int32",
+      "ไม่ผ่าน — 1 << 62 ไม่ใช่ constant expression ที่ถูกต้อง"
+    ],
+    answer: 2,
+    explain: "big เป็น untyped constant ดังนั้น compiler รู้ค่าที่แน่นอนของมันตอน compile time และปฏิเสธการแปลงเป็น int32 ไปเลย แทนที่จะ truncate เงียบ ๆ แบบที่การแปลงตัวแปรตอน runtime จะทำ"
   }
 ];
 

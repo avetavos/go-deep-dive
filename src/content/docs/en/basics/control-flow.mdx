@@ -1,14 +1,16 @@
 ---
 title: 'Control Flow'
-description: 'if with init statement, for as the only loop keyword, range, and switch without automatic fallthrough.'
+description: 'if with init statement, for as the only loop keyword, labeled break/continue, range semantics, and switch without automatic fallthrough.'
 sidebar:
-  order: 4
+  order: 3
 ---
 
 import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## if statements
 
@@ -80,9 +82,11 @@ for _, v := range fruits {
 
 // Range over a string yields runes (Unicode code points), not bytes
 for i, r := range "Go!" {
-    fmt.Println(i, r)
+    fmt.Printf("%d: %c\n", i, r)
 }
 ```
+
+Since Go 1.23, `range` can also drive a `for` loop over a function with a special signature — this is the basis of the `iter` package and custom iterators, covered fully in Iterators once you have seen more of the type system.
 
 ## Range over an integer, and per-iteration loop variables
 
@@ -97,7 +101,98 @@ for range 3 {             // repeat three times, no variable
 }
 ```
 
-Go 1.22 also changed loop-variable semantics: each iteration gets a **fresh** `i` (and `v`), so closures and goroutines started inside the loop no longer all see the final value. The old `i := i` copy is unnecessary in modules with `go 1.22` or later in `go.mod`.
+Go 1.22 also changed loop-variable semantics: each iteration gets a **fresh** `i` (and `v`), so closures and goroutines started inside the loop no longer all see the final value. The old `i := i` copy is unnecessary in modules with `go 1.22` or later in `go.mod` — the full before/after comparison, with real output from both, is in Functions.
+
+## Labeled `break` and `continue`
+
+A `break` or `continue` normally applies to the innermost `for`. A **label** — an identifier followed by a colon, placed on the line before a `for` — lets you name that loop and target it from a nested loop:
+
+```go
+outer:
+for i := 0; i < 3; i++ {
+    for j := 0; j < 3; j++ {
+        if j == 1 {
+            continue outer // skip to the next i, not the next j
+        }
+        if i == 2 {
+            break outer // exit both loops entirely
+        }
+        fmt.Println(i, j)
+    }
+}
+```
+
+`continue outer` skips the rest of the inner loop *and* the rest of that iteration of the outer loop; `break outer` exits both loops immediately.
+
+## `break` inside `switch` or `select` doesn't exit the loop
+
+This is one of the most common bugs in generated Go code. A bare `break` exits the **innermost enclosing `switch` or `select`**, not an outer `for` — even though the loop is the thing most people mean to stop:
+
+```go
+for i := 0; i < 3; i++ {
+    switch i {
+    case 1:
+        break // exits only this switch — the loop keeps going
+    default:
+        fmt.Println("processing", i)
+    }
+}
+```
+
+This prints `processing 0` and `processing 2` — `case 1` runs its `break`, which does nothing except leave the `switch`, and the `for` loop happily continues to `i = 2`. The same rule applies to a `select` inside a `for` (covered in the concurrency module once channels are introduced): a `break` in one of its cases only leaves the `select`. To actually stop the loop, label it and break the label:
+
+```go
+loop:
+for i := 0; i < 5; i++ {
+    switch {
+    case i == 3:
+        break loop // this one really does exit the for
+    default:
+        fmt.Println(i)
+    }
+}
+```
+
+<Mermaid code={breakScopeDiagram} title="An unlabeled break only escapes the switch; a labeled break escapes the labeled for" />
+
+export const breakScopeDiagram = `flowchart LR
+  subgraph Unlabeled["plain break inside a switch"]
+    direction TB
+    U1["for i := ..."] --> U2["switch i { case: break }"]
+    U2 -->|"exits switch only"| U3["loop continues to next i"]
+  end
+  subgraph Labeled["break loop (labeled)"]
+    direction TB
+    L1["loop: for i := ..."] --> L2["switch i { case: break loop }"]
+    L2 -->|"exits the labeled for"| L3["loop stops entirely"]
+  end`;
+
+## `range` copies elements, and evaluates its expression once
+
+Two behaviors of `range` surprise newcomers, and both matter when reading generated code:
+
+**It copies each element into the loop variable.** Mutating that variable never changes the underlying collection:
+
+```go
+nums := []int{1, 2, 3}
+for _, v := range nums {
+    v *= 10 // modifies the local copy only
+}
+fmt.Println(nums) // [1 2 3] — unchanged
+```
+
+**It evaluates the ranged expression exactly once, at the start of the loop.** For a slice, that means the loop bound is fixed to the slice's length *at that moment* — appending to the slice inside the loop body does not make the loop visit the new elements:
+
+```go
+s := []int{1, 2, 3}
+for i, v := range s {
+    if i == 0 {
+        s = append(s, 4) // extends s, but range already captured the original length
+    }
+    fmt.Println(i, v)
+}
+// loop body still only runs for i = 0, 1, 2 — the appended 4 is never visited
+```
 
 ## switch
 
@@ -114,20 +209,52 @@ default:
 }
 ```
 
-To fall through explicitly, use the `fallthrough` keyword. To match multiple values, list them comma-separated in one case.
-
-**Switch-true** (expressionless switch) acts as a cleaner if/else chain:
+Like `if`, `switch` accepts an **init statement** before the condition, scoped to the whole switch — handy for computing the value you are branching on right at the switch itself:
 
 ```go
-switch {
-case score >= 90:
-    fmt.Println("A")
-case score >= 80:
-    fmt.Println("B")
+switch x := score(); {
+case x > 10:
+    fmt.Println("big")
+case x > 5:
+    fmt.Println("medium")
 default:
-    fmt.Println("C or below")
+    fmt.Println("small")
 }
 ```
+
+**Switch-true** (expressionless switch, as used above) acts as a cleaner if/else chain, with each case an independent boolean expression. To match multiple values in one case, list them comma-separated.
+
+## Fallthrough's limits
+
+To fall through to the next case explicitly, use `fallthrough` as the last statement in a case. It is unconditional — it runs the next case's body regardless of that case's own condition:
+
+```go
+switch x := score(); {
+case x > 10:
+    fmt.Println("big")
+    fallthrough
+case x > 5:
+    fmt.Println("medium-or-big") // runs even though this case's own test was never evaluated
+default:
+    fmt.Println("other")
+}
+```
+
+`fallthrough` has two hard limits the compiler enforces. It cannot appear in the **last** case of a switch:
+
+```text
+./main.go:9:3: cannot fallthrough final case in switch
+```
+
+And it cannot be used at all in a **type switch**:
+
+```text
+./main.go:10:3: cannot fallthrough in type switch
+```
+
+## A one-sentence `goto`
+
+`goto` jumps to a labeled statement in the same function and exists mainly for generated code and rare cleanup patterns; idiomatic hand-written Go almost never uses it, reaching for a labeled loop, an early `return`, or a restructured function instead.
 
 export const controlFlowCode = `package main
 
@@ -185,19 +312,126 @@ func main() {
 
 <Playground code={controlFlowCode} />
 
+The second playground demonstrates every depth topic above in one runnable program: labeled break/continue, break trapped inside a switch, range's copy-and-evaluate-once behavior, and switch with an init statement plus `fallthrough`.
+
+export const controlFlowDepthCode = `package main
+
+import "fmt"
+
+func score() int { return 12 }
+
+func main() {
+\t// Labeled break and continue reach an outer loop by name.
+\tfmt.Println("-- labeled continue/break --")
+outer:
+\tfor i := 0; i < 3; i++ {
+\t\tfor j := 0; j < 3; j++ {
+\t\t\tif j == 1 {
+\t\t\t\tcontinue outer
+\t\t\t}
+\t\t\tif i == 2 {
+\t\t\t\tbreak outer
+\t\t\t}
+\t\t\tfmt.Println(i, j)
+\t\t}
+\t}
+
+\t// A plain break inside a switch only exits the switch, not the loop.
+\tfmt.Println("-- break inside switch inside for --")
+\tfor i := 0; i < 3; i++ {
+\t\tswitch i {
+\t\tcase 1:
+\t\t\tbreak // exits only this switch — the loop keeps going
+\t\tdefault:
+\t\t\tfmt.Println("processing", i)
+\t\t}
+\t}
+
+\t// A labeled break reaches all the way out of the for.
+\tfmt.Println("-- labeled break exits the for --")
+loop:
+\tfor i := 0; i < 5; i++ {
+\t\tswitch {
+\t\tcase i == 3:
+\t\t\tbreak loop
+\t\tdefault:
+\t\t\tfmt.Println(i)
+\t\t}
+\t}
+
+\t// range copies each element; mutating v does not change the slice.
+\tfmt.Println("-- range copies elements --")
+\tnums := []int{1, 2, 3}
+\tfor _, v := range nums {
+\t\tv *= 10
+\t}
+\tfmt.Println(nums)
+
+\t// range evaluates its expression once: appending during the loop does
+\t// not extend how many times the loop runs.
+\tfmt.Println("-- range evaluates its expression once --")
+\ts := []int{1, 2, 3}
+\tfor i, v := range s {
+\t\tif i == 0 {
+\t\t\ts = append(s, 4)
+\t\t}
+\t\tfmt.Println(i, v)
+\t}
+\tfmt.Println("final s:", s)
+
+\t// switch with an init statement, and fallthrough running the next
+\t// case unconditionally.
+\tfmt.Println("-- switch init + fallthrough --")
+\tswitch x := score(); {
+\tcase x > 10:
+\t\tfmt.Println("big")
+\t\tfallthrough
+\tcase x > 5:
+\t\tfmt.Println("medium-or-big")
+\tdefault:
+\t\tfmt.Println("other")
+\t}
+}`;
+
+<Playground code={controlFlowDepthCode} />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
 |---------------|---------|------|
 | One `for` keyword | Less to learn, consistent code | You must remember the three forms (C-style, condition-only, infinite) |
-| `for range` | Reads cleanly, no manual index bookkeeping | `range` copies each element's value — mutating it in the loop body does not affect the original slice |
-| `switch` with no automatic fallthrough | Fewer bugs from a forgotten `break` | You must write `fallthrough` explicitly on the rare occasion you want it |
-| `if` init statement | The `err` variable's scope stays as narrow as possible | The syntax looks unusual to developers coming from other languages |
+| `for range` | Reads cleanly, no manual index bookkeeping | `range` copies each element's value and evaluates its expression once — both surprise code that mutates in place or appends mid-loop |
+| `switch` with no automatic fallthrough | Fewer bugs from a forgotten `break` | You must write `fallthrough` explicitly on the rare occasion you want it, and it cannot appear in the last case or a type switch |
+| `if`/`switch` init statement | The `err` variable's scope stays as narrow as possible | The syntax looks unusual to developers coming from other languages |
+| Labeled break/continue | Precise control over which loop a jump targets | An unlabeled `break` inside a `switch`/`select` inside a `for` is a classic, silent bug |
 
 ## Common Misconceptions
 
 - **"`range` copies the whole slice."** `range` only copies the value of each element, not the whole slice — and the slice header itself is evaluated only once, at the start of the loop.
 - **"Go `for` loops always need semicolons like C."** `for i := 0; i < n; i++` uses semicolons, but `for range` and the condition-only loop do not.
+- **"`break` inside a `switch` that's inside a `for` stops the loop."** It only exits the `switch` (or `select`) — the loop keeps running. Reach for a labeled `break` when you actually mean to stop the loop.
+- **"Appending to a slice while ranging over it makes the loop see the new elements."** It does not — `range` evaluates the slice's length once, before the first iteration.
+
+## Reading AI-generated code
+
+Control-flow bugs are some of the easiest for generated code to hide, because the program still compiles and often still runs — it just does the wrong number of iterations or exits the wrong thing:
+
+- Is there a bare `break` inside a `switch` (or `select`) that itself sits inside a `for`? Check whether the intent was to stop the loop — if so, it needs a label.
+- Does a `for range` loop mutate its value variable (`for _, v := range s { v = ... }`) expecting the source slice to change? It never will.
+- Does a loop `append` to the very slice it is ranging over, expecting to visit the newly appended elements? `range` already fixed the iteration count before the first append ran.
+- Does a `fallthrough` sit in what turns out to be the last case, or inside a type switch? Both are compile errors, not runtime surprises.
+- Is a labeled `continue`/`break` used where a plain one was intended, or vice versa — check which loop the label actually names.
+
+<SpotTheBug code={`for i := 0; i < 3; i++ {
+	switch i {
+	case 1:
+		break
+	default:
+		fmt.Println("processing", i)
+	}
+}`}>
+The `break` inside `case 1` only exits the `switch` statement — it has no effect on the enclosing `for` loop, which keeps running normally. The real output is `processing 0` followed by `processing 2`: `i == 1` does nothing but leave the switch, and the loop proceeds straight to `i == 2`. If the intent was to stop the loop entirely at `i == 1`, label the loop and write `break loop` instead: `loop: for i := 0; i < 3; i++ { switch i { case 1: break loop; ... } }`.
+</SpotTheBug>
 
 <Callout title="`for` is Go's only loop keyword">
 Go has no `while`, `do-while`, `until`, or `loop` keyword. Every iteration — whether bounded, conditional, or infinite — uses `for`. The three forms (C-style; condition-only; no-condition) cover every pattern. If you want a `while` loop, write `for condition` with the init and post omitted. This deliberate constraint keeps the language smaller and every loop form immediately recognisable.
@@ -212,7 +446,8 @@ export const quizControlFlow = [
       "loop condition { }",
       "for ; condition ; { }"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Go has only one loop keyword. Omitting the init and post clauses from a C-style for and keeping just the condition gives while-loop behavior."
   },
   {
     q: "In Go's switch statement, what happens when a case matches but has no fallthrough keyword?",
@@ -222,7 +457,8 @@ export const quizControlFlow = [
       "Execution stops at the end of the matched case and exits the switch",
       "The default case always runs after the matched case"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Unlike C or Java, Go switch cases do not fall through by default — each case implicitly breaks after it runs."
   },
   {
     q: "What scope do variables declared in an if init statement have?",
@@ -232,7 +468,8 @@ export const quizControlFlow = [
       "The entire enclosing function",
       "Only the if/else block including all branches"
     ],
-    answer: 3
+    answer: 3,
+    explain: "An init statement's variables live only inside that if/else chain — including every else-if and else branch — and disappear once the chain ends."
   },
   {
     q: "When ranging over a string with `for i, r := range s`, what type is r?",
@@ -242,7 +479,30 @@ export const quizControlFlow = [
       "string",
       "int"
     ],
-    answer: 1
+    answer: 1,
+    explain: "range over a string decodes UTF-8 and yields runes, with i as the byte offset where each rune starts — not a byte-by-byte walk."
+  },
+  {
+    q: "```go\nfor i := 0; i < 3; i++ {\n    switch i {\n    case 1:\n        break\n    default:\n        fmt.Println(\"processing\", i)\n    }\n}\n```\nWhat does this print?",
+    options: [
+      "processing 0",
+      "processing 0 then processing 2",
+      "processing 0, processing 1, processing 2",
+      "Nothing — this is a compile error"
+    ],
+    answer: 1,
+    explain: "break only exits the switch, not the for. i == 1 hits break and does nothing else, then the loop continues normally to i == 2.",
+  },
+  {
+    q: "```go\ns := []int{1, 2, 3}\nfor i, v := range s {\n    if i == 0 {\n        s = append(s, 4)\n    }\n    fmt.Println(i, v)\n}\n```\nHow many lines does this print?",
+    options: [
+      "3 — range already fixed the loop length before the append",
+      "4 — the appended element gets visited too",
+      "Infinite loop — append keeps extending what range sees",
+      "A compile error: s is modified while ranging over it"
+    ],
+    answer: 0,
+    explain: "range evaluates the length of s exactly once, before the first iteration. Appending inside the loop grows the underlying slice, but the loop itself still only runs for i = 0, 1, 2."
   }
 ];
 

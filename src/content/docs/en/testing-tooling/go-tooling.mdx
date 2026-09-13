@@ -1,6 +1,6 @@
 ---
 title: The Go Toolchain
-description: 'go run, go build, go fmt, go vet, go fix, go doc — the everyday commands that make Go productive, what changed in Go 1.25–1.27, and gofmt''s no-config philosophy.'
+description: 'go run, go build, go vet analyzers, staticcheck, golangci-lint v2, govulncheck, build tags, go generate, ldflags, and cross-compilation.'
 sidebar:
   order: 5
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The go command is a Swiss Army knife
 
@@ -30,12 +32,7 @@ go run ./cmd/server        # run a specific cmd sub-package
 ```bash
 go build .                         # build current package, output: ./myapp
 go build -o bin/server ./cmd/server  # build to a specific path
-
-# Cross-compile for Linux/amd64 from macOS
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/server ./cmd/server
 ```
-
-The `-ldflags="-s -w"` flags strip the symbol table and DWARF debug info, reducing binary size significantly. `CGO_ENABLED=0` guarantees a fully static binary — no dynamic libc dependency.
 
 ## go fmt — canonical formatting
 
@@ -52,26 +49,141 @@ In CI, check that code is already formatted:
 gofmt -l . | grep -q . && echo "unformatted files found" && exit 1 || echo "all formatted"
 ```
 
-## go vet — static analysis
+## go vet — the analyzers that catch AI-written bugs
 
-`go vet` runs a suite of static analysers that catch bugs the compiler does not catch: mismatched `Printf` format verbs, unreachable code, incorrect mutex usage, and more.
+`go vet` is not one check — it is a suite of independent analyzers, each with its own name, that the `go` command runs together. `go doc cmd/vet` lists all of them; the six below catch patterns that show up constantly in generated code, each verified with a real bug and go vet's real message:
+
+**`copylocks`** — a struct containing a `sync.Mutex` (or similar) gets copied, so the copy has independent, useless lock state:
+
+```go
+type Safe struct {
+	mu    sync.Mutex
+	count int
+}
+
+s := Safe{}
+s2 := s // copies the mutex
+```
+
+```text
+main.go:12:8: assignment copies lock value to s2: example.com/vetdemo/copylocks.Safe contains sync.Mutex
+```
+
+**`lostcancel`** — the cancel function from `context.WithCancel` is discarded, leaking the context until its parent is done:
+
+```go
+ctx, _ := context.WithCancel(context.Background())
+```
+
+```text
+main.go:6:7: the cancel function returned by context.WithCancel should be called, not discarded, to avoid a context leak
+```
+
+**`unusedresult`** — a function whose return value matters (the standard library marks a handful, like `errors.New` and `fmt.Errorf`) is called and the result thrown away:
+
+```go
+errors.New("boom")
+```
+
+```text
+main.go:9:2: result of errors.New call not used
+```
+
+**`httpresponse`** — the response from `http.Get` is used (here, `defer resp.Body.Close()`) before the error is checked, so a failed request dereferences a nil `*http.Response`:
+
+```go
+resp, err := http.Get("http://example.com")
+defer resp.Body.Close()
+if err != nil {
+	fmt.Println(err)
+	return
+}
+```
+
+```text
+main.go:10:8: using resp before checking for errors
+```
+
+**`waitgroup`** (Go 1.25) — `wg.Add(1)` is called from inside the goroutine it is meant to track, which races with `wg.Wait()` in the parent — `Add` must happen before the `go` statement:
+
+```go
+go func() {
+	wg.Add(1)
+	defer wg.Done()
+}()
+wg.Wait()
+```
+
+```text
+main.go:8:9: WaitGroup.Add called from inside new goroutine
+```
+
+**`printf`** — a format verb does not match its argument's type:
+
+```go
+fmt.Printf("%d\n", "hello")
+```
+
+```text
+main.go:6:14: fmt.Printf format %d has arg "hello" of wrong type string
+```
 
 ```bash
 go vet ./...
 ```
 
-Sample issues `go vet` catches:
+`go vet` exits with a non-zero status if it finds problems, making it easy to fail a CI pipeline. It also runs a small, fixed subset of these analyzers automatically before every `go test` and `go build` — `hostport` (Go 1.25) suggests `net.JoinHostPort` instead of `fmt.Sprintf("%s:%d", host, port)`, which breaks on IPv6, and `stdversion` (Go 1.27) reports calls to standard-library APIs newer than your module's `go` line.
 
-```go
-fmt.Printf("%d", "hello")   // vet: format %d has arg "hello" of wrong type string
-var mu sync.Mutex
-mu2 := mu                   // vet: assignment copies lock value
+## staticcheck and golangci-lint v2
+
+`go vet` is deliberately conservative — it only reports issues it can prove are almost certainly bugs. `staticcheck` and `golangci-lint` run far more analyzers, including many with false-positive risk that `go vet` avoids.
+
+`staticcheck` (`honnef.co/go/tools/cmd/staticcheck`) runs standalone and reports its own `SA`-prefixed codes. On the same `printf` and `unusedresult` bugs above, verified locally (`staticcheck 2026.2.1`):
+
+```text
+main.go:6:13: Printf format %d has arg #1 of wrong type string (SA5009)
+main.go:9:2: New doesn't have side effects and its return value is ignored (SA4017)
 ```
 
-`go vet` exits with a non-zero status if it finds problems, making it easy to fail a CI pipeline.
+`golangci-lint` bundles dozens of linters — including `go vet` itself, `staticcheck`, and many more — behind one command and one config file. Version 2's config format (verified locally against `golangci-lint 2.13.2`) starts from:
 
-Recent releases added analyzers you will see in practice: `waitgroup` (Go 1.25) catches `wg.Add` placed after the `go` statement, `hostport` (Go 1.25) suggests `net.JoinHostPort` instead of `fmt.Sprintf("%s:%d", host, port)` — which breaks on IPv6 — and `stdversion` (run by `go test` since Go 1.27) reports calls to standard-library APIs newer than your module's `go` line.
+```yaml
+version: "2"
+linters:
+  default: standard
+```
 
+`default: standard` enables a curated baseline (`govet`, `staticcheck`, `unused`, and others) rather than everything — golangci-lint v1's default set is gone in v2, and `default` is now an explicit, named choice. Running it against the `copylocks` bug above, verified locally, wraps the underlying `go vet` finding with the linter that reported it and adds an unrelated real issue in the same file:
+
+```text
+main.go:12:8: copylocks: assignment copies lock value to s2: ...Safe contains sync.Mutex (govet)
+main.go:13:6: copylocks: assignment copies lock value to _: ...Safe contains sync.Mutex (govet)
+main.go:6:2: field mu is unused (unused)
+main.go:7:2: field count is unused (unused)
+```
+
+The `(govet)` and `(unused)` suffixes name which underlying linter reported each line — useful when deciding what to suppress and what to fix.
+
+## govulncheck
+
+`govulncheck` cross-references your dependencies (and, more precisely, the exact functions your code actually calls) against the Go vulnerability database.
+
+```bash
+govulncheck ./...
+```
+
+Verified locally on a clean module with no third-party dependencies:
+
+```text
+No vulnerabilities found.
+
+Your code is affected by 0 vulnerabilities.
+This scan also found 0 vulnerabilities in packages you import and 8
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+```
+
+The distinction in that last line is the entire point of the tool: a vulnerable function existing somewhere in your dependency tree is not the same as your program calling it. `govulncheck` does call-graph analysis to tell the two apart, which is why it reports far fewer "you must act now" results than a naive "scan `go.sum` against a CVE list" tool would.
 
 ## go fix — modernizers (Go 1.26+)
 
@@ -84,13 +196,118 @@ go fix -diff ./...      # preview the rewrite without touching files
 
 Typical rewrites: a hand-written `for` loop that finds the minimum becomes `min(...)`; `sort.Slice` becomes `slices.Sort`; `for i := 0; i < n; i++` becomes `for i := range n`; the `wg.Add(1)` / `go` / `defer wg.Done()` triple becomes `wg.Go(...)` (`waitgroupgo`); `x := x` loop-variable copies are deleted. Go 1.27 adds `atomictypes`, `embedlit`, `slicesbackward`, and `unsafefuncs`. Library authors can also mark a wrapper with `//go:fix inline` so `go fix` inlines the call at every use site — the mechanism the standard library uses to migrate callers off deprecated helpers.
 
-## What else changed in the toolchain (Go 1.25–1.27)
+## Build tags
 
-- `go mod init` writes the `go` line as the exact version of the toolchain that ran it — not one minor below. Confirmed locally: Go 1.26.5 writes `go 1.26.5`; running it under Go 1.27.0 writes `go 1.27.0`. Raise or pin the line explicitly with `go get go@1.27` when you need a specific floor.
-- `go doc example.com/pkg@v1.2.3` (Go 1.27) documents a specific module version, and `go doc -ex` lists runnable examples.
-- `go doc -http` (Go 1.25) serves the documentation in a browser; `pkgsite` is no longer needed for local use.
-- `go tool pprof -http` (Go 1.26) opens on the flame-graph view; `go tool trace -http=:6060` (Go 1.27) binds to localhost only unless you give a full address.
-- `go version -m -json` (Go 1.24) prints build info as JSON; `go build -asan` (Go 1.25) reports memory leaks at exit.
+A `//go:build` line at the top of a file (before the `package` clause, followed by a blank line) tells the toolchain to include or exclude that file based on a boolean expression of tags. Verified locally with two files differing only in their build tag:
+
+```go
+//go:build dev
+
+package main
+
+func banner() string { return "DEV BUILD" }
+```
+
+```go
+//go:build !dev
+
+package main
+
+func banner() string { return "production" }
+```
+
+```bash
+go run .           # production
+go run -tags dev . # DEV BUILD
+```
+
+Common uses: swapping a real implementation for a fake one in tests, excluding platform-specific files (Go also auto-applies tags from a `_linux.go` / `_windows.go` filename suffix), or gating code that needs a newer Go version than the module's floor.
+
+## go generate
+
+`//go:generate` comments mark commands to run on demand — never automatically. Verified locally:
+
+```go
+//go:generate echo "generation would run here"
+```
+
+```bash
+go generate ./...
+# generation would run here
+```
+
+`go build` and `go test` never invoke `go generate` for you; it must be a deliberate step in your workflow or CI, typically for `stringer`-generated `String()` methods, protobuf code, or mock generation.
+
+## -ldflags -X and -trimpath
+
+`-ldflags "-X pkg.var=value"` sets the value of a package-level `string` variable at link time — the standard way to bake a version string or commit hash into a binary without recompiling source:
+
+```go
+var version = "dev"
+
+func main() { fmt.Println("version:", version) }
+```
+
+Verified locally:
+
+```bash
+go build -o app .                                    # version: dev
+go build -ldflags "-X main.version=1.2.3" -o app .    # version: 1.2.3
+```
+
+The variable must be an uninitialized-at-runtime `string` (no `const`, no computed default) and the flag needs the fully-qualified path (`main.version`, or `example.com/mod/pkg.Var` for a non-main package).
+
+`-trimpath` removes local filesystem paths from the compiled binary (they otherwise leak into panic stack traces and debug info) — verified locally to build without error and is standard practice for any binary you distribute:
+
+```bash
+go build -trimpath -o app .
+```
+
+## Cross-compilation
+
+Setting `GOOS` and `GOARCH` cross-compiles for another platform — no separate toolchain download needed, since the Go compiler is one cross-compiler for every supported target. Verified locally, building a Linux/arm64 binary from macOS/arm64:
+
+```bash
+GOOS=linux GOARCH=arm64 go build -o app-linux-arm64 .
+file app-linux-arm64
+# app-linux-arm64: ELF 64-bit LSB executable, ARM aarch64 ..., statically linked
+```
+
+```bash
+# Cross-compile a stripped, static Linux/amd64 binary
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/server ./cmd/server
+```
+
+`-ldflags="-s -w"` strips the symbol table and DWARF debug info, reducing binary size. `CGO_ENABLED=0` guarantees a fully static binary — no dynamic libc dependency, and it is required for most cross-compilation targets since cgo needs a C cross-toolchain that plain `go build` does not have.
+
+## go env
+
+`go env` reads and writes the toolchain's persistent configuration (stored outside your module, in a per-user config file). The variables that matter most day to day:
+
+| Variable | Purpose |
+|---|---|
+| `GOPROXY` | Where `go get`/`go mod download` fetch modules from (default `https://proxy.golang.org,direct`) |
+| `GOPRIVATE` | Glob patterns of module paths to fetch directly, skipping the proxy and checksum database — for internal/private repositories |
+| `GOSUMDB` | The checksum database used to verify downloads (default `sum.golang.org`); set to `off` only when you fully trust `GOPROXY` |
+| `GOFLAGS` | Flags implicitly appended to every `go` command, e.g. `GOFLAGS=-mod=mod` |
+| `GOTOOLCHAIN` | Controls automatic toolchain switching (`auto` by default) — see the `toolchain` directive in the Modules lesson |
+
+```bash
+go env GOPROXY GOPRIVATE GOSUMDB
+# https://proxy.golang.org,direct
+#
+# sum.golang.org
+```
+
+`go env -w GOFLAGS=-mod=mod` writes a setting permanently; `go env GOPROXY` alone just reads the current value.
+
+## gopls and goimports
+
+`gopls` is the official Go language server — every major editor's Go support (VS Code, Neovim, GoLand's underlying protocol support) talks to `gopls` for autocomplete, go-to-definition, inline diagnostics, and refactoring. It runs `go vet`-style checks continuously as you type, which is why many of the bugs in this lesson are visible as a red squiggle before you ever run a command. `goimports` is `gofmt` plus automatic import management: it adds missing imports and removes unused ones, and most editors run it in place of plain `gofmt` on save.
+
+## Profile-guided optimization (PGO)
+
+Since Go 1.21, placing a CPU profile named `default.pgo` in a package's main directory makes `go build` use it automatically: the compiler inlines more aggressively along the hot paths the profile identifies, typically improving throughput a few percent with no source changes. Generate the profile from a representative production workload (`-cpuprofile`, the same mechanism as the Benchmarks lesson), commit `default.pgo` alongside the source, and `go build` picks it up with no extra flags.
 
 ## go doc — browse documentation
 
@@ -112,31 +329,84 @@ For a browser-based view run `go doc -http` (Go 1.25+) or browse `pkg.go.dev`.
 ```bash
 test -z "$(gofmt -l .)" && \
 go vet ./... && \
+govulncheck ./... && \
 go test -race -coverprofile=coverage.out -covermode=atomic ./... && \
 go build ./...
 ```
 
-This four-command pipeline catches formatting drift, static bugs, data races, and compilation errors before code is merged.
+This pipeline catches formatting drift, static bugs (including the six `go vet` analyzers above), known vulnerabilities, data races, and compilation errors before code is merged.
+
+## The quality-gate pipeline
+
+export const toolingPipeline = `flowchart TD
+  A["source code"] --> B["gofmt -l (formatting check)"]
+  B --> C["go vet (copylocks, lostcancel, printf, ...)"]
+  C --> D["staticcheck / golangci-lint (broader analysis)"]
+  D --> E["govulncheck (known CVEs actually called)"]
+  E --> F["go test -race (behavior + data races)"]
+  F --> G["go build (compiles to a binary)"]`;
+
+<Mermaid code={toolingPipeline} title="A typical Go quality gate, narrowest and fastest checks first" />
 
 ## Trade-offs
 
 | What you get | Benefit | Cost |
 |---|---|---|
-| `go vet` | Catches common mistakes before runtime | Does not cover every semantic bug — pair it with staticcheck |
+| `go vet` | Catches common mistakes before runtime, built in, zero config | Deliberately conservative — pair it with staticcheck for broader coverage |
+| `golangci-lint` | Dozens of linters behind one command and config file | Needs a config file to tune (v2's `default: standard` is a reasonable start); slower than `go vet` alone |
+| `govulncheck` | Call-graph aware — flags what you actually call, not just what's in go.sum | Only as current as the vulnerability database; new CVEs take time to appear |
 | `go build -race` | Catches race conditions in the binary | Binary runs 2-10x slower — not for production builds |
+| PGO (`default.pgo`) | A few percent throughput, no source changes | Profile can go stale as the codebase changes — needs periodic regeneration |
 | `gofmt` (via `go fmt`) | No formatting debates, consistent across the ecosystem | No configuration — you accept the canonical style |
-| `go doc` | Documentation in the terminal, no browser needed | No full-text search — you need to already know the package/function name |
 
 ## Common Misconceptions
 
 - **`go fmt` is just a style preference** — gofmt is the de facto standard — most projects enforce it in CI.
-- **`go vet` catches every bug** — `go vet` checks a subset of common mistakes — pair it with staticcheck for production codebases.
+- **`go vet` catches every bug** — `go vet` checks a subset of common mistakes it can prove with high confidence — pair it with staticcheck or golangci-lint for broader coverage.
 - **`go generate` runs automatically during a build** — `go generate` must be run explicitly; `go build` never triggers it — wire it into a Makefile or CI step yourself.
 - **GOPATH is still required** — Go modules (`go.mod`) fully replaced GOPATH as of Go 1.16.
+- **`govulncheck` reporting a vulnerable dependency means you must patch immediately** — it separately reports vulnerabilities in *required* modules versus ones your code's call graph actually reaches; only the latter is an active risk.
+- **`-ldflags -X` can set any variable, including constants** — it can only set an uninitialized `string` variable; a `const`, a non-string type, or a variable with a computed initializer are all silently unaffected.
 
 <Callout title="gofmt ends formatting debates — there is one canonical style">
 Unlike most languages, Go ships a single canonical formatter and every major editor integrates it by default. There are no tabs-vs-spaces arguments, no line-length debates, no style guide to maintain. When gofmt says the code should look a certain way, that is the end of the discussion. This is not a restriction — it is a gift: code review focuses on logic, not aesthetics.
 </Callout>
+
+<details>
+<summary>What changed in the toolchain, Go 1.25–1.27</summary>
+
+- `go mod init` writes the `go` line as the exact version of the toolchain that ran it — not one minor below. Confirmed locally: Go 1.26.5 writes `go 1.26.5`; running it under Go 1.27.0 writes `go 1.27.0`. Raise or pin the line explicitly with `go get go@1.27` when you need a specific floor.
+- `go doc example.com/pkg@v1.2.3` (Go 1.27) documents a specific module version, and `go doc -ex` lists runnable examples.
+- `go doc -http` (Go 1.25) serves the documentation in a browser; `pkgsite` is no longer needed for local use.
+- `go tool pprof -http` (Go 1.26) opens on the flame-graph view; `go tool trace -http=:6060` (Go 1.27) binds to localhost only unless you give a full address.
+- `go version -m -json` (Go 1.24) prints build info as JSON; `go build -asan` (Go 1.25) reports memory leaks at exit.
+- `go fix` (Go 1.26) was rebuilt on the `go vet` analysis framework with dozens of modernizers; Go 1.27 adds `atomictypes`, `embedlit`, `slicesbackward`, and `unsafefuncs`.
+- `go vet`'s `waitgroup` and `hostport` analyzers (Go 1.25) and `stdversion`, now run by `go test` too (Go 1.27).
+
+</details>
+
+## Reading AI-generated code
+
+Generated code compiles, so the compiler's silence proves nothing. Run the pipeline above before trusting it, and specifically check:
+
+- Does a struct containing a `sync.Mutex`, `sync.WaitGroup`, or similar ever get copied — assigned, passed by value, returned by value, or ranged over as a slice element? `go vet`'s `copylocks` catches this, but only if you actually run it.
+- Is `wg.Add(1)` called from inside the goroutine it is meant to track, rather than before the `go` statement? This is a real race that `waitgroup` catches — and a pattern generated code produces constantly because it reads naturally left-to-right.
+- Does every `context.WithCancel`/`WithTimeout`/`WithDeadline` call's returned `cancel` function get called (usually via `defer`), or is it discarded with `_`?
+- Is an `http.Response` (or its `.Body`) read or closed before the accompanying `error` is checked?
+- Does a config file claim `version: "2"` for `golangci-lint` but list v1-only options, or vice versa — a config that silently no-ops instead of failing?
+- Has `govulncheck` actually been run, or does the generated CI config only include `go vet` and assume that is sufficient?
+
+<SpotTheBug code={`func fetchAndLog(url string) {
+	resp, err := http.Get(url)
+	defer resp.Body.Close()
+	if err != nil {
+		log.Println("fetch failed:", err)
+		return
+	}
+	log.Println("status:", resp.StatusCode)
+}`}>
+`defer resp.Body.Close()` runs before the `err != nil` check, but when `http.Get` fails, `resp` is `nil` — so `resp.Body` panics with a nil pointer dereference on exactly the error path this code was trying to handle gracefully. `go vet`'s `httpresponse` analyzer catches this precisely: `using resp before checking for errors`. The fix is to check the error first and only defer the close once `resp` is known non-nil: move `if err != nil { ...; return }` above `defer resp.Body.Close()`.
+</SpotTheBug>
 
 export const quizGoTooling = [
   {
@@ -147,37 +417,63 @@ export const quizGoTooling = [
       "go run requires a go.mod file; go build does not",
       "They are identical — go build calls go run internally"
     ],
-    answer: 1
+    answer: 1,
+    explain: "go run compiles to a temporary location, executes it, and cleans up — nothing is left on disk. go build writes a named binary you can run again later."
   },
   {
-    q: "Which flags should you combine with go build when cross-compiling a static Linux binary?",
+    q: "```go\ntype Safe struct {\n    mu    sync.Mutex\n    count int\n}\nfunc process(s Safe) { // takes Safe by value\n    s.mu.Lock()\n    defer s.mu.Unlock()\n    s.count++\n}\n```\nWhich go vet analyzer flags this, and why?",
     options: [
-      "GOOS=linux GOARCH=amd64 only",
-      "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags=\"-s -w\"",
-      "go build -static -target linux/amd64",
-      "GOFLAGS=-static go build ./..."
+      "printf — because count is printed incorrectly elsewhere",
+      "copylocks — passing Safe by value copies the mutex, so process locks an independent copy that protects nothing",
+      "unusedresult — s.count++ discards a result",
+      "None — this only becomes a bug if process is called concurrently"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Every call to process(s) copies the whole struct, including the mutex's internal state. copylocks flags exactly this: 'passes lock by value'. It is a bug the moment the function signature takes Safe by value, regardless of whether it is called concurrently — the copy itself is already broken."
+  },
+  {
+    q: "```go\ngo func() {\n    wg.Add(1)\n    defer wg.Done()\n    doWork()\n}()\nwg.Wait()\n```\nWhat real go vet message does the waitgroup analyzer report here, and what is the actual race?",
+    options: [
+      "'WaitGroup.Add called from inside new goroutine' — wg.Wait() in the parent can return before Add ever runs, since the goroutine's scheduling is not guaranteed to happen before Wait",
+      "'assignment copies lock value' — WaitGroup contains a mutex internally",
+      "No message — this is correct as long as defer wg.Done() is present",
+      "'result of wg.Add call not used' — Add's return value should be checked"
+    ],
+    answer: 0,
+    explain: "Verified locally: go vet reports exactly 'WaitGroup.Add called from inside new goroutine'. The race is real: the parent goroutine can reach wg.Wait() before the new goroutine has even started running, and Wait() returns immediately if the counter is still zero — Add must happen before the go statement, not inside it."
+  },
+  {
+    q: "govulncheck reports '0 vulnerabilities in packages you import' but '8 vulnerabilities in modules you require'. What does this mean?",
+    options: [
+      "The tool is broken — these numbers should match",
+      "8 known-vulnerable functions exist somewhere in the dependency tree, but call-graph analysis shows your code's call paths never reach any of them",
+      "You must upgrade all 8 dependencies immediately regardless of usage",
+      "govulncheck found 8 vulnerabilities specifically in your own code"
+    ],
+    answer: 1,
+    explain: "govulncheck distinguishes a vulnerability existing in a required module from your code's actual call graph reaching it. This is verified, real output from a scan on this lesson's own scratch module — a required dependency (including parts of the standard library toolchain) can carry a known CVE in a function nothing in your program calls."
   },
   {
     q: "What kind of issues does go vet detect that the compiler does not?",
     options: [
       "Missing package imports",
       "Syntax errors",
-      "Mismatched Printf format verbs, lock copies, and other semantic bugs",
+      "Mismatched Printf format verbs, lock copies, and other semantic bugs it can prove with high confidence",
       "Unused variables"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go vet runs targeted analyzers (printf, copylocks, lostcancel, and more) for patterns that compile cleanly but are almost certainly wrong. It deliberately avoids the compiler's job (syntax, missing imports) and avoids low-confidence heuristics that would produce false positives."
   },
   {
-    q: "Which command shows documentation for fmt.Println in the terminal?",
+    q: "A generated CI config runs only `go vet ./...` and `go build ./...` before merging. What class of bug does this pipeline miss that adding `govulncheck ./...` and `go test -race ./...` would catch?",
     options: [
-      "go help fmt.Println",
-      "go doc fmt.Println",
-      "go info fmt Println",
-      "godoc -func fmt.Println"
+      "Nothing — go vet and go build already cover races and known vulnerabilities",
+      "Known vulnerabilities in reachable dependency code, and data races that only manifest at runtime under concurrent access",
+      "Only formatting issues, which gofmt would catch anyway",
+      "Compile errors introduced by a bad merge"
     ],
-    answer: 1
+    answer: 1,
+    explain: "go vet is static and does not know about the vulnerability database or observe runtime concurrent access; go build only proves the code compiles. govulncheck and -race catch two entirely different, and entirely real, classes of bug that a vet-and-build-only pipeline lets through."
   }
 ];
 

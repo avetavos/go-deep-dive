@@ -1,6 +1,6 @@
 ---
 title: 'Basics & Syntax'
-description: "Go's design philosophy, what this module covers, and your first runnable program."
+description: "Go's design philosophy, what a Go program becomes, what this module covers, and your first runnable program."
 sidebar:
   order: 1
 ---
@@ -9,6 +9,7 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Go's design philosophy
 
@@ -32,14 +33,20 @@ func greet(name string) string {
 }
 ```
 
+## What a Go program becomes
+
+`go build` compiles your program straight to a **native machine-code binary** for your `GOOS`/`GOARCH` — there is no bytecode and no virtual machine involved at runtime, unlike Java or the CPython interpreter. On this machine, `go build` on a one-file "hello world" program produces a self-contained executable a couple of megabytes in size (most of that is the Go runtime — the scheduler and garbage collector — linked directly into the binary), and running it needs nothing but the operating system: no Go installation, no separate runtime to ship alongside it.
+
+`go run` is a convenience wrapper, not a different execution model: it compiles to a temporary binary in the background and immediately executes it, then discards the binary. It is the fastest way to try something while learning — every playground on this site behaves like `go run` — but for anything you deploy or benchmark repeatedly, `go build` once and run the resulting binary directly.
+
 ## What this module covers
 
 | Lesson | Topics |
 |--------|--------|
-| **Packages & Imports** | `package`, `import`, exported vs unexported identifiers |
-| **Variables & Types** | `var`, `:=`, zero values, `const`, `iota`, type conversions |
-| **Control Flow** | `if` with init, `for` (three forms), `switch` |
-| **Functions** | Multiple returns, `defer`, closures, first-class functions |
+| **Variables & Types** | `var`, `:=`, zero values, `const`, `iota`, overflow, strings as bytes |
+| **Control Flow** | `if` with init, `for` (three forms), labeled break/continue, `switch` |
+| **Functions** | Multiple returns, `defer`, closures, first-class functions, pass-by-value |
+| **Packages & Imports** | `package`, `import`, initialization order, `internal/`, `go.mod` |
 
 By the end of this module you will be able to read and write complete idiomatic Go programs from scratch.
 
@@ -93,16 +100,38 @@ func main() {
 | Only 25 keywords | Fast to learn, easy to read other people's code | Some features (e.g. early generics support) need workarounds |
 | Fast compile | Short feedback loop, fast iteration | No fully-featured REPL |
 | Garbage collection | No manual memory management | Unpredictable GC pauses in latency-critical systems |
+| Native binary, no VM | No runtime to install, fast startup, easy to deploy (one file) | Larger binary than an interpreted script; the Go runtime is always linked in |
 
 ## Common Misconceptions
 
 - **"Go is just a modern C."** Go has garbage collection, goroutines, interfaces, and a module system — all fundamentally different from C.
 - **"Go has no OOP."** Go has structs, methods, and interfaces that support composition, but it has no class hierarchy like Java.
 - **"Go is only for backend servers."** Go is also used for CLI tools, DevOps tooling, WebAssembly, embedded systems, and data pipelines.
+- **"`go run` is how Go programs are meant to be executed in production."** `go run` is a development convenience that compiles to a throwaway binary every time; deployed Go programs are built once with `go build` and shipped as that binary.
 
 <Callout title="Explicit is better than implicit">
 Go never promotes or coerces types silently. Adding an `int` and a `float64` is a compile error until you write the conversion yourself — `float64(a) + b`. This feels strict at first but eliminates an entire class of precision bugs that are common in languages with implicit numeric widening.
 </Callout>
+
+## Reading AI-generated code
+
+Across every lesson in this module, the same handful of checks catch most generated-code bugs before they ship:
+
+- Does a `:=` inside an `if`/`for` reuse a name (often `err`) that already exists in the enclosing scope, or does it silently declare a new, shadowed variable?
+- Does a `break` sit inside a `switch` (or `select`) that is itself inside a `for`? It only exits the inner construct, never the loop.
+- Does a `defer` sit inside a loop, or does `defer f.Close()` throw away an error that mattered?
+- Is a function value, or a struct field that holds one, called without a `nil` check first?
+
+<SpotTheBug code={`type Config struct {
+	OnReady func()
+}
+
+func main() {
+	c := Config{}
+	c.OnReady()
+}`}>
+`OnReady` is a function-valued field that was never assigned, so it holds its zero value, `nil`. Calling a `nil` function value panics: `runtime error: invalid memory address or nil pointer dereference`. This is the same class of bug as a nil pointer dereference — the fix is to check `if c.OnReady != nil { c.OnReady() }` before calling it, or to give `Config` a constructor that always sets a default no-op function.
+</SpotTheBug>
 
 export const quizIndex = [
   {
@@ -113,7 +142,8 @@ export const quizIndex = [
       "Every file must have a package-level comment",
       "All exported functions must be documented"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Go treats an unused import or unused local variable as a hard compile error, not a warning — there is no way to build with either lingering."
   },
   {
     q: "What is the entry point of every executable Go program?",
@@ -123,7 +153,8 @@ export const quizIndex = [
       "func main() in package main",
       "func Run() in package main"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Execution begins at func main in package main — init functions may run earlier, but they exist to prepare state, not to be the entry point."
   },
   {
     q: "What does Go's single-style enforcement mean in practice?",
@@ -133,7 +164,41 @@ export const quizIndex = [
       "gofmt rewrites your logic to be more idiomatic",
       "gofmt only applies to files in the standard library"
     ],
-    answer: 1
+    answer: 1,
+    explain: "gofmt only reformats whitespace and layout — it never changes what the code does — but by being the one accepted style, it removes formatting debates entirely."
+  },
+  {
+    q: "What does `go build` produce for a simple Go program?",
+    options: [
+      "Bytecode that runs on a Go virtual machine",
+      "A native machine-code binary for the current GOOS/GOARCH, with no VM at runtime",
+      "A script that still requires the go command to execute",
+      "Source code with types stripped, similar to a transpiler"
+    ],
+    answer: 1,
+    explain: "Go compiles directly to native machine code. The resulting binary needs no separate runtime installed to execute — unlike a JVM bytecode file or an interpreted script."
+  },
+  {
+    q: "```go\nvar a int = 3\nvar b float64 = 1.5\nfmt.Println(a + b)\n```\nDoes this compile?",
+    options: [
+      "Yes, printing 4.5",
+      "Yes, printing 4 (b truncated to an int)",
+      "No — mismatched types int and float64",
+      "Yes, but only because fmt.Println accepts any type"
+    ],
+    answer: 2,
+    explain: "Go performs no implicit numeric conversion, even in a call to a variadic function like fmt.Println. a and b must be brought to the same type explicitly, e.g. float64(a) + b, before they can be added."
+  },
+  {
+    q: "```go\ntype Config struct {\n    OnReady func()\n}\n\nfunc main() {\n    c := Config{}\n    c.OnReady()\n}\n```\nWhat happens when this runs?",
+    options: [
+      "It prints nothing and exits cleanly",
+      "It panics: nil pointer dereference",
+      "It is a compile error: OnReady is not initialized",
+      "OnReady silently becomes a no-op function"
+    ],
+    answer: 1,
+    explain: "OnReady's zero value is nil, since it was never assigned. Calling a nil function value panics at runtime — Go does not supply an implicit no-op default."
   }
 ];
 

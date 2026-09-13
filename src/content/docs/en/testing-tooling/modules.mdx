@@ -1,6 +1,6 @@
 ---
 title: Go Modules
-description: 'go mod init, go.mod (go, toolchain, ignore), go.sum, adding dependencies with go get, go mod tidy and its Go 1.27 layout rules, and semantic import versioning.'
+description: 'go mod init, go.mod (go, toolchain, ignore), minimal version selection, go mod why/graph, replace/exclude/retract, go work, the tool directive, and semantic import versioning.'
 sidebar:
   order: 4
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is a Go module?
 
@@ -102,6 +104,168 @@ go mod tidy
 
 It adds any missing `require` lines, removes `require` lines for packages no longer imported, updates `go.sum` to match, and (for `go 1.27+` modules) normalises `go.mod` into the direct/indirect two-block layout. Run it before every commit.
 
+## Minimal version selection
+
+Go resolves which version of each dependency to actually use with an algorithm called **minimal version selection (MVS)**: for every module in the build, Go takes the *highest* version requested by anything in the dependency graph, never the latest version that exists. If your module requires `github.com/foo/bar v1.2.0` and a dependency of yours requires `github.com/foo/bar v1.4.0`, the build uses `v1.4.0` — the maximum of what is actually asked for — not `v1.9.0` just because it was released more recently.
+
+```go
+// go.mod
+require github.com/google/uuid v1.6.0
+```
+
+```text
+$ go mod graph
+example.com/modw github.com/google/uuid@v1.6.0
+```
+
+`go mod graph` prints every requirement edge in the build: `<module> <requires> <at-version>`. This is deterministic and reproducible on every machine given the same `go.mod`/`go.sum` — the opposite of a resolver that can pick a different "latest" on a different day.
+
+## go mod why
+
+When you cannot tell why a dependency is in your module at all, `go mod why` prints the shortest import path that pulls it in. Verified locally:
+
+```bash
+go mod why github.com/google/uuid
+```
+
+```text
+# github.com/google/uuid
+example.com/modw
+github.com/google/uuid
+```
+
+This reads as a chain: your module imports `github.com/google/uuid` directly. A real project's chain is usually longer — `your-module → some-framework → some-utility-lib` — and `go mod why` is the fastest way to find which direct dependency is dragging in something unexpected, rather than reading `go.sum` and guessing.
+
+## replace, exclude, retract, and go work
+
+**`replace`** substitutes a different source for a module path — a local directory during development, or a fork's fixed version:
+
+```
+replace github.com/foo/bar => ../local-bar
+replace github.com/foo/bar => github.com/yourfork/bar v1.2.3-patched
+```
+
+`replace` in your **main module's** `go.mod` is completely normal — but it only affects builds of your own module. Anyone who imports your module never sees your `replace` line; their build resolves `github.com/foo/bar` normally. This is the single most common misunderstanding about the directive.
+
+**`exclude`** removes a specific version from consideration entirely, forcing MVS to pick a different one — used for a version known to be broken or yanked. **`retract`** is the inverse, published from *inside* the affected module's own `go.mod`: it tells everyone else's tooling "don't select this version of me", surfaced as a warning by `go list -m -u` and `go get`. Verified against `go help mod edit`, `go mod edit` can write all three directly:
+
+```bash
+go mod edit -replace github.com/foo/bar=../local-bar
+go mod edit -exclude github.com/bad/pkg@v1.0.0
+go mod edit -retract v1.0.1
+```
+
+```text
+replace github.com/foo/bar => ../local-bar
+exclude github.com/bad/pkg v1.0.0
+retract v1.0.1
+```
+
+**`go work`** solves the same local-development problem as `replace` without editing `go.mod` at all — useful for multiple modules you are developing together. Verified locally with two real modules, `app` (which requires `example.com/lib v0.0.0`, a version that does not exist) and a sibling `lib` directory:
+
+```bash
+go work init ./app ./lib
+```
+
+```text
+go 1.26.5
+
+use (
+	./app
+	./lib
+)
+```
+
+```bash
+cd app && go run .
+# hello from local lib
+```
+
+`app/go.mod` was never touched — no `replace` line was added — and the build still resolved `example.com/lib` to the local directory, because `go.work` overrides module resolution for every module listed in its `use` block. Delete or ignore `go.work` (it is meant to stay out of version control) and the build reverts to what `go.mod` alone says.
+
+## go install pkg@version vs go get
+
+Both fetch code, but they answer different questions. **`go get`** manages *your module's* dependency graph — it edits `go.mod`/`go.sum` and is for packages your code imports. **`go install pkg@version`** builds and installs a standalone binary into `$GOBIN` (default `$HOME/go/bin`) and, per `go help install`, does so "ignoring the go.mod file in the current directory or any parent directory" — it never touches your project's `go.mod` at all.
+
+```bash
+go install golang.org/x/tools/cmd/stringer@latest   # installs a CLI binary — go.mod untouched
+go get golang.org/x/tools/cmd/stringer                # WRONG for a tool — adds a require line
+```
+
+Use `go install` for developer tools (linters, code generators, `stringer`, `mockgen`) that you run from the command line. Reach for `go get` only for packages your source code actually `import`s.
+
+## The tool directive (Go 1.24)
+
+Before Go 1.24, projects pinned a tool's version by creating a `tools.go` file with build-tag-guarded blank imports (`//go:build tools` followed by `import _ "golang.org/x/tools/cmd/stringer"`) purely so `go mod tidy` would track its version — a well-known but awkward workaround. The `tool` directive replaces it: `go get -tool` adds a real, version-pinned tool entry to `go.mod` itself.
+
+```bash
+go get -tool golang.org/x/tools/cmd/stringer@latest
+```
+
+Verified locally — the resulting `go.mod`:
+
+```
+module example.com/tooldir
+
+go 1.26.0
+
+tool golang.org/x/tools/cmd/stringer
+
+require (
+	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/tools v0.50.0 // indirect
+)
+```
+
+Run it straight from the module, no `$GOBIN` lookup needed:
+
+```bash
+go tool stringer -h
+```
+
+Every teammate who runs `go mod tidy`/`go build` gets the exact same tool version — the whole point `tools.go` was working around, without the blank-import boilerplate.
+
+## The proxy and privacy environment variables
+
+By default `go get`/`go mod download` fetch from the public Go module proxy and verify against the public checksum database:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GOPROXY` | `https://proxy.golang.org,direct` | Where modules are fetched from; `direct` falls back to the module's VCS |
+| `GOSUMDB` | `sum.golang.org` | The checksum database used to verify downloads against tampering |
+| `GOPRIVATE` | (empty) | Glob patterns of module paths to fetch directly and skip both the proxy and the sumdb — for internal/private repositories |
+| `GONOSUMCHECK` / `GOFLAGS=-insecure` | — | Legacy/edge-case escape hatches; `GOPRIVATE` (or the narrower `GONOSUMDB`/`GONOSUMCHECK`) is the supported way to opt a path out |
+
+```bash
+export GOPRIVATE=github.com/yourcompany/*
+```
+
+Setting `GOPRIVATE` for your company's org is the standard fix for "go get hangs or fails on our internal repo" — without it, the public proxy and sumdb are consulted for a module path they can never actually see.
+
+## The toolchain and godebug directives
+
+The **`toolchain`** directive (`toolchain go1.27.1` in `go.mod`) pins the exact Go toolchain version. If the `go` binary that invoked the build is older than the pinned toolchain, it downloads and runs the pinned one automatically — controlled by `GOTOOLCHAIN` (default `auto`; set to `local` to disable automatic downloads and always use the installed `go` binary).
+
+The **`godebug`** directive sets a `GODEBUG` setting at the module level instead of per-process — it ships with the module so every build gets the same runtime behavior for a setting that changed defaults across Go versions:
+
+```
+godebug http2client=0
+```
+
+Verified via `go help mod edit`: `go mod edit -godebug=key=value` writes this line directly. This is how the toolchain lets a module opt back into an old default (or opt into a new one early) without every developer setting an environment variable by hand.
+
+## The module cache
+
+Every downloaded module version is extracted once into a shared, read-only cache at `GOMODCACHE` (default `$GOPATH/pkg/mod`) and reused across every module on the machine that needs that exact version — verified locally, this directory holds 1.8 GB after routine work on this course.
+
+```bash
+go env GOMODCACHE
+go clean -modcache   # deletes the entire cache — next build re-downloads everything it needs
+```
+
+Treat it purely as a cache: safe to delete when disk space is tight, and Go re-populates it from `GOPROXY` (or `direct`) the next time something needs a module version that is missing.
+
 ## Semantic import versioning
 
 Go enforces a rule called **semantic import versioning**: if a module releases a v2 or higher, the import path must include the major version suffix.
@@ -118,21 +282,38 @@ go get github.com/foo/bar/v2@v2.0.0
 
 This means two major versions of the same module can coexist in the same binary without conflict. The import path change is intentional: a v2 API is allowed to be incompatible with v1.
 
+## How a version is selected
+
+export const mvsDiagram = `flowchart TD
+  A["your go.mod requires foo v1.2.0"] --> D["minimal version selection"]
+  B["dependency X requires foo v1.4.0"] --> D
+  C["dependency Y requires foo v1.1.0"] --> D
+  D --> E["build uses foo v1.4.0 — the maximum requested, never a newer 'latest'"]
+  E --> F{"exclude foo v1.4.0?"}
+  F -->|yes| G["MVS picks the next-highest requested version instead"]
+  F -->|no| H["go.sum records and verifies v1.4.0's checksum"]`;
+
+<Mermaid code={mvsDiagram} title="Minimal version selection picks the highest version anything in the graph actually asks for" />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
 |---|---|---|
 | `go.mod` (explicit versioning) | Reproducible builds, dependencies stated explicitly | Needs updating as dependencies change — run `go mod tidy` often |
-| Semantic versioning | Backward-compatibility contract is explicit | A major version bump changes the import path — migration cost |
+| Minimal version selection | Deterministic, reproducible resolution — no surprise upgrades | You must explicitly `go get -u` to move forward; it never happens implicitly |
+| `go work` for local multi-module dev | No `replace` lines to remember to remove before publishing | Another file to keep out of version control and out of sync with teammates |
+| The `tool` directive | Tool versions tracked in go.mod, no `tools.go` boilerplate | Requires Go 1.24+ tooling awareness from contributors |
 | `go.sum` (hash verification) | Guards against supply-chain attacks, verifies integrity | Must commit `go.sum` too — easy to forget |
 | `go mod vendor` | Enables air-gapped builds, no network dependency | The `vendor/` directory is large and must be synced on every dependency update |
 
 ## Common Misconceptions
 
-- **`go get` works like `npm install`** — `go get` updates `go.mod` and downloads source; it does not install a separate binary, unlike npm.
+- **`go get` works like `npm install`** — `go get` updates `go.mod` and downloads source; it does not install a separate binary, unlike npm. Use `go install pkg@version` for that.
 - **You can ignore `go.sum`** — `go.sum` must be committed alongside `go.mod` to verify dependency integrity — without it the build may not be reproducible.
 - **The `replace` directive is never allowed in production** — `replace` in the main module's `go.mod` is fine (e.g. a fork you maintain) but it has no effect on anyone who imports your module — a dependent's `go.mod` never sees your `replace`.
 - **`GOPATH/pkg/mod` is permanent storage** — `go clean -modcache` clears it — treat it as a cache, not permanent storage.
+- **Go picks the "latest" version of every dependency automatically** — minimal version selection picks the *minimum* version that satisfies every requirement in the graph, not the newest one available; upgrades are explicit.
+- **A `tools.go` file with blank imports is still the way to pin tool versions** — since Go 1.24, `go get -tool` and the `tool` directive in `go.mod` do this natively, with no build-tag trick needed.
 
 > 💡 Real-world example
 >
@@ -141,6 +322,22 @@ This means two major versions of the same module can coexist in the same binary 
 <Callout title="A module is a versioned collection of packages">
 Think of a module as the unit of distribution and versioning, and a package as the unit of compilation. One module contains many packages. When you run `go get`, you are adding a module (and all its packages become available). When you write `import`, you are importing a specific package path within a module. The two concepts are closely related but distinct.
 </Callout>
+
+## Reading AI-generated code
+
+Module and dependency mistakes rarely show up as a compile error — they show up as "works on my machine" or a security surprise. Check for these:
+
+- Is a CLI developer tool (a linter, a code generator) installed with `go get` inside application code's setup instructions, rather than `go install pkg@version` or the `tool` directive? That silently adds it as a real dependency of your module.
+- Does a `replace` directive in a library's `go.mod` point at a local path (`../something`) or an unpublished fork? That breaks the build for every consumer the moment they try to build outside the exact checkout the author had — `replace` in a published library is a red flag, not a private convenience.
+- Is `GOFLAGS=-insecure` or `GONOSUMCHECK`/`GOSUMDB=off` set globally in a script or CI config "to make the build work", rather than scoping the exception to the specific private module path with `GOPRIVATE`?
+- Does generated setup documentation still describe a `tools.go` file with `//go:build tools` blank imports, when the project's `go.mod` already declares `go 1.24` or later and could use the `tool` directive instead?
+- Is `go.work` committed to version control in a library repository? It is meant for local, personal multi-module development — committing it can silently redirect teammates' builds to local paths that do not exist on their machines.
+
+<SpotTheBug lang="bash" code={`# setup.sh — generated project bootstrap script
+go get golang.org/x/tools/cmd/stringer@latest
+go get github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`}>
+Both of these are developer *tools*, not packages the project's own code imports — but `go get` adds each one as a real dependency in `go.mod`'s `require` block anyway, because that is what `go get` is for. Every teammate's `go mod tidy` and every CI build now downloads and tracks `stringer` and `golangci-lint` as if the application depended on them at runtime. The fix is `go install golang.org/x/tools/cmd/stringer@latest` and `go install .../golangci-lint@latest` (which install binaries into `$GOBIN` without touching `go.mod` at all), or — if the team wants the version pinned and shared through git — `go get -tool golang.org/x/tools/cmd/stringer@latest`, which uses the `tool` directive built for exactly this case.
+</SpotTheBug>
 
 export const quizModules = [
   {
@@ -151,17 +348,30 @@ export const quizModules = [
       "go mod init <module-path>",
       "go create module"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go mod init <module-path> creates a go.mod file with the given module path and the current toolchain's version on the go line."
   },
   {
-    q: "What is the purpose of go.sum?",
+    q: "```text\n$ go mod graph\nyourmodule github.com/foo/bar@v1.2.0\nyourmodule github.com/baz/qux@v2.0.0\ngithub.com/baz/qux@v2.0.0 github.com/foo/bar@v1.5.0\n```\nWhich version of github.com/foo/bar does minimal version selection put in the build?",
     options: [
-      "It lists only the direct dependencies of the module",
-      "It stores cryptographic checksums to guarantee reproducibility and detect tampering",
-      "It is an optional cache file that can be deleted safely",
-      "It replaces go.mod in Go 1.27+"
+      "v1.2.0, because it is your module's own direct requirement",
+      "v1.5.0, because it is the highest version requested by anything in the graph",
+      "Whatever the latest published release is, regardless of these requirements",
+      "The build fails because two different versions are requested"
     ],
-    answer: 1
+    answer: 1,
+    explain: "MVS takes the maximum version requested anywhere in the dependency graph for each module — here, your direct requirement (v1.2.0) is lower than what baz/qux needs (v1.5.0), so v1.5.0 is selected. It never jumps to a newer 'latest' that nothing actually asked for."
+  },
+  {
+    q: "A library you publish has this in its go.mod:\n```\nreplace github.com/foo/bar => ../local-fork-of-bar\n```\nWhat happens when someone else imports your library?",
+    options: [
+      "Their build also uses ../local-fork-of-bar",
+      "Their build fails immediately because the path does not exist for them",
+      "Their build resolves github.com/foo/bar normally — replace directives in your go.mod only affect builds of your own module, not downstream consumers",
+      "Go automatically converts the relative path into an absolute one that works everywhere"
+    ],
+    answer: 2,
+    explain: "A replace directive is local to the module that declares it — it is not part of the module graph that a downstream consumer's build resolves. This is exactly why a replace pointing at a local, unpublished path in a published library is a bug: it does nothing for consumers, so it cannot be the mechanism actually making their build work (or fail)."
   },
   {
     q: "What does go mod tidy do?",
@@ -171,7 +381,19 @@ export const quizModules = [
       "Adds missing and removes unused require entries, then updates go.sum",
       "Formats the go.mod file"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go mod tidy reconciles go.mod/go.sum with what your source code actually imports — it does not bump dependencies to newer versions on its own (go get -u does that)."
+  },
+  {
+    q: "```bash\ngo get golang.org/x/tools/cmd/stringer@latest\n```\nA setup script uses this to install the stringer code-generation tool. What is wrong, and what is the Go 1.24+ fix?",
+    options: [
+      "Nothing is wrong — this is the correct way to install a CLI tool",
+      "It adds stringer as a real dependency in go.mod's require block instead of installing a standalone binary; use go install stringer@latest, or go get -tool for a version tracked in git",
+      "@latest is invalid syntax for go get",
+      "stringer must be built from source manually; go get cannot fetch tools at all"
+    ],
+    answer: 1,
+    explain: "go get manages your module's own dependency graph. A developer tool that is not imported by your code should be fetched with go install (no go.mod change) or tracked with go get -tool / the tool directive (Go 1.24+) if the team wants its version pinned in git without the old tools.go blank-import trick."
   },
   {
     q: "A module releases v2.0.0 with breaking changes. How must the import path change?",
@@ -181,7 +403,8 @@ export const quizModules = [
       "The module must be renamed entirely",
       "You add a replace directive in go.mod"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Semantic import versioning requires the major version in the import path itself for v2+, which is what lets two incompatible major versions of the same module coexist in one build."
   }
 ];
 

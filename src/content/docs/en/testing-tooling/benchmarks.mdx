@@ -1,6 +1,6 @@
 ---
 title: Benchmarks
-description: 'func BenchmarkXxx(b *testing.B), the b.Loop() and b.N loop forms, go test -bench=. -benchmem, and reading benchmark output.'
+description: 'func BenchmarkXxx(b *testing.B), the b.Loop() and b.N loop forms, the sink idiom, benchstat, pprof profiling, and reading benchmark output.'
 sidebar:
   order: 3
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is a benchmark?
 
@@ -88,6 +90,43 @@ func BenchmarkIsPrimeList(b *testing.B) {
 
 `b.Loop` also keeps the loop's results alive, so the compiler cannot optimise the measured work away — this is the main reason to prefer it over the `b.N` form, not just the automatic timer reset.
 
+## Why b.Loop prevents dead-code elimination, and the sink idiom for b.N
+
+The compiler is allowed to delete any computation whose result is never used. A benchmark body that computes something and throws the result away is exactly that kind of dead code — and an optimizing compiler that got smart enough to prove `Fibonacci(20)` is called with a constant and never observed could, in principle, skip calling it at all inside the loop. `go doc testing.B.Loop` documents the fix built into the modern form:
+
+```text
+Within the body of a "for b.Loop() { ... }" loop, arguments to and results
+from function calls and assigned variables within the loop are kept alive,
+preventing the compiler from fully optimizing away the loop body. Currently,
+this is implemented as a compiler transformation that wraps such variables
+with a runtime.KeepAlive intrinsic call.
+```
+
+The classic `b.N` form gets none of this protection, so the idiomatic defense is the **sink idiom**: assign the result to a package-level variable so the compiler can never prove it is unobserved.
+
+```go
+var sink int
+
+// The sink idiom for the classic b.N form: assigning to a package-level
+// variable prevents the compiler from proving the result is unused.
+func BenchmarkFibSink(b *testing.B) {
+	var r int
+	for i := 0; i < b.N; i++ {
+		r = Fibonacci(20)
+	}
+	sink = r
+}
+```
+
+Verified locally — both forms measure the same function at comparable cost, confirming the sink is doing its job without adding meaningful overhead:
+
+```text
+BenchmarkFibSink-11    183465904    5.967 ns/op    0 B/op    0 allocs/op
+BenchmarkFibLoop-11    185444034    6.493 ns/op    0 B/op    0 allocs/op
+```
+
+A `b.N` benchmark that assigns its result to a local variable and never uses it again has no such protection — the compiler is free to remove the call it thinks nobody observes.
+
 ## Running benchmarks
 
 Unit tests do **not** run benchmarks by default. Use the `-bench` flag:
@@ -102,6 +141,32 @@ go test -bench=BenchmarkFib -benchmem ./...
 # Run benchmarks for at least 5 seconds per function
 go test -bench=. -benchtime=5s ./...
 ```
+
+## Sub-benchmarks for size sweeps
+
+`b.Run` works inside a benchmark exactly like it does inside a test: it groups related measurements under one parent and gives each a name in the output. The most common use is sweeping an input size to see how cost scales:
+
+```go
+func BenchmarkFibSizes(b *testing.B) {
+	for _, n := range []int{10, 20, 30} {
+		b.Run(name(n), func(b *testing.B) {
+			for b.Loop() {
+				sink = Fibonacci(n)
+			}
+		})
+	}
+}
+```
+
+Real output — note the cost climbing with `n`, exactly as expected for this iterative `Fibonacci`:
+
+```text
+BenchmarkFibSizes/n=10-11    309100298    3.922 ns/op
+BenchmarkFibSizes/n=20-11    188798964    6.398 ns/op
+BenchmarkFibSizes/n=30-11    126663669    9.526 ns/op
+```
+
+`-bench 'FibSizes/n=20'` runs only that one size — the same `Parent/sub` filtering rule as `t.Run`.
 
 ## Reading the output
 
@@ -122,13 +187,93 @@ BenchmarkFib-11           58771    20169 ns/op    0 B/op    0 allocs/op
 
 `Fibonacci` allocates nothing because it uses only stack variables — that is why both alloc columns are zero on both rows. A function that builds a `[]string` would show non-zero values.
 
+## b.ReportAllocs, ReportMetric, and SetBytes
+
+`-benchmem` on the command line turns on allocation reporting for every benchmark in the run; `b.ReportAllocs()` turns it on for one specific benchmark function regardless of the flag — useful when only a few benchmarks in a large suite care about allocations. `b.SetBytes(n)` adds a throughput column (`MB/s`) by declaring how many bytes one iteration processed. `b.ReportMetric(value, "unit/op")` adds a completely custom column for a domain-specific measurement.
+
+```go
+func BenchmarkBuildString(b *testing.B) {
+	b.ReportAllocs()
+	var out string
+	for b.Loop() {
+		var sb strings.Builder
+		for i := 0; i < 100; i++ {
+			sb.WriteString("x")
+		}
+		out = sb.String()
+	}
+	b.SetBytes(int64(len(out)))
+}
+
+func BenchmarkWithMetric(b *testing.B) {
+	var n int
+	for b.Loop() {
+		n += Fibonacci(10)
+	}
+	b.ReportMetric(float64(n)/float64(b.N), "fib-sum/op")
+}
+```
+
+Real output:
+
+```text
+BenchmarkBuildString-11    5196698    212.0 ns/op    471.78 MB/s    248 B/op    5 allocs/op
+BenchmarkWithMetric-11     337696298    3.497 ns/op    55.00 fib-sum/op    0 B/op    0 allocs/op
+```
+
+`248 B/op` with `5 allocs/op` for a 100-byte string is exactly the kind of allocation count you would not have guessed from reading the code — `strings.Builder` grows its internal buffer geometrically, so building a 100-byte string costs a handful of reallocations, not one allocation per `WriteString` call.
+
+## Comparing runs with benchstat
+
+A single benchmark run is noisy — GC pauses, CPU frequency scaling, and background processes all add variance. `benchstat` (`golang.org/x/perf/cmd/benchstat`) takes two or more `go test -bench` outputs and computes whether a difference is real or just noise, with a p-value.
+
+```bash
+go test -bench BenchmarkFibLoop -count=10 . > old.txt
+# ... change the implementation ...
+go test -bench BenchmarkFibLoop -count=10 . > new.txt
+benchstat old.txt new.txt
+```
+
+Real comparison between two genuinely different iterative Fibonacci implementations in this lesson's scratch module, `-count=10` each:
+
+```text
+           │  old.txt   │              new.txt               │
+           │   sec/op   │   sec/op     vs base                │
+FibLoop-11   6.430n ± 2%   6.619n ± 1%  +2.94% (p=0.000 n=10)
+```
+
+`p=0.000` (below the conventional 0.05 threshold) means benchstat is confident the +2.94% difference is real, not noise — `-count=10` gives it enough samples per side to say so; a single run of each could easily have shown the opposite direction by chance.
+
+## Profiling with -cpuprofile and go tool pprof
+
+When a benchmark result says something is slow but not *what*, capture a CPU profile and inspect it:
+
+```bash
+go test -bench BenchmarkFibLoop -cpuprofile=cpu.prof .
+go tool pprof -top cpu.prof
+```
+
+Real output, top functions by self time (`flat`):
+
+```text
+Duration: 1.32s, Total samples = 1150ms (86.91%)
+      flat  flat%   sum%        cum   cum%
+     940ms 81.74% 81.74%      960ms 83.48%  example.com/bm.Fibonacci (inline)
+     120ms 10.43% 92.17%      120ms 10.43%  testing.(*B).Loop (inline)
+      70ms  6.09% 98.26%     1150ms   100%  example.com/bm.BenchmarkFibLoop
+      20ms  1.74%   100%       20ms  1.74%  runtime.asyncPreempt
+```
+
+`flat` is time spent in the function itself; `cum` (cumulative) includes everything it called. `go tool pprof -http=:8080 cpu.prof` (Go 1.26+ opens directly to the flame-graph view) gives an interactive, zoomable view of the same data in a browser — far easier to navigate than the text table once a profile has more than a handful of hot functions.
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
 |---|---|---|
 | `go test -bench` | Measures performance with a built-in tool | Needs multiple runs — watch for noise from GC and CPU throttling |
-| `b.N` auto-calibration | The framework picks an iteration count that gives a stable result | Setup left inside the loop gets measured too |
+| `b.N` auto-calibration | The framework picks an iteration count that gives a stable result | Setup left inside the loop gets measured too; needs the sink idiom to resist dead-code elimination |
 | `b.ReportAllocs()` | Shows heap allocations per operation clearly | You need to understand escape analysis to interpret the result |
+| `benchstat` with `-count=10` | Turns "it feels faster" into a p-value | Takes 10x as long as a single run per side |
 | pprof profiling | Deep CPU/memory hotspot analysis | Profiling overhead — do not leave it running in production by accident |
 
 ## Common Misconceptions
@@ -137,10 +282,47 @@ BenchmarkFib-11           58771    20169 ns/op    0 B/op    0 allocs/op
 - **`b.N` is a count you choose** — Go calibrates `b.N` automatically so the benchmark runs for about a second — never set `b.N` yourself.
 - **`allocs/op = 0` always means optimal** — zero allocations is good, but if CPU work went up instead, the result may not actually be better.
 - **Benchmarks are only for micro-optimization** — benchmarks can also validate architectural decisions, e.g. channel vs mutex, slice vs map.
+- **A single go test -bench run is enough to say "X is faster than Y"** — one run cannot separate a real effect from machine noise; that is exactly what `benchstat` with `-count=10` (or more) is for.
+- **The classic `for i := 0; i < b.N; i++` form is automatically safe from dead-code elimination like `b.Loop()`** — it is not; without the sink idiom, an aggressive compiler can legally discard a call whose result is only assigned to an unused local.
+
+> 💡 Real-world example
+>
+> **Go standard library** — `encoding/json/bench_test.go` (open at `$(go env GOROOT)/src/encoding/json/bench_test.go`) benchmarks encoding and decoding across multiple representative payloads, and the `strconv` package's own benchmarks live in `strconv/quote_test.go` — both are ordinary `_test.go` files using exactly the patterns in this lesson.
 
 <Callout title="Let the framework drive iterations — never set the count yourself">
 The benchmark framework controls the iteration count (`b.N` under the hood) to achieve a statistically stable measurement. If you set `b.N` directly or use a fixed loop count, your timings will be unreliable. Also use `-benchmem` as a habit: even functions that look allocation-free sometimes surprise you, and catching unnecessary heap allocations early is far cheaper than profiling in production.
 </Callout>
+
+## Benchmark calibration and measurement
+
+export const benchmarkFlow = `flowchart TD
+  A["go test -bench=Name"] --> B["start with a small b.N / call b.Loop()"]
+  B --> C["run the benchmarked code"]
+  C --> D{"ran long enough for a stable measurement?"}
+  D -->|no| E["increase b.N, or b.Loop() keeps returning true"]
+  E --> C
+  D -->|yes| F["report ns/op, B/op, allocs/op"]`;
+
+<Mermaid code={benchmarkFlow} title="How go test calibrates a benchmark before reporting a result" />
+
+## Reading AI-generated code
+
+Generated benchmarks tend to compile and produce a number — which is exactly the problem, since a plausible-looking number is not the same as a meaningful one. Check for these:
+
+- Is expensive setup (building a slice, opening a file, formatting a string) written **inside** the `for b.Loop()` or `for i := 0; i < b.N; i++` body, instead of before it? That inflates every measurement with work the benchmark did not intend to measure.
+- In a classic `b.N` benchmark, is the result of the call ever assigned to a package-level variable (the sink idiom), returned, or otherwise observed — or does it just vanish into a local variable nothing reads afterward?
+- Does a `b.N`-form benchmark call `b.ResetTimer()` after any setup, or does it forget it, silently including setup cost in every reported number?
+- Is `-benchmem` (or `b.ReportAllocs()`) actually being used before a generated summary claims a change made something "more efficient"? A CPU-only comparison hides a regression that traded CPU time for extra allocations.
+- Does the benchmark run on a busy dev machine — VS Code, a browser, a running server — and the answer treat the resulting `ns/op` as a precise, comparable-across-machines number?
+
+<SpotTheBug code={`func BenchmarkParseConfig(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		data := loadTestFixture() // reads a file from disk every iteration
+		ParseConfig(data)
+	}
+}`}>
+`loadTestFixture()` reads a file from disk on every single iteration, so the benchmark measures disk I/O plus parsing, not `ParseConfig` alone — and because the classic `b.N` form was used with no `b.ResetTimer()`, there is no setup phase to move it into anyway. The fix restructures the benchmark: load the fixture data once before the loop, and pass the already-loaded bytes to `ParseConfig` inside it — `for b.Loop() { ParseConfig(data) }` with `data := loadTestFixture()` above the loop. As written, this benchmark will report a number, and it will look meaningful, but it answers "how fast is disk I/O plus parsing" rather than the question it claims to answer.
+</SpotTheBug>
 
 export const quizBenchmarks = [
   {
@@ -151,7 +333,8 @@ export const quizBenchmarks = [
       "The framework increases it until measurements are stable",
       "It equals the number of test cases in the file"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go doc testing.B documents that the framework runs the benchmark function repeatedly with increasing b.N until the total run time is long enough for a stable measurement."
   },
   {
     q: "Which flag makes go test report bytes allocated per operation?",
@@ -161,17 +344,30 @@ export const quizBenchmarks = [
       "-allocs",
       "-trace"
     ],
-    answer: 1
+    answer: 1,
+    explain: "-benchmem turns on the B/op and allocs/op columns for every benchmark in the run; b.ReportAllocs() does the same for a single benchmark function."
   },
   {
-    q: "What is the main reason to prefer for b.Loop() over the classic for i := 0; i < b.N; i++ form?",
+    q: "```go\nvar sink int\nfunc BenchmarkCompute(b *testing.B) {\n    for i := 0; i < b.N; i++ {\n        r := Compute(42)\n        _ = r\n    }\n}\n```\nWhy is this benchmark's result untrustworthy compared to assigning to `sink`?",
     options: [
-      "It runs the benchmark on more CPU cores",
-      "It keeps the loop's inputs and results alive, so the compiler cannot optimise the measured work away",
-      "It is the only form compatible with -benchmem",
-      "It removes the need for a _test.go file"
+      "It is not untrustworthy — `_ = r` is exactly as safe as the sink idiom",
+      "An optimizing compiler can legally prove r's value is never observed and eliminate the call to Compute, since only the sink idiom (or b.Loop's built-in keep-alive) blocks that",
+      "The benchmark will fail to compile because r is unused",
+      "b.N-form benchmarks can never have this problem, only b.Loop can"
     ],
-    answer: 1
+    answer: 1,
+    explain: "`_ = r` discards the value — nothing outside the loop ever reads it, so a sufficiently aggressive compiler is free to determine the call has no observable effect and skip it. b.Loop() specifically documents keeping loop-body values alive to prevent exactly this; the classic form needs the sink idiom for the same protection."
+  },
+  {
+    q: "Two go test -bench runs before and after a code change show old=84.00ns and new=208.50ns with benchstat reporting p=0.010, n=10. What does the p-value tell you?",
+    options: [
+      "The new code is exactly 2.48x slower on every machine",
+      "benchstat is confident this difference reflects a real change, not just run-to-run noise, given 10 samples per side",
+      "The benchmark is broken and should be re-written",
+      "p=0.010 means there is a 1% chance the new code is actually faster"
+    ],
+    answer: 1,
+    explain: "A low p-value (conventionally below 0.05) means the observed difference across the -count=10 samples is unlikely to be explained by noise alone — it does not predict an exact multiplier on other hardware, only that a real difference was detected on this run."
   },
   {
     q: "What is the preferred benchmark loop form in Go 1.24+?",
@@ -181,7 +377,19 @@ export const quizBenchmarks = [
       "for b.Next()",
       "for range b.N"
     ],
-    answer: 1
+    answer: 1,
+    explain: "b.Loop() resets the timer automatically, keeps the loop body's values alive against dead-code elimination, and since Go 1.26 no longer blocks inlining — there is no remaining reason to prefer the classic form in new code."
+  },
+  {
+    q: "```go\nfunc BenchmarkSort(b *testing.B) {\n    for b.Loop() {\n        data := makeRandomSlice(10000) // fresh 10,000-element slice\n        sort.Ints(data)\n    }\n}\n```\nWhat does this benchmark actually measure?",
+    options: [
+      "Only sort.Ints on a 10,000-element slice, exactly as intended",
+      "makeRandomSlice's allocation and random-fill cost plus sort.Ints combined, because the setup is inside the measured loop",
+      "Nothing — this fails to compile",
+      "Only makeRandomSlice, because sort.Ints is inlined away"
+    ],
+    answer: 1,
+    explain: "Anything inside for b.Loop() is measured, including setup. makeRandomSlice runs on every iteration here, so the reported ns/op is the cost of generating a random slice plus sorting it, not sort.Ints alone — the same bug as doing file I/O inside the loop, just with a different setup cost."
   }
 ];
 

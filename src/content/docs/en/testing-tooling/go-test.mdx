@@ -1,6 +1,6 @@
 ---
 title: Writing Tests with go test
-description: '_test.go files, func TestXxx(t *testing.T), t.Errorf/t.Fatalf, table-driven tests with t.Run, and running go test ./...'
+description: '_test.go files, func TestXxx(t *testing.T), t.Parallel, table-driven tests with t.Run, fuzzing, Example functions, and running go test ./...'
 sidebar:
   order: 2
 ---
@@ -8,6 +8,19 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Set up a module to run these examples locally
+
+Every example in this lesson is real, runnable Go — but `go test` needs a module on disk, which the in-browser playground cannot provide. Set one up once:
+
+```bash
+mkdir myapp && cd myapp
+go mod init example.com/myapp
+```
+
+Save any `_test.go` file from this lesson next to a matching `.go` source file in that directory, then run `go test ./...`. Every command and every line of output shown below was produced this way, on Go 1.26.5.
 
 ## Test files and naming conventions
 
@@ -41,6 +54,15 @@ go test -v ./...       # verbose: print each test name and PASS/FAIL
 go test -run TestAdd   # run only tests whose name matches the regex
 ```
 
+## Same package or `_test` package?
+
+A test file can declare either package:
+
+- **`package math`** (same package as the code under test) — a "white-box" test. It can call unexported functions and read unexported fields, which is what most tests need.
+- **`package math_test`** (the package name plus `_test`) — a "black-box" test. It can only see what an outside importer sees, because it must `import "example.com/myapp/math"` like any other consumer. Go's `go build`/`go test` machinery treats this as a special case: both packages are allowed to live in the same directory and both compile into the same test binary.
+
+Use `_test` when you want the test to prove the *public* API works as documented — this is why the standard library's own examples (`fmt_test`, `strings_test`) are overwhelmingly black-box. Use the same package when you need to exercise internal helpers directly, or when a black-box test would need an import cycle to reach the type under test.
+
 ## t.Errorf vs t.Fatalf
 
 Both record a failure, but they differ in whether the test continues:
@@ -61,6 +83,8 @@ func TestDivide(t *testing.T) {
     _ = result
 }
 ```
+
+`t.Fatalf` (and `t.Fatal`, `t.FailNow`, `t.SkipNow`) work by calling `runtime.Goexit` on the goroutine that is running the test. That only unwinds *that* goroutine — see "Reading AI-generated code" below for what happens when a helper goroutine calls it instead.
 
 ## Table-driven tests with t.Run
 
@@ -107,6 +131,351 @@ go test -v -run TestFibonacci ./...
 #     --- PASS: TestFibonacci/fib(5) (0.00s)
 #     --- PASS: TestFibonacci/fib(10) (0.00s)
 ```
+
+This file has no `func main` — it cannot run through this course's embedded Run button, which expects a `main` package it can execute directly. Paste it into `https://go.dev/play/` instead: the real Go Playground detects a `Test` function and runs `go test` for you, printing exactly the `-v` output above.
+
+## t.Parallel(): the parent pauses, subtests resume after the loop
+
+Calling `t.Parallel()` inside a subtest does not start it running concurrently right away. It marks the subtest as parallel-eligible and **pauses** it; the parent `t.Run` loop keeps launching the next subtest without waiting. Only after the parent function returns from the loop do all the paused subtests **resume** and actually run concurrently with each other.
+
+```go
+func TestParallelGroup(t *testing.T) {
+	tests := []string{"a", "b", "c"}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			t.Logf("running %s", name)
+		})
+	}
+	t.Log("parent reached end of loop")
+}
+```
+
+Real output from `go test -v -run TestParallelGroup .`:
+
+```text
+=== RUN   TestParallelGroup
+=== RUN   TestParallelGroup/a
+=== PAUSE TestParallelGroup/a
+=== RUN   TestParallelGroup/b
+=== PAUSE TestParallelGroup/b
+=== RUN   TestParallelGroup/c
+=== PAUSE TestParallelGroup/c
+=== NAME  TestParallelGroup
+    parallel_test.go:15: parent reached end of loop
+=== CONT  TestParallelGroup/a
+    parallel_test.go:12: running a
+=== CONT  TestParallelGroup/b
+    parallel_test.go:12: running b
+=== CONT  TestParallelGroup/c
+    parallel_test.go:12: running c
+--- PASS: TestParallelGroup (0.00s)
+    --- PASS: TestParallelGroup/a (0.00s)
+    --- PASS: TestParallelGroup/b (0.00s)
+    --- PASS: TestParallelGroup/c (0.00s)
+PASS
+```
+
+Notice the order: every subtest is `RUN` then immediately `PAUSE`d, *then* `"parent reached end of loop"` prints, and only after that do the three `CONT` lines appear — in this case back-to-back, but they genuinely run concurrently, so their internal log lines can interleave on a busier test. This is why cleanup that the parent does *after* the loop (closing a shared file, stopping a server) can race with parallel subtests that are still pending: they have not run yet, they are only queued.
+
+## Test helpers: t.Helper, t.Cleanup, t.TempDir, t.Setenv, t.Context, t.Chdir
+
+`t.Helper()` marks the calling function as a test helper, so a failure reported from inside it is attributed to the **caller's** line, not the helper's own line:
+
+```go
+func assertPositive(t *testing.T, n int) {
+	t.Helper()
+	if n <= 0 {
+		t.Fatalf("got %d, want positive", n)
+	}
+}
+
+func TestHelperFailure(t *testing.T) {
+	assertPositive(t, -1) // line 16
+}
+```
+
+Real failure output — note the line number:
+
+```text
+--- FAIL: TestHelperFailure (0.00s)
+    helper_test.go:16: got -1, want positive
+```
+
+Line 16 is the call site inside `TestHelperFailure`, not the `t.Fatalf` line inside `assertPositive` — that is `t.Helper()` doing its job. Without it, every failure from a shared assertion helper would point at the helper file, and you would have to guess which call site actually failed.
+
+The rest of this family manage fixtures so you never write manual teardown code:
+
+- **`t.Cleanup(f)`** registers `f` to run after the test (and its subtests) finish, in **last-added, first-called** order — the reverse of `defer` within a single function, but the same idea across an entire test.
+- **`t.TempDir()`** returns a fresh temporary directory, automatically removed when the test completes. Each call returns a unique directory.
+- **`t.Setenv(key, value)`** sets an environment variable and restores the old value via `t.Cleanup` automatically.
+- **`t.Context()`** (Go 1.24) returns a `context.Context` that is canceled just before `Cleanup` functions run — hand it to any code under test that wants a context tied to the test's lifetime.
+- **`t.Chdir(dir)`** (Go 1.24) changes the process's working directory and restores it via `Cleanup`.
+
+`t.Setenv` and `t.Chdir` both mutate **process-wide** state (environment variables and the working directory are not per-goroutine), so `go doc` is explicit that neither can be used in a parallel test or a test with a parallel ancestor — the toolchain rejects it at runtime with `t.Setenv called after t.Parallel`.
+
+Real run of all five together:
+
+```text
+=== RUN   TestCleanupOrder
+    helper_test.go:22: test body
+    helper_test.go:21: cleanup 2
+    helper_test.go:20: cleanup 1
+--- PASS: TestCleanupOrder (0.00s)
+=== RUN   TestTempDirAndSetenv
+    helper_test.go:31: tempdir=/var/folders/.../TestTempDirAndSetenv1802591350/001
+--- PASS: TestTempDirAndSetenv (0.00s)
+=== RUN   TestContextAndChdir
+--- PASS: TestContextAndChdir (0.00s)
+```
+
+`TestCleanupOrder` registers "cleanup 1" then "cleanup 2"; they print in the reverse order, confirming the last-added-first-called rule.
+
+## TestMain: setup and teardown for a whole package
+
+A file can define `func TestMain(m *testing.M)` once per package to wrap the entire test run — starting a shared resource before any test runs and releasing it after:
+
+```go
+func TestMain(m *testing.M) {
+	fmt.Println("setup: acquiring shared resource")
+	code := m.Run()
+	fmt.Println("teardown: releasing shared resource")
+	os.Exit(code)
+}
+```
+
+Real output:
+
+```text
+setup: acquiring shared resource
+=== RUN   TestA
+    main_test.go:16: A
+--- PASS: TestA (0.00s)
+=== RUN   TestB
+    main_test.go:17: B
+--- PASS: TestB (0.00s)
+PASS
+teardown: releasing shared resource
+```
+
+`m.Run()` runs every test and returns the process exit code; you must call `os.Exit(code)` yourself — if `TestMain` returns without calling it, the test binary exits `0` regardless of failures. Reach for `TestMain` for expensive, package-wide setup (spinning up a test database container); prefer `t.Cleanup` for anything scoped to a single test.
+
+## Flags that matter
+
+| Flag | Effect |
+|------|--------|
+| `-count=1` | Disables the test result cache — forces a real re-run. `go test` caches a pass by default when nothing relevant changed. |
+| `-shuffle=on` | Randomizes the order tests and top-level benchmarks run in (per `go help testflag`), to surface hidden ordering dependencies between tests. |
+| `-failfast` | Stops running new tests after the first failure — useful for a fast local feedback loop. |
+| `-run 'TestGroup/sub1'` | Filters both the top-level test name and, after the slash, the subtest name — each half is its own regular expression. |
+| `-timeout d` | Panics the whole test binary if it runs longer than `d` (default 10 minutes); `-timeout 0` disables it. |
+
+Real, filtered run:
+
+```bash
+go test -v -run 'TestGroup/sub1' .
+# === RUN   TestGroup
+# === RUN   TestGroup/sub1
+#     sub_test.go:6: sub1
+# --- PASS: TestGroup (0.00s)
+#     --- PASS: TestGroup/sub1 (0.00s)
+```
+
+Only `sub1` ran — `sub2` never started, because it did not match the pattern after the slash.
+
+## Comparing values: reflect.DeepEqual, go-cmp, testify, and errors.Is
+
+`reflect.DeepEqual` is the standard-library way to compare composite values, but it has sharp edges:
+
+```go
+var nilSlice []int
+emptySlice := []int{}
+reflect.DeepEqual(nilSlice, emptySlice) // false — a nil slice and an empty slice are NOT DeepEqual
+```
+
+Verified locally: this evaluates to `false`. A test that builds `want := []int{}` but the function under test returns `nil` on the empty case will fail here even though both are "empty" for every practical purpose.
+
+`github.com/google/go-cmp/cmp` (`cmp.Diff`, `cmp.Equal`) is the third-party tool most Go codebases reach for instead: it produces a readable diff on failure, and — unlike `DeepEqual` — it **panics** on unexported fields unless you opt in with `cmpopts.IgnoreUnexported` or similar. Verified locally against `go-cmp v0.7.0`:
+
+```go
+type Point struct {
+    X, Y  int
+    label string // unexported
+}
+cmp.Diff(Point{1, 2, "a"}, Point{1, 2, "b"})
+```
+
+```text
+panic: cannot handle unexported field at {cmpdemo.Point}.label:
+	"example.com/cmpdemo".Point
+consider using cmpopts.EquateComparable to compare comparable Go types
+```
+
+That panic is a feature, not a bug: silently ignoring an unexported field (as `DeepEqual` effectively does not — it *does* compare unexported fields, which can make two logically-equal values compare unequal because of an internal cache field) is exactly the kind of false-negative test that go-cmp is designed to force you to make an explicit decision about. `github.com/stretchr/testify` (`assert.Equal`, `require.Equal`) takes a third approach — it uses `ObjectsAreEqual` (roughly `reflect.DeepEqual` plus a byte-slice fast path) and is popular mainly for its assertion helpers and failure-message formatting, not for a fundamentally different comparison algorithm.
+
+For **errors**, never compare with `==` or `DeepEqual` — use `errors.Is`, which walks the `Unwrap` chain:
+
+```go
+if !errors.Is(err, os.ErrNotExist) {
+    t.Fatalf("got %v, want a not-exist error", err)
+}
+```
+
+This passes even if `err` is a wrapped error (`fmt.Errorf("open config: %w", os.ErrNotExist)`), where `err == os.ErrNotExist` would be `false`.
+
+## Fuzzing with *testing.F
+
+A fuzz test seeds the corpus with example inputs, then Go's mutation engine generates new inputs to try to break an invariant you assert:
+
+```go
+// reverse.go
+func Reverse(s string) string {
+	r := []rune(s)
+	for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
+		r[i], r[j] = r[j], r[i]
+	}
+	return string(r)
+}
+```
+
+```go
+// reverse_test.go
+func FuzzReverse(f *testing.F) {
+	f.Add("hello")
+	f.Add("")
+	f.Fuzz(func(t *testing.T, s string) {
+		rev := Reverse(s)
+		doubleRev := Reverse(rev)
+		if s != doubleRev {
+			t.Errorf("Reverse(Reverse(%q)) = %q, want %q", s, doubleRev, s)
+		}
+	})
+}
+```
+
+`go test -run FuzzReverse .` runs only the two seed corpus entries added with `f.Add`, like a normal test. `go test -fuzz FuzzReverse -fuzztime 2s .` actually fuzzes — and on this exact function, it found a real, reproducible bug within two seconds:
+
+```text
+fuzz: elapsed: 0s, gathering baseline coverage: 2/2 completed, now fuzzing with 11 workers
+fuzz: minimizing 47-byte failing input file
+--- FAIL: FuzzReverse (0.01s)
+    --- FAIL: FuzzReverse (0.00s)
+        reverse_test.go:12: Reverse(Reverse("\xb1")) = "�", want "\xb1"
+
+Failing input written to testdata/fuzz/FuzzReverse/ffedc6f1114c9b4f
+To re-run:
+go test -run=FuzzReverse/ffedc6f1114c9b4f
+```
+
+The byte `\xb1` alone is not valid UTF-8. `Reverse` converts the string with `[]rune(s)`, which replaces invalid bytes with `U+FFFD` (the replacement character) — so reversing twice loses information instead of round-tripping. This is exactly the class of bug fuzzing exists to find: a function that looks obviously correct for "normal" strings and silently breaks on malformed input an AI-written test suite would never think to hand-write. The failing case is saved under `testdata/fuzz/`; committing that file turns the discovery into a permanent regression test that also runs under plain `go test`.
+
+## Example functions with // Output:
+
+An `Example` function doubles as documentation (shown on pkg.go.dev) and a real, runnable test: `go test` captures everything the function prints to stdout and compares it, line for line, against the `// Output:` comment.
+
+```go
+func ExampleGreet() {
+	fmt.Println(Greet("Ada"))
+	// Output: Hello, Ada!
+}
+```
+
+Real run:
+
+```text
+=== RUN   ExampleGreet
+--- PASS: ExampleGreet (0.00s)
+```
+
+Delete or corrupt the `// Output:` line and `go test` stops treating the function as a test at all — it just compiles as an unused function — so a missing output comment fails silently rather than loudly. `// Unordered output:` accepts the lines in any order, useful for output produced from map iteration.
+
+## Mocking through interfaces with httptest
+
+Go does not need a mocking framework for HTTP: `net/http/httptest` gives you a real server bound to a random local port, so you test the actual client code path instead of a hand-rolled fake.
+
+```go
+func FetchUser(client *http.Client, baseURL string) (User, error) {
+	resp, err := client.Get(baseURL + "/user")
+	if err != nil {
+		return User{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return User{}, fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+	var u User
+	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		return User{}, err
+	}
+	return u, nil
+}
+```
+
+```go
+func TestFetchUser(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"name":"Ada"}`))
+	}))
+	defer srv.Close()
+
+	u, err := FetchUser(srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("FetchUser: %v", err)
+	}
+	if u.Name != "Ada" {
+		t.Errorf("Name = %q, want Ada", u.Name)
+	}
+}
+```
+
+Real run: `--- PASS: TestFetchUser (0.00s)`. For testing a handler in isolation (no real network socket at all), use `httptest.NewRecorder()` with `handler.ServeHTTP(recorder, request)` instead — faster, and the standard choice for unit-testing a single handler rather than the client that calls it.
+
+## Golden files
+
+A golden file stores an expected output on disk and compares against it, which scales better than an inline string literal once the expected output is more than a few lines (a rendered report, a JSON payload, generated code).
+
+```go
+var update = flag.Bool("update", false, "update golden files")
+
+func TestRenderReport(t *testing.T) {
+	got := RenderReport([]string{"apples", "bananas"})
+	golden := filepath.Join("testdata", "report.golden")
+
+	if *update {
+		os.WriteFile(golden, []byte(got), 0o644)
+	}
+
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != string(want) {
+		t.Errorf("RenderReport() mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+```
+
+Verified locally: run once with `go test -run TestRenderReport -update .` to write `testdata/report.golden` from the current (reviewed!) output, then commit that file. Every subsequent `go test` run compares against it with no `-update` flag, and fails loudly the moment the output drifts:
+
+```text
+=== RUN   TestRenderReport
+    render_test.go:24: open testdata/report.golden: no such file or directory
+--- FAIL: TestRenderReport (0.00s)
+```
+
+That is the real failure from the first run, before the golden file exists — exactly the signal you want: a missing or stale golden file fails the build instead of passing silently.
+
+## go tool cover -html
+
+`-coverprofile` writes machine-readable coverage data; `go tool cover -html` turns it into a browsable report with covered lines in green and uncovered lines in red:
+
+```bash
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
+```
+
+Verified locally: this produces `coverage.html` on disk (confirmed with `ls -la`), and `go tool cover -func=coverage.out` prints the same data as a per-function percentage table in the terminal, without needing a browser at all — useful in CI logs where nobody will open an HTML file.
 
 ## Testing concurrent code with testing/synctest (Go 1.25+)
 
@@ -186,14 +555,33 @@ go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
 `go test` also runs a small subset of `go vet` before every run; since Go 1.27 that subset includes `stdversion`, which fails the build when you call a standard-library API newer than the `go` line in your `go.mod` — so a module that says `go 1.25` cannot silently depend on a 1.27 function.
 
+## The go test lifecycle
+
+export const goTestLifecycle = `flowchart TD
+  A["go test ./..."] --> B["compile _test.go files into a test binary"]
+  B --> C{"TestMain defined?"}
+  C -->|yes| D["TestMain(m) calls m.Run()"]
+  C -->|no| E["default runner calls each TestXxx in file order"]
+  D --> E
+  E --> F{"t.Parallel called?"}
+  F -->|yes| G["subtest PAUSEs, next subtest starts"]
+  F -->|no| H["subtest runs to completion"]
+  G --> I["once the parent function returns, all paused subtests CONT and run concurrently"]
+  H --> J["go vet subset + PASS/FAIL report"]
+  I --> J`;
+
+<Mermaid code={goTestLifecycle} title="A single go test invocation, including where t.Parallel pauses and resumes work" />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
 |---|---|---|
 | Table-driven tests | Many cases in one function | A table that grows too long gets hard to read |
 | `t.Run()` subtests | Isolates failures, plays well with `-run` and parallelism | Nested output is harder to scan |
-| `t.Parallel()` | Runs tests concurrently, faster suite | Easy to race on shared state if you are not careful |
+| `t.Parallel()` | Runs tests concurrently, faster suite | Easy to race on shared state; process-wide helpers like `t.Setenv`/`t.Chdir` become unavailable |
 | `-race` flag | Catches race conditions automatically | 2-10x slower — use it in CI, not every local run |
+| Fuzzing (`*testing.F`) | Finds edge cases no one thought to write by hand | Needs CPU time to be effective; a clean fuzz run for 2s proves far less than one for hours |
+| Golden files | Scales to large expected outputs, diffable in code review | Needs an `-update` flag and discipline to review the diff before committing it |
 
 ## Common Misconceptions
 
@@ -201,14 +589,42 @@ go test -race -coverprofile=coverage.out -covermode=atomic ./...
 - **`go test -cover` at 100% means the code is correct** — coverage only measures whether a line ran, not whether the behavior is correct — a test with no assertions can still reach 100%.
 - **Test files must live in a separate package** — Go supports both same-package tests (white-box) and a `_test` package suffix (black-box, e.g. `cache_test`) — pick whichever fits the case.
 - **`t.Helper()` is optional** — `t.Helper()` makes a failure report point at the caller instead of the helper function — call it in every helper.
+- **`t.Parallel()` makes a subtest start running immediately** — it pauses the subtest; all paused subtests only resume together once the parent's `t.Run` loop returns.
+- **A fuzz test that ran clean for a few seconds proved the function correct** — it only proved no failing input was found in that time; `Reverse` above looked correct until fuzzing ran for two seconds.
 
 > 💡 Real-world example
 >
-> **Go standard library** — `strconv/number_test.go` stores its test cases in a `parseInt64Tests` table and iterates it in `TestParseInt`; adding a new edge case is one row. Open it at `$(go env GOROOT)/src/strconv/number_test.go` on any machine with Go installed.
+> **Go standard library** — `strconv/number_test.go` stores its test cases in a `parseInt64Tests` table and iterates it in `TestParseInt`; adding a new edge case is one row. Open it at `$(go env GOROOT)/src/strconv/number_test.go` on any machine with Go installed. The standard library's own `strings` package uses `Example` functions extensively (`strings/example_test.go`) — they are what you see rendered on `pkg.go.dev/strings`.
 
 <Callout title="Table-driven tests are the idiomatic Go pattern">
 You will see table-driven tests in virtually every serious Go codebase and in the Go standard library itself. They keep test logic in one place, make it trivial to add new cases, and produce readable failure messages. When you catch a bug, add a new row to the table — the test becomes a regression guard automatically.
 </Callout>
+
+## Reading AI-generated code
+
+Generated tests compile far more often than they catch bugs. Check for these:
+
+- Is `t.Parallel()` called inside a `for` loop over a slice, on a Go version before 1.22, without a `tc := tc` capture line? If so every subtest shares the last loop value.
+- Does a spawned goroutine inside a test call `t.Fatal`, `t.FailNow`, or `t.Fatalf`? Those must be called from the test's own goroutine — the docs are explicit that calling them from any other goroutine, even one the test started, is a bug.
+- Does a benchmark or test do expensive setup (building a large slice, opening a file) **inside** the loop that is supposed to measure or exercise only the operation under test?
+- Is a `*testing.F`'s `f.Fuzz` closure's `t.Fatal`/error genuinely checking round-trip or invariant logic, or just re-asserting the exact input — a fuzz test that can never fail is not testing anything?
+- Does the test compare two structs with `==` or `reflect.DeepEqual` when one contains a `time.Time` or another struct where the comparison should logically ignore an internal field?
+- Is there a `_test.go` file whose package name does not match either the directory's package or `<package>_test` — a common copy-paste mistake that fails to compile?
+
+<SpotTheBug code={`func TestGroupPreGo122(t *testing.T) {
+	names := []string{"a", "b", "c"}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if name == "" {
+				t.Fatal("empty name")
+			}
+			t.Logf("checked %s", name)
+		})
+	}
+}`}>
+On Go versions before 1.22, `name` is a single variable reused by every loop iteration. Because `t.Parallel()` pauses each subtest before it reads `name` in the closure, all three subtests resume together *after* the loop has already finished — by then `name` holds `"c"`, its final value, so every subtest logs `checked c` instead of its own name. Since Go 1.22 each iteration gets its own `name`, so this exact code is safe on 1.22+ — but reading it in an older codebase (or one that hasn't raised its `go.mod` line) without recognizing the trap is exactly the bug this course exists to catch. The fix that works on every version is capturing explicitly: `name := name` as the first line inside the loop, before `t.Run`.
+</SpotTheBug>
 
 export const quizGoTest = [
   {
@@ -219,27 +635,30 @@ export const quizGoTest = [
       "_test.go",
       ".testing.go"
     ],
-    answer: 2
+    answer: 2,
+    explain: "The compiler recognizes _test.go by name and excludes those files from normal (non-test) builds."
   },
   {
-    q: "What is the difference between t.Errorf and t.Fatalf?",
+    q: "```go\nfunc TestGroup(t *testing.T) {\n    for _, name := range []string{\"a\", \"b\"} {\n        t.Run(name, func(t *testing.T) {\n            t.Parallel()\n            t.Log(name)\n        })\n    }\n    t.Log(\"loop done\")\n}\n```\nWhen does \"loop done\" print relative to the two t.Log(name) lines?",
     options: [
-      "t.Errorf stops the test immediately; t.Fatalf lets it continue",
-      "t.Fatalf stops the test immediately; t.Errorf lets it continue",
-      "They are identical — both stop the test",
-      "t.Fatalf only works inside t.Run sub-tests"
+      "After both subtests have already printed their name",
+      "Before either subtest resumes — the parent reaches the end of the loop while the subtests are still paused",
+      "Interleaved unpredictably with the subtest output",
+      "It never prints because t.Parallel blocks the parent"
     ],
-    answer: 1
+    answer: 1,
+    explain: "t.Parallel() pauses each subtest and lets the parent's loop keep going without waiting. The parent finishes the loop (and logs \"loop done\") first; only then do the paused subtests CONT and actually run."
   },
   {
     q: "In a table-driven test, what does t.Run provide for each case?",
     options: [
-      "A separate goroutine per case",
+      "A separate goroutine per case, always running concurrently",
       "A named sub-test with its own pass/fail result",
       "Automatic parallelism across all cases",
       "A fresh copy of the test binary"
     ],
-    answer: 1
+    answer: 1,
+    explain: "t.Run creates a subtest with its own name and result, shown separately under -v and addressable with -run 'Parent/sub'. It does not run in parallel unless the subtest calls t.Parallel() itself."
   },
   {
     q: "What does a clean go test -race run (no races reported) actually tell you?",
@@ -249,7 +668,30 @@ export const quizGoTest = [
       "That -covermode=atomic is unnecessary",
       "That the code no longer needs further testing"
     ],
-    answer: 1
+    answer: 1,
+    explain: "The race detector only reports races that actually occur on the paths and goroutine interleavings exercised during that run — it cannot prove the absence of races your test suite never triggers."
+  },
+  {
+    q: "```go\nfunc assertPositive(t *testing.T, n int) {\n    if n <= 0 {\n        t.Fatalf(\"got %d\", n)\n    }\n}\nfunc TestX(t *testing.T) {\n    assertPositive(t, -1) // line 8\n}\n```\nWhat line number does the failure report point to, and what one-line fix changes that?",
+    options: [
+      "It already points to line 8 (the call site) — no fix needed",
+      "It points to the t.Fatalf line inside assertPositive; adding t.Helper() as the first line of assertPositive makes it point to line 8 instead",
+      "It points to line 8; removing t.Fatalf and using t.Errorf instead fixes the attribution",
+      "Go always reports the innermost failing line — this cannot be changed"
+    ],
+    answer: 1,
+    explain: "Without t.Helper(), the failure is attributed to the line inside assertPositive that called t.Fatalf. Calling t.Helper() as the first line of the helper makes Go attribute the failure to the caller's line instead — verified locally: adding it moved the reported line from inside the helper to line 16 of the caller in this lesson's own demo."
+  },
+  {
+    q: "A FuzzReverse test ran for 2 seconds with go test -fuzz and found a failing input \"\\xb1\" (an invalid UTF-8 byte) that breaks round-tripping through []rune(s). What does this demonstrate?",
+    options: [
+      "Fuzzing is only useful for parsers, not simple string functions",
+      "The seed corpus (f.Add calls) was written incorrectly",
+      "Fuzzing generates inputs a hand-written table would likely never include, and can find real bugs in code that looks obviously correct",
+      "The bug only exists because -fuzztime was too short"
+    ],
+    answer: 2,
+    explain: "This is a real, reproducible result from this lesson's own scratch run: Reverse looked correct for every normal string, but a single invalid UTF-8 byte broke the round-trip because []rune(s) silently substitutes the Unicode replacement character for invalid bytes."
   }
 ];
 

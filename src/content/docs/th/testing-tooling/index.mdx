@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## เรื่องราวของ testing ใน Go
 
@@ -28,14 +30,26 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## สิ่งที่โมดูลนี้ครอบคลุม
 
-1. **go-test** — การเขียนไฟล์ `_test.go`, `func TestXxx(t *testing.T)`, และ table-driven tests ด้วย `t.Run`
-2. **benchmarks** — การวัด performance ด้วย `func BenchmarkXxx(b *testing.B)` และการอ่านผลลัพธ์จาก `-benchmem`
-3. **modules** — การจัดการ dependency ด้วย `go mod init`, `go.mod`, `go.sum`, และ `go get`
-4. **go-tooling** — คำสั่งประจำวัน: `go run`, `go build`, `go fmt`, `go vet`, และ `go doc`
+1. **go-test** — การเขียนไฟล์ `_test.go`, `func TestXxx(t *testing.T)`, table-driven tests ด้วย `t.Run`, `t.Parallel`, fuzzing ด้วย `*testing.F`, และทุกอย่างที่ `*testing.T` มีให้
+2. **benchmarks** — การวัด performance ด้วย `func BenchmarkXxx(b *testing.B)`, การอ่านผลลัพธ์จาก `-benchmem`, และการเปรียบเทียบผลรันด้วย `benchstat`
+3. **modules** — การจัดการ dependency ด้วย `go mod init`, `go.mod`, `go.sum`, `go get`, และวิธีที่ version resolution ทำงานจริง ๆ
+4. **go-tooling** — คำสั่งประจำวัน: `go run`, `go build`, `go fmt`, analyzer จับ bug ของ `go vet`, `go doc`, และ ecosystem ของ linter ที่กว้างขึ้น
+
+## Family ของ testing package
+
+export const testingFamily = `flowchart TD
+  T["testing package"] --> A["*testing.T — unit tests, table-driven, t.Parallel"]
+  T --> B["*testing.B — benchmarks, b.Loop, benchstat"]
+  T --> F["*testing.F — fuzzing, mutates inputs to find edge cases"]
+  A --> G["go test ./..."]
+  B --> G
+  F --> G`;
+
+<Mermaid code={testingFamily} title="package เดียว คำสั่งเดียว สามวิธีในการทดสอบโค้ดของคุณ" />
 
 ## Function ที่คุ้มค่าแก่การทดสอบ
 
-วิธีที่ดีที่สุดในการทำความเข้าใจ testing tools ของ Go คือเริ่มต้นด้วย pure function — function ที่ไม่มี side effect ไม่มี I/O มีแค่ input และ output Playground ด้านล่างรัน `Fibonacci` และ `IsPrime` จาก `main` ในบทเรียนถัดไปคุณจะเขียนไฟล์ `_test.go` สำหรับ function แบบนี้โดยตรง
+วิธีที่ดีที่สุดในการทำความเข้าใจ testing tools ของ Go คือเริ่มต้นด้วย pure function — function ที่ไม่มี side effect ไม่มี I/O มีแค่ input และ output Playground ด้านล่างรัน `Fibonacci` และ `IsPrime` จาก `main` ในบทเรียนถัดไปคุณจะเขียนไฟล์ `_test.go` สำหรับ function แบบนี้โดยตรง — รวมถึง fuzz test ด้วย เพราะ `Fibonacci` และ `IsPrime` ต่างรับ `int` ตัวเดียว ตรงตามรูปแบบที่ `*testing.F` ถนัดในการโหม input แบบ edge-case ใส่
 
 export const indexCode = `package main
 
@@ -100,6 +114,21 @@ func main() {
 Pure function — function ที่ขึ้นอยู่กับ argument เท่านั้นและคืนค่าเดิมเสมอสำหรับ input เดิม — คือจุดเริ่มต้นที่เหมาะที่สุดสำหรับ testing ไม่มี database ที่ต้อง mock ไม่มี HTTP server ที่ต้องตั้งค่า และไม่มี shared state ที่ต้อง reset ระหว่าง runs `Fibonacci` และ `IsPrime` ทั้งคู่มีคุณสมบัตินี้: เรียกพันครั้งด้วย input เดิมก็ได้ผลลัพธ์เดิม บทเรียนถัดไปแสดงให้เห็นว่า `testing` package ของ Go ทำให้การเขียน test เหล่านี้แทบไม่ต้องใช้ความพยายามเลย
 </Callout>
 
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนจะลงลึกในโมดูลนี้ เริ่มจาก failure mode ที่พบบ่อยที่สุดของ test ที่ generate มา: test ที่รันแล้วพิมพ์ `PASS` แต่ไม่เช็กอะไรเลย
+
+- ทุก function `Test*` เรียก `t.Error`/`t.Errorf`/`t.Fatal`/`t.Fatalf` ที่ไหนสักแห่งจริงไหม หรือแค่เรียก function ที่ทดสอบแล้วปล่อยให้ `nil` error หมายถึง success แบบเงียบ ๆ?
+- ถ้า function คืนค่ากลับมา ค่านั้นถูกเทียบกับผลลัพธ์ที่คาดหวังจริงไหม — หรือแค่เช็กว่า "ไม่ panic"?
+- assertion logic ของ benchmark หรือ fuzz test ขึ้นอยู่กับ input จริงไหม หรือจะ pass เหมือนเดิมไม่ว่า function ที่ทดสอบจะคืนอะไรมา?
+
+<SpotTheBug code={`func TestParseConfig(t *testing.T) {
+	cfg := ParseConfig("timeout=30")
+	fmt.Println(cfg) // just prints — never compares to anything
+}`}>
+test นี้เรียก `ParseConfig` พิมพ์ผลลัพธ์ แล้วจบ — ไม่มี `t.Error`, `t.Errorf`, `t.Fatal` หรือการเทียบกับค่าที่คาดหวังที่ไหนเลย `go test` รายงาน `PASS` สำหรับ test นี้เสมอ ไม่ว่า `ParseConfig` จะคืน struct ที่ถูกต้อง คืน struct ว่าง หรือทำ timeout field หายไปเงียบ ๆ ก็ตาม โค้ดนี้ compile ผ่านสะอาดและ "ดูเหมือน test" — ซึ่งนั่นแหละคืออันตราย: bug จริงที่เกิดขึ้นทีหลังจะไม่ทำให้ test นี้แดงเลย เพราะไม่มีอะไรในนั้นที่ fail ได้ วิธีแก้คือ assertion จริง: `want := Config{Timeout: 30 * time.Second}; if cfg != want { t.Errorf("ParseConfig() = %+v, want %+v", cfg, want) }`
+</SpotTheBug>
+
 export const quizIndex = [
   {
     q: "คำสั่งใดรัน tests ทั้งหมดใน module ปัจจุบันและทุก sub-package?",
@@ -109,17 +138,19 @@ export const quizIndex = [
       "go run test",
       "go check ./..."
     ],
-    answer: 1
+    answer: 1,
+    explain: "go test เฉย ๆ รันแค่ package ใน directory ปัจจุบัน; pattern ./... บอกให้มันเดินทุก package ใน module"
   },
   {
-    q: "package ใดใน Go standard library ที่ให้ *testing.T และ *testing.B?",
+    q: "package ใดใน Go standard library ที่ให้ *testing.T, *testing.B และ *testing.F?",
     options: [
       "testing/unit",
       "test",
       "testing",
       "stdlib/test"
     ],
-    answer: 2
+    answer: 2,
+    explain: "ทั้งสาม type — สำหรับ unit test, benchmark และ fuzzing — อยู่ใน standard-library package testing เดียว ขับเคลื่อนด้วย go test ทั้งหมด"
   },
   {
     q: "อะไรทำให้ function เป็น candidate ที่ดีสำหรับ unit test แรก?",
@@ -129,7 +160,19 @@ export const quizIndex = [
       "ใช้ goroutines",
       "เขียนลงไฟล์"
     ],
-    answer: 1
+    answer: 1,
+    explain: "pure function ไม่ต้องมี mock ไม่ต้อง setup และไม่ต้อง teardown — เรียกด้วย input เดิมก็ได้ output เดิมเสมอ ซึ่งตรงกับสิ่งที่ test ต้อง assert เป๊ะ ๆ"
+  },
+  {
+    q: "```go\nfunc TestParseConfig(t *testing.T) {\n    cfg := ParseConfig(\"timeout=30\")\n    fmt.Println(cfg)\n}\n```\ngo test จะรายงาน PASS หรือ FAIL สำหรับ test นี้ ถ้า ParseConfig มี bug ที่คืน zero-value Config?",
+    options: [
+      "FAIL — go test เทียบ printed output กับชื่อ function ให้อัตโนมัติ",
+      "PASS — ไม่มีอะไรใน test นี้เรียก t.Error/t.Fatal หรือเทียบ cfg กับค่าที่คาดหวังเลย มันจึง fail ไม่ได้ไม่ว่า ParseConfig จะคืนอะไรมา",
+      "ขึ้นอยู่กับว่าใส่ -v หรือเปล่า",
+      "FAIL — การ Println ไปที่ stdout ระหว่าง test ถือเป็น error เอง"
+    ],
+    answer: 1,
+    explain: "test จะ fail ก็ต่อเมื่อมันรายงานความล้มเหลวผ่าน *testing.T API อย่างชัดเจนเท่านั้น การพิมพ์ค่าไม่ใช่ assertion — test นี้จะรายงาน PASS ไม่ว่า return value จะเป็นอะไรก็ตาม ถูกหรือผิด"
   },
   {
     q: "เครื่องมือใดจัดรูปแบบ Go source code ตาม canonical style?",
@@ -139,7 +182,19 @@ export const quizIndex = [
       "go fmt",
       "go style"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go fmt ห่อ gofmt formatter canonical เพียงตัวเดียวที่ Go project ทุกตัวใช้ — ไม่มี configuration และไม่มี style guide คู่แข่ง"
+  },
+  {
+    q: "บทเรียนของโมดูลนี้ครอบคลุม testing.T, testing.B และ testing.F บทไหนสอนเรื่อง fuzzing?",
+    options: [
+      "benchmarks เพราะ *testing.F ถูกส่งเข้า loop สไตล์ b.N เหมือนกัน",
+      "go-test คู่กับ table-driven tests, t.Parallel และ feature อื่น ๆ ของ *testing.T",
+      "modules เพราะ fuzz corpus ถูก version เหมือน dependency",
+      "ไม่มีบทไหนเลย — fuzzing ต้องการโมดูลแยกที่ไม่ได้ครอบคลุมที่นี่"
+    ],
+    answer: 1,
+    explain: "Fuzzing สอนอยู่ในบท go-test: *testing.F seed corpus แล้ว mutation engine ของ Go generate input ใหม่ ซึ่งเป็น feature ที่ใกล้เคียงกับ testing.T พอดี จึงควรอยู่ในบทนั้นมากกว่า benchmarks หรือ modules"
   }
 ];
 

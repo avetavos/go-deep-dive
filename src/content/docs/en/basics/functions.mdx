@@ -1,14 +1,16 @@
 ---
 title: Functions
-description: 'Multiple return values, named returns, variadic functions, defer, closures, and first-class functions.'
+description: 'Multiple return values, named returns, variadic functions, defer, closures, first-class functions, and pass-by-value.'
 sidebar:
-  order: 5
+  order: 4
 ---
 
 import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Function basics
 
@@ -25,6 +27,8 @@ func add(a, b int) int {
     return a + b
 }
 ```
+
+Every argument in Go is passed **by value** — a copy of it — with no exception. That is easy to see for an `int` or a `struct`, but it is true for a slice too: a slice argument copies its small three-word header (pointer, length, capacity), not the backing array. That is why writing to `s[i]` inside a function is visible to the caller, while `append`-ing inside the function sometimes is not — the full explanation, with the header diagram, is in Slices.
 
 ## Multiple return values
 
@@ -83,9 +87,9 @@ sum(1, 2, 3)        // individual args
 sum([]int{1,2,3}...) // spread a slice with ...
 ```
 
-Inside the function, `nums` is a `[]int` slice.
+Inside the function, `nums` is a `[]int` slice. Spreading a `nil` slice works too and is not a special case: `var none []int; sum(none...)` passes an empty slice, and the loop simply runs zero times, returning `0`. A `nil` slice behaves like a zero-length one everywhere it is read.
 
-## defer
+## `defer`
 
 `defer` schedules a function call to run **when the surrounding function returns**, regardless of which return path is taken. It is the idiomatic way to clean up resources:
 
@@ -104,6 +108,18 @@ func readFile(name string) error {
 
 Multiple deferred calls execute in **LIFO order** (last deferred, first to run).
 
+<Mermaid code={deferStackDiagram} title="Three defers run in reverse order of when they were pushed" />
+
+export const deferStackDiagram = `flowchart TB
+  subgraph Push["Pushed in this order"]
+    direction LR
+    P1["defer close(0)"] --> P2["defer close(1)"] --> P3["defer close(2)"]
+  end
+  subgraph Pop["Run in this order at return (LIFO)"]
+    direction LR
+    R1["close(2)"] --> R2["close(1)"] --> R3["close(0)"]
+  end`;
+
 **Arguments to a deferred call are evaluated immediately, at the `defer` statement** — not when the deferred call actually runs:
 
 ```go
@@ -111,6 +127,71 @@ i := 0
 defer fmt.Println(i) // captures i's value (0) right now
 i = 100
 // when the function returns, this prints "0", not "100"
+```
+
+## `defer` and named results
+
+A deferred closure can read and even *rewrite* a named return value, because the named result is just a variable in scope for the whole function body — including its deferred calls. This is the standard way to annotate or transform an error right before it leaves a function:
+
+```go
+func doWork() (err error) {
+    defer func() {
+        if err != nil {
+            err = fmt.Errorf("doWork: %w", err)
+        }
+    }()
+    return errors.New("boom")
+}
+```
+
+`doWork()` returns `errors.New("boom")`, but by the time the caller sees it, the deferred function has already run and wrapped it — the call prints `doWork: boom`. This only works with a *named* result: a deferred function closing over a plain `return err` cannot change what the caller receives, because there is no shared variable for it to modify.
+
+## `defer` inside a loop
+
+`defer` runs at function return, not at the end of the loop iteration it was written in. Deferring inside a `for` loop is a classic source of resource leaks — every file, connection, or lock accumulates until the whole function exits, not each time around the loop:
+
+```go
+func leaky(n int) {
+    for i := 0; i < n; i++ {
+        r := openResource(i)
+        defer r.Close() // accumulates n deferred calls, all pending until leaky returns
+    }
+    // if n is large, this line runs with n resources still open
+}
+```
+
+If `leaky` is itself a long-running function — say, one that processes thousands of files in a loop — every open file descriptor stays open until the very end, and the process can run out of them long before `leaky` returns. The fix is to give each iteration its own scope, typically a helper function, so `defer` fires per iteration:
+
+```go
+func tidy(n int) {
+    for i := 0; i < n; i++ {
+        func() {
+            r := openResource(i)
+            defer r.Close() // runs at the end of this anonymous function, every iteration
+            // ... use r ...
+        }()
+    }
+}
+```
+
+A closely related bug is `defer f.Close()` silently discarding the error `Close` returns. For a read-only file this is usually harmless, but for a file you *wrote to*, `Close` can be the call that actually flushes buffered data — and a failed flush is a real error you just threw away:
+
+```go
+func saveBuggy(f *os.File, data []byte) error {
+    defer f.Close() // any error from Close is silently discarded
+    _, err := f.Write(data)
+    return err
+}
+
+func saveFixed(f *os.File, data []byte) (err error) {
+    defer func() {
+        if cerr := f.Close(); cerr != nil && err == nil {
+            err = cerr // only report Close's error if Write didn't already fail
+        }
+    }()
+    _, err = f.Write(data)
+    return err
+}
 ```
 
 ## Closures and first-class functions
@@ -144,6 +225,51 @@ fmt.Println(c()) // 3
 ```
 
 Each call to `counter()` creates an independent `n`, so two counters do not interfere with each other.
+
+## Closures over loop variables: before and after Go 1.22
+
+A closure created inside a `for` loop captures the loop variable itself, not a snapshot of its value at that iteration. Before Go 1.22, all iterations of a `for` shared **one** variable, so every closure ended up seeing whatever the variable held when it was finally called:
+
+```go
+var fns []func()
+for _, v := range []int{0, 1, 2} {
+    fns = append(fns, func() { fmt.Println(v) })
+}
+for _, f := range fns {
+    f()
+}
+```
+
+Compiled with `go 1.21` in `go.mod`, this program prints `2 2 2` on Go 1.26.5 — every closure shares the same `v`, whose final value after the loop is `2`. The traditional fix, still common in code written before 1.22 (and in anything an AI trained on that code produces), is to make a fresh copy inside the loop body: `v := v` before using `v` in the closure.
+
+Go 1.22 changed the semantics: each iteration gets its **own** `v`, so the same source line — with only `go.mod`'s `go` directive changed to `1.22` — prints `0 1 2`:
+
+```text
+go 1.21 in go.mod → 2
+                     2
+                     2
+
+go 1.22 in go.mod → 0
+                     1
+                     2
+```
+
+Both lines above are real output from this exact program on Go 1.26.5, changing only the `go` line in `go.mod` between runs. The interactive playground below always targets a modern toolchain, so it will show the post-1.22 behavior; the `go` directive is what gates this change, per module, and it cannot be toggled from inside a single program. The `v := v` copy is unnecessary once a module's `go.mod` says `go 1.22` or later — but you will still see it in older code, and recognizing it tells you the author was guarding against the old behavior.
+
+## Function values, method values, and nil
+
+A function type is just another type — you can declare a variable of it, store it in a struct field, or pass it as a value. Its zero value is `nil`, and a function value can only ever be compared against `nil` (comparing two non-nil function values with `==` is a compile error):
+
+```go
+type IntFunc func(int) int
+
+var f IntFunc
+fmt.Println(f == nil) // true
+
+f(3) // panics: runtime error: invalid memory address or nil pointer dereference
+```
+
+This is the same shape of bug as a nil pointer dereference, and it shows up most often with optional callback fields on a struct (`OnError func(error)`) that a caller forgot to set. Always nil-check a function value before calling it unless the type's contract guarantees it is always set.
 
 export const functionsCode = `package main
 
@@ -214,14 +340,110 @@ func main() {
 
 <Playground code={functionsCode} />
 
+The second playground covers everything new on this page: named results modified by `defer`, `defer` inside a loop, a swallowed `Close` error and its fix, and nil function values.
+
+export const functionsDepthCode = `package main
+
+import (
+\t"errors"
+\t"fmt"
+)
+
+// doWork shows a named result modified by a deferred func — a common way to
+// annotate an error right before it leaves the function.
+func doWork() (err error) {
+\tdefer func() {
+\t\tif err != nil {
+\t\t\terr = fmt.Errorf("doWork: %w", err)
+\t\t}
+\t}()
+\treturn errors.New("boom")
+}
+
+type resource struct{ id int }
+
+func openResource(id int) *resource {
+\tfmt.Println("open", id)
+\treturn &resource{id}
+}
+
+func (r *resource) Close() { fmt.Println("close", r.id) }
+
+// leaky defers Close inside a loop — every resource stays open until leaky
+// itself returns, not at the end of each iteration.
+func leaky(n int) {
+\tfor i := 0; i < n; i++ {
+\t\tr := openResource(i)
+\t\tdefer r.Close() // accumulates n deferred calls
+\t}
+\tfmt.Println("all opened, none closed yet")
+}
+
+type mockFile struct{ closeErr error }
+
+func (f *mockFile) Write(p []byte) (int, error) { return len(p), nil }
+func (f *mockFile) Close() error                { return f.closeErr }
+
+// saveBuggy discards whatever error Close returns.
+func saveBuggy(f *mockFile, data []byte) error {
+\tdefer f.Close() // any error from Close is silently discarded
+\t_, err := f.Write(data)
+\treturn err
+}
+
+// saveFixed captures Close's error into the named result if nothing else failed.
+func saveFixed(f *mockFile, data []byte) (err error) {
+\tdefer func() {
+\t\tif cerr := f.Close(); cerr != nil && err == nil {
+\t\t\terr = cerr
+\t\t}
+\t}()
+\t_, err = f.Write(data)
+\treturn err
+}
+
+type IntFunc func(int) int
+
+func sum(nums ...int) int {
+\ttotal := 0
+\tfor _, n := range nums {
+\t\ttotal += n
+\t}
+\treturn total
+}
+
+func main() {
+\t// Named result modified by defer.
+\tfmt.Println(doWork())
+
+\t// defer inside a loop: resources pile up until the function returns.
+\tleaky(3)
+
+\t// defer f.Close() silently swallowing a write/flush error, and the fix.
+\tf := &mockFile{closeErr: errors.New("disk full")}
+\tfmt.Println("saveBuggy:", saveBuggy(f, []byte("data")))
+\tfmt.Println("saveFixed:", saveFixed(f, []byte("data")))
+
+\t// A nil function value compares equal to nil, and calling it panics.
+\tvar nilFn IntFunc
+\tfmt.Println("nil func == nil:", nilFn == nil)
+
+\t// A nil slice spread into a variadic parameter behaves like an empty one.
+\tvar nilSlice []int
+\tfmt.Println("sum(nilSlice...):", sum(nilSlice...))
+}`;
+
+<Playground code={functionsDepthCode} />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
 |---------------|---------|------|
 | Multiple return values | Explicit error handling, no hidden exceptions | The caller must check every error — more verbose than try/catch |
-| Named return values | Documents intent in the signature, enables bare return | A bare return in a long function makes it harder to read |
-| `defer` | Cleanup code sits right next to resource acquisition | Arguments are evaluated immediately, and LIFO order can surprise you |
+| Named return values | Documents intent in the signature, enables bare return, lets `defer` rewrite the result | A bare return in a long function makes it harder to read |
+| `defer` | Cleanup code sits right next to resource acquisition | Arguments are evaluated immediately, LIFO order can surprise you, and it runs at function exit, not loop-iteration exit |
 | Closures | Encapsulate state concisely | Captured variables are often allocated on the heap (escape analysis) |
+| Pass-by-value everywhere | No hidden aliasing through function boundaries by default | Passing a large struct by value copies all of it; a slice or map argument still lets you mutate what it points to |
 
 ## Common Misconceptions
 
@@ -229,9 +451,30 @@ func main() {
 - **"Multiple return values hurt performance."** Go returns multiple values directly via registers or the stack, with no heap allocation — the performance impact is negligible.
 - **"Every closure escapes to the heap."** The compiler performs escape analysis and may allocate a closure on the stack if it never escapes its scope.
 - **"Functions in Go are not first-class."** Functions in Go are first-class values — you can assign them, pass them as arguments, or return them from other functions.
+- **"`defer` inside a loop cleans up each iteration."** It does not — every deferred call is pending until the *enclosing function* returns, not the loop.
+
+## Reading AI-generated code
+
+When a generated function uses `defer`, closures, or function values, check these before trusting it:
+
+- Does a `defer` sit inside a `for` loop that can run more than a couple of times? Every iteration's deferred call stays pending until the function returns, not the loop.
+- Does `defer f.Close()` follow a `Write`/`Flush`-style call, discarding whatever error `Close` returns? Look for a named result the deferred func could attach that error to instead.
+- Does a closure capture a loop variable, and if so, does the module's `go.mod` declare `go 1.22` or later? Below that, every closure created in the loop shares one variable.
+- Is a function-typed value (a field, a parameter) called without checking it against `nil` first?
+- Does the code compare two function values directly with `==` (not against `nil`)? That is a compile error — function types support no other comparison.
+
+<SpotTheBug code={`func leaky(n int) {
+	for i := 0; i < n; i++ {
+		r := openResource(i)
+		defer r.Close()
+	}
+	fmt.Println("all opened, none closed yet")
+}`}>
+`defer` schedules `r.Close()` to run when `leaky` returns — not at the end of each loop iteration. With `n` large, this line runs with all `n` resources still open, and in a long-running program that can exhaust file descriptors or connections long before `leaky` returns. Fix it by giving each iteration its own scope so the deferred call fires per iteration, typically with a small helper function: `func() { r := openResource(i); defer r.Close(); /* use r */ }()` called once per loop iteration.
+</SpotTheBug>
 
 <Callout title="Deferred calls run LIFO at return">
-Multiple `defer` statements in the same function execute in **last-in, first-out** order when the function returns. This mirrors a stack: the last thing you deferred is the first thing that runs on the way out. Importantly, **arguments are evaluated at the defer site**, not when the deferred call actually executes — so `defer fmt.Println(x)` captures the current value of `x`, even if `x` changes before the function returns.
+Multiple `defer` statements in the same function execute in **last-in, first-out** order when the function returns. This mirrors a stack: the last thing you deferred is the first thing that runs on the way out. Importantly, **arguments are evaluated at the defer site**, not when the deferred call actually executes — so `defer fmt.Println(x)` captures the current value of `x`, even if `x` changes before the function returns. A deferred closure is the exception: it can still read (and, for a named result, rewrite) variables at the moment it actually runs.
 </Callout>
 
 export const quizFunctions = [
@@ -243,7 +486,8 @@ export const quizFunctions = [
       "Set a package-level `lastError` variable the caller inspects",
       "Throw an exception using the throw keyword"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Go has no exceptions for ordinary error handling. Returning (result, error) makes failure part of the signature, and the caller must explicitly check it."
   },
   {
     q: "Three defer statements are executed in a function in order A, B, C. In what order do they run when the function returns?",
@@ -253,7 +497,8 @@ export const quizFunctions = [
       "B, A, C",
       "The order is undefined"
     ],
-    answer: 1
+    answer: 1,
+    explain: "defer is a stack: the last one pushed (C) is the first one popped when the function returns, so the order is C, B, A."
   },
   {
     q: "What does a closure capture from its enclosing scope?",
@@ -263,7 +508,8 @@ export const quizFunctions = [
       "Only constant values — mutable variables cannot be captured",
       "Nothing; closures are always pure functions in Go"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A closure shares the actual variable, not a snapshot — this is exactly why loop-variable capture behaved the way it did before Go 1.22."
   },
   {
     q: "How do you pass a slice to a variadic function as individual arguments?",
@@ -273,7 +519,30 @@ export const quizFunctions = [
       "Use the spread keyword: spread(variadic, slice)",
       "You cannot; slices and variadic args are incompatible"
     ],
-    answer: 1
+    answer: 1,
+    explain: "The ... suffix after a slice expression spreads its elements as individual variadic arguments; this also works with a nil slice, spreading zero arguments."
+  },
+  {
+    q: "```go\nfunc doWork() (err error) {\n    defer func() {\n        if err != nil {\n            err = fmt.Errorf(\"doWork: %w\", err)\n        }\n    }()\n    return errors.New(\"boom\")\n}\n```\nWhat does `fmt.Println(doWork())` print?",
+    options: [
+      "boom",
+      "doWork: boom",
+      "<nil>",
+      "a compile error: err is not defined"
+    ],
+    answer: 1,
+    explain: "Because err is a named result, the deferred closure can rewrite it after the return statement sets it but before the function actually hands control back to the caller — the caller sees the wrapped error."
+  },
+  {
+    q: "```go\nfor i := 0; i < 3; i++ {\n    r := openResource(i)\n    defer r.Close()\n}\nfmt.Println(\"done opening\")\n```\nAt the moment \"done opening\" is printed, how many resources are still open?",
+    options: [
+      "0 — each was closed at the end of its iteration",
+      "1 — only the most recent one is still open",
+      "3 — none have been closed yet",
+      "This does not compile: defer is not allowed inside a for loop"
+    ],
+    answer: 2,
+    explain: "defer always waits for the enclosing function to return, never the loop. All three resources are still open when the loop finishes; they close, in reverse order, only once the function itself returns."
   }
 ];
 

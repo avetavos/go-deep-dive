@@ -1,6 +1,6 @@
 ---
 title: Go Modules
-description: 'go mod init, go.mod (go, toolchain, ignore), go.sum, การเพิ่ม dependency ด้วย go get, go mod tidy และกฎ layout ของ Go 1.27, และ semantic import versioning'
+description: 'go mod init, go.mod (go, toolchain, ignore), minimal version selection, go mod why/graph, replace/exclude/retract, go work, tool directive, และ semantic import versioning'
 sidebar:
   order: 4
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Go module คืออะไร?
 
@@ -35,7 +37,7 @@ module path (`github.com/yourname/myapp`) ทำหน้าที่ทั้�
 สังเกตเวอร์ชัน: `go mod init` เขียนเวอร์ชันจริงของ toolchain ที่รันมัน — ไม่ใช่ต่ำกว่าหนึ่ง minor release ยืนยันในเครื่องแล้ว: รันด้วย Go 1.26.5 จะเขียน `go 1.26.5`; บน Go 1.27.0 จะเขียน `go 1.27.0` หากต้องการตรึง floor เองให้ใช้:
 
 ```bash
-go get go@1.27          # เขียนบรรทัด go ใหม่เป็น 1.27.x
+go get go@1.27          # rewrites the go line to 1.27.x
 ```
 
 
@@ -76,13 +78,13 @@ require (
 ## การเพิ่ม dependency
 
 ```bash
-# เพิ่ม module เวอร์ชันล่าสุด
+# Add the latest version of a module
 go get github.com/go-chi/chi/v5
 
-# เพิ่มเวอร์ชันที่ระบุ
+# Add a specific version
 go get github.com/go-chi/chi/v5@v5.1.0
 
-# อัปเกรด dependency เป็น patch/minor release ล่าสุด
+# Upgrade a dependency to its latest patch/minor release
 go get -u github.com/go-chi/chi/v5
 ```
 
@@ -100,39 +102,218 @@ import "github.com/go-chi/chi/v5"
 go mod tidy
 ```
 
-คำสั่งนี้เพิ่ม `require` lines ที่ขาดหาย ลบ `require` lines สำหรับ packages ที่ไม่ได้ import แล้ว และอัปเดต `go.sum` ให้ตรงกัน รันก่อน commit ทุกครั้ง
+คำสั่งนี้เพิ่ม `require` lines ที่ขาดหาย ลบ `require` lines สำหรับ packages ที่ไม่ได้ import แล้ว อัปเดต `go.sum` ให้ตรงกัน และ (สำหรับ module `go 1.27+`) จัด `go.mod` ให้เป็น layout สองบล็อก direct/indirect รันก่อน commit ทุกครั้ง
+
+## Minimal version selection
+
+Go เลือก version ของแต่ละ dependency ที่จะใช้จริงด้วย algorithm ที่เรียกว่า **minimal version selection (MVS)**: สำหรับทุก module ใน build Go เลือก version ที่ *สูงที่สุด* ที่ถูกขอโดยอะไรก็ตามใน dependency graph ไม่ใช่ version ล่าสุดที่มีอยู่ ถ้า module ของคุณ require `github.com/foo/bar v1.2.0` และ dependency ตัวหนึ่งของคุณ require `github.com/foo/bar v1.4.0` build จะใช้ `v1.4.0` — ค่าสูงสุดของสิ่งที่ถูกขอจริง — ไม่ใช่ `v1.9.0` แค่เพราะมันเพิ่ง release ล่าสุด
+
+```go
+// go.mod
+require github.com/google/uuid v1.6.0
+```
+
+```text
+$ go mod graph
+example.com/modw github.com/google/uuid@v1.6.0
+```
+
+`go mod graph` พิมพ์ทุก requirement edge ใน build: `<module> <requires> <at-version>` มัน deterministic และ reproducible บนทุกเครื่องเมื่อ `go.mod`/`go.sum` เหมือนกัน — ตรงข้ามกับ resolver ที่อาจเลือก "ล่าสุด" คนละตัวในแต่ละวัน
+
+## go mod why
+
+เมื่อคุณบอกไม่ได้ว่าทำไม dependency ตัวหนึ่งถึงอยู่ใน module ของคุณ `go mod why` พิมพ์ import path ที่สั้นที่สุดที่ดึงมันเข้ามา ยืนยันแล้วจริง:
+
+```bash
+go mod why github.com/google/uuid
+```
+
+```text
+# github.com/google/uuid
+example.com/modw
+github.com/google/uuid
+```
+
+อ่านเป็นสาย: module ของคุณ import `github.com/google/uuid` โดยตรง สายของโปรเจกต์จริงมักยาวกว่านี้ — `module ของคุณ → framework บางตัว → utility lib บางตัว` — และ `go mod why` คือวิธีที่เร็วที่สุดในการหาว่า direct dependency ตัวไหนลาก dependency ที่ไม่คาดคิดเข้ามา แทนที่จะอ่าน `go.sum` แล้วเดาเอา
+
+## replace, exclude, retract และ go work
+
+**`replace`** แทนที่ source ของ module path ด้วยอย่างอื่น — local directory ระหว่าง development หรือ fork ที่ fix แล้ว:
+
+```
+replace github.com/foo/bar => ../local-bar
+replace github.com/foo/bar => github.com/yourfork/bar v1.2.3-patched
+```
+
+`replace` ใน `go.mod` ของ **main module** ของคุณเป็นเรื่องปกติมาก — แต่มันมีผลแค่กับ build ของ module คุณเองเท่านั้น ใครก็ตามที่ import module ของคุณจะไม่เห็นบรรทัด `replace` ของคุณเลย build ของเขาจะ resolve `github.com/foo/bar` ตามปกติ นี่คือความเข้าใจผิดที่พบบ่อยที่สุดเกี่ยวกับ directive นี้
+
+**`exclude`** ลบ version หนึ่งออกจากการพิจารณาทั้งหมด บังคับให้ MVS เลือก version อื่นแทน — ใช้กับ version ที่รู้ว่าพังหรือถูก yank **`retract`** ทำตรงข้าม ประกาศจาก*ข้างใน*`go.mod`ของ module ที่ได้รับผลกระทบเอง: มันบอก tooling ของคนอื่นว่า "อย่าเลือก version นี้ของฉัน" ปรากฏเป็น warning ใน `go list -m -u` และ `go get` ยืนยันแล้วจริงกับ `go help mod edit` ว่า `go mod edit` เขียนทั้งสามได้โดยตรง:
+
+```bash
+go mod edit -replace github.com/foo/bar=../local-bar
+go mod edit -exclude github.com/bad/pkg@v1.0.0
+go mod edit -retract v1.0.1
+```
+
+```text
+replace github.com/foo/bar => ../local-bar
+exclude github.com/bad/pkg v1.0.0
+retract v1.0.1
+```
+
+**`go work`** แก้ปัญหา local-development แบบเดียวกับ `replace` โดยไม่ต้องแก้ `go.mod` เลย — มีประโยชน์เมื่อพัฒนาหลาย module พร้อมกัน ยืนยันแล้วจริงกับ module จริงสองตัว: `app` (ที่ require `example.com/lib v0.0.0` version ที่ไม่มีอยู่จริง) และ directory `lib` ข้าง ๆ กัน:
+
+```bash
+go work init ./app ./lib
+```
+
+```text
+go 1.26.5
+
+use (
+	./app
+	./lib
+)
+```
+
+```bash
+cd app && go run .
+# hello from local lib
+```
+
+`app/go.mod` ไม่ถูกแตะเลย — ไม่มีบรรทัด `replace` ถูกเพิ่ม — และ build ยัง resolve `example.com/lib` ไปที่ local directory ได้ เพราะ `go.work` override module resolution ให้ทุก module ที่อยู่ใน block `use` ลบหรือ ignore `go.work` (ตั้งใจให้อยู่นอก version control) แล้ว build จะกลับไปเป็นไปตามที่ `go.mod` บอกอย่างเดียว
+
+## go install pkg@version vs go get
+
+ทั้งคู่ดึงโค้ดมา แต่ตอบคำถามคนละอย่าง **`go get`** จัดการ dependency graph ของ*module คุณเอง* — มันแก้ `go.mod`/`go.sum` และมีไว้สำหรับ package ที่โค้ดคุณ import **`go install pkg@version`** build และ install binary เดี่ยว ๆ ลง `$GOBIN` (default `$HOME/go/bin`) และตาม `go help install` มันทำแบบนั้นโดย "ignoring the go.mod file in the current directory or any parent directory" — มันไม่แตะ `go.mod` ของโปรเจกต์คุณเลย
+
+```bash
+go install golang.org/x/tools/cmd/stringer@latest   # installs a CLI binary — go.mod untouched
+go get golang.org/x/tools/cmd/stringer                # WRONG for a tool — adds a require line
+```
+
+ใช้ `go install` สำหรับ developer tool (linter, code generator, `stringer`, `mockgen`) ที่คุณรันจาก command line ใช้ `go get` เฉพาะกับ package ที่ source code ของคุณ `import` จริง ๆ
+
+## Tool directive (Go 1.24)
+
+ก่อน Go 1.24 โปรเจกต์ตรึง version ของ tool ด้วยการสร้างไฟล์ `tools.go` ที่มี blank import คุมด้วย build tag (`//go:build tools` ตามด้วย `import _ "golang.org/x/tools/cmd/stringer"`) เพื่อให้ `go mod tidy` track version ของมันเท่านั้น — เป็น workaround ที่รู้กันดีแต่ค่อนข้างอึดอัด `tool` directive มาแทนที่: `go get -tool` เพิ่ม entry ของ tool ที่ pin version จริงลงใน `go.mod` เอง
+
+```bash
+go get -tool golang.org/x/tools/cmd/stringer@latest
+```
+
+ยืนยันแล้วจริง — `go.mod` ที่ได้:
+
+```
+module example.com/tooldir
+
+go 1.26.0
+
+tool golang.org/x/tools/cmd/stringer
+
+require (
+	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/tools v0.50.0 // indirect
+)
+```
+
+รันตรงจาก module เลย ไม่ต้องหาใน `$GOBIN`:
+
+```bash
+go tool stringer -h
+```
+
+ทุกคนในทีมที่รัน `go mod tidy`/`go build` ได้ tool version เดียวกันเป๊ะ — ประเด็นทั้งหมดที่ `tools.go` พยายามแก้ปัญหา แต่ไม่ต้องมี boilerplate แบบ blank-import
+
+## Environment variable ของ proxy และ privacy
+
+โดย default `go get`/`go mod download` ดึงมาจาก public Go module proxy และ verify กับ public checksum database:
+
+| ตัวแปร | Default | หน้าที่ |
+|---|---|---|
+| `GOPROXY` | `https://proxy.golang.org,direct` | ดึง module มาจากไหน; `direct` fallback ไปที่ VCS ของ module |
+| `GOSUMDB` | `sum.golang.org` | checksum database ที่ใช้ verify การ download กันการปลอมแปลง |
+| `GOPRIVATE` | (ว่าง) | glob pattern ของ module path ที่จะดึงตรง ข้ามทั้ง proxy และ sumdb — สำหรับ repository ภายใน/private |
+| `GONOSUMCHECK` / `GOFLAGS=-insecure` | — | ทางออกฉุกเฉินแบบเก่า/edge-case; `GOPRIVATE` (หรือแคบกว่าคือ `GONOSUMDB`/`GONOSUMCHECK`) คือวิธีที่รองรับสำหรับ opt-out path หนึ่ง |
+
+```bash
+export GOPRIVATE=github.com/yourcompany/*
+```
+
+การตั้ง `GOPRIVATE` สำหรับ org ของบริษัทคือวิธีแก้มาตรฐานของ "go get ค้างหรือ fail กับ internal repo ของเรา" — ถ้าไม่ตั้งไว้ public proxy และ sumdb จะถูกเรียกให้ตรวจ module path ที่มันไม่มีทางเห็นได้จริง ๆ
+
+## Toolchain directive และ godebug directive
+
+directive **`toolchain`** (`toolchain go1.27.1` ใน `go.mod`) ตรึง Go toolchain version ที่แน่นอน ถ้า `go` binary ที่เรียก build เก่ากว่า toolchain ที่ pin ไว้ มันจะดาวน์โหลดและรันตัวที่ pin ไว้ให้อัตโนมัติ — ควบคุมด้วย `GOTOOLCHAIN` (default `auto`; ตั้งเป็น `local` เพื่อปิดการดาวน์โหลดอัตโนมัติและใช้ `go` binary ที่ติดตั้งไว้เสมอ)
+
+directive **`godebug`** ตั้งค่า `GODEBUG` ระดับ module แทนที่จะเป็นระดับ process — มันไปกับ module จึงทำให้ทุก build ได้ runtime behavior เดียวกันสำหรับ setting ที่เปลี่ยน default ข้าม Go version:
+
+```
+godebug http2client=0
+```
+
+ยืนยันผ่าน `go help mod edit`: `go mod edit -godebug=key=value` เขียนบรรทัดนี้ตรง ๆ นี่คือวิธีที่ toolchain ให้ module opt กลับไปใช้ default เก่า (หรือ opt เข้า default ใหม่ก่อนใคร) โดยไม่ต้องให้ developer ทุกคนตั้ง environment variable เอง
+
+## Module cache
+
+ทุก module version ที่ดาวน์โหลดจะถูก extract ครั้งเดียวลง shared, read-only cache ที่ `GOMODCACHE` (default `$GOPATH/pkg/mod`) และถูกใช้ซ้ำโดยทุก module บนเครื่องที่ต้องการ version นั้นเป๊ะ ๆ — ยืนยันแล้วจริง directory นี้มีขนาด 1.8 GB หลังจากทำงานตามปกติในคอร์สนี้
+
+```bash
+go env GOMODCACHE
+go clean -modcache   # deletes the entire cache — next build re-downloads everything it needs
+```
+
+ให้ treat มันเป็น cache ล้วน ๆ: ลบได้อย่างปลอดภัยเมื่อ disk เต็ม และ Go จะเติมกลับให้เองจาก `GOPROXY` (หรือ `direct`) ครั้งถัดไปที่มีอะไรต้องการ module version ที่หายไป
 
 ## Semantic import versioning
 
 Go บังคับใช้กฎที่เรียกว่า **semantic import versioning**: หาก module ออก v2 ขึ้นไป import path ต้องรวม major version suffix ด้วย
 
 ```bash
-# v1 — ไม่ต้องใช้ suffix
+# v1 — no suffix needed
 go get github.com/foo/bar@v1.2.3
 # import "github.com/foo/bar"
 
-# v2+ — /v2 suffix เป็นส่วนหนึ่งของ import path
+# v2+ — /v2 suffix is part of the import path
 go get github.com/foo/bar/v2@v2.0.0
 # import "github.com/foo/bar/v2"
 ```
 
 ซึ่งหมายความว่า major version สองเวอร์ชันของ module เดียวกันสามารถอยู่ร่วมกันใน binary เดียวได้โดยไม่ขัดแย้ง การเปลี่ยน import path เป็นเจตนา: v2 API อนุญาตให้ไม่เข้ากันกับ v1
 
+## Version ถูกเลือกอย่างไร
+
+export const mvsDiagram = `flowchart TD
+  A["your go.mod requires foo v1.2.0"] --> D["minimal version selection"]
+  B["dependency X requires foo v1.4.0"] --> D
+  C["dependency Y requires foo v1.1.0"] --> D
+  D --> E["build uses foo v1.4.0 — the maximum requested, never a newer 'latest'"]
+  E --> F{"exclude foo v1.4.0?"}
+  F -->|yes| G["MVS picks the next-highest requested version instead"]
+  F -->|no| H["go.sum records and verifies v1.4.0's checksum"]`;
+
+<Mermaid code={mvsDiagram} title="minimal version selection เลือก version สูงสุดที่มีอะไรใน graph ขอจริง" />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
-|---------|---------|------|
+|---|---|---|
 | `go.mod` (explicit versioning) | reproducible build, dependency ชัดเจน | ต้อง update เมื่อ dependency เปลี่ยน — `go mod tidy` บ่อยๆ |
-| semantic versioning | backward compatibility contract ชัดเจน | major version bump ทำ import path เปลี่ยน — migration cost |
+| Minimal version selection | resolution deterministic reproducible — ไม่มี upgrade แปลกใจ | ต้อง `go get -u` เองเสมอถึงจะเดินหน้า ไม่เกิดเองโดยปริยาย |
+| `go work` สำหรับ local multi-module dev | ไม่มีบรรทัด `replace` ให้ต้องจำไปลบก่อน publish | ไฟล์อีกไฟล์ที่ต้องดูแลให้อยู่นอก version control และ sync กับทีม |
+| Tool directive | tool version ถูก track ใน go.mod ไม่ต้องมี boilerplate ของ `tools.go` | ต้องการ Go 1.24+ tooling ที่ contributor รู้จัก |
 | `go.sum` (hash verification) | ป้องกัน supply chain attack, verify integrity | ต้อง commit `go.sum` ด้วย — หลายคนลืม |
 | `go mod vendor` | air-gapped build ได้, ไม่ต้องพึ่ง network | `vendor/` directory ใหญ่, ต้อง sync ทุก dependency update |
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **`go get` เหมือน `npm install`** — `go get` update `go.mod` และ download source ไม่ install binary แยก ต่างจาก npm มาก
+- **`go get` เหมือน `npm install`** — `go get` update `go.mod` และ download source ไม่ install binary แยก ต่างจาก npm มาก ใช้ `go install pkg@version` สำหรับกรณีนั้น
 - **สามารถ ignore `go.sum`** — `go.sum` ต้อง commit ร่วมกับ `go.mod` เพื่อ verify dependency integrity — ถ้าขาด build อาจไม่ reproducible
 - **`replace` directive ห้ามใช้ใน production เด็ดขาด** — `replace` ใน `go.mod` ของ main module ใช้ได้ (เช่น fork ที่ดูแลเอง) แต่ไม่มีผลกับผู้ที่ import module ของคุณ — `go.mod` ของ dependent มองไม่เห็น `replace` ของคุณ
 - **`GOPATH/pkg/mod` เป็น module cache ถาวร** — `go clean -modcache` ล้าง cache ได้ — ไม่ใช่ permanent storage ควร treat เป็น cache
+- **Go เลือก version "ล่าสุด" ของทุก dependency ให้อัตโนมัติ** — minimal version selection เลือก version *ต่ำสุด* ที่ตอบสนอง requirement ทุกตัวใน graph ไม่ใช่ตัวใหม่สุดที่มีอยู่ — upgrade เกิดขึ้นแบบ explicit เท่านั้น
+- **ไฟล์ `tools.go` ที่มี blank import ยังเป็นวิธี pin tool version** — ตั้งแต่ Go 1.24 `go get -tool` และ `tool` directive ใน `go.mod` ทำแบบนี้ได้เองในตัว ไม่ต้องใช้ build-tag trick อีกแล้ว
 
 > 💡 ตัวอย่างจากของจริง
 >
@@ -141,6 +322,22 @@ go get github.com/foo/bar/v2@v2.0.0
 <Callout title="module คือกลุ่มของ packages ที่มี version ร่วมกัน">
 คิดว่า module คือหน่วยของการแจกจ่ายและ versioning ส่วน package คือหน่วยของการ compile module หนึ่งประกอบด้วยหลาย packages เมื่อคุณรัน `go get` คุณกำลังเพิ่ม module (และ packages ทั้งหมดข้างในพร้อมใช้งาน) เมื่อคุณเขียน `import` คุณกำลัง import package path เฉพาะภายใน module สองแนวคิดนี้มีความเกี่ยวข้องกันอย่างใกล้ชิดแต่แตกต่างกัน
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+ความผิดพลาดเรื่อง module และ dependency แทบไม่แสดงเป็น compile error — มันแสดงเป็น "ที่เครื่องฉันมันทำงาน" หรือ security surprise เช็กเรื่องพวกนี้:
+
+- CLI developer tool (linter, code generator) ถูก install ด้วย `go get` ในขั้นตอน setup ของ application code แทนที่จะเป็น `go install pkg@version` หรือ `tool` directive หรือเปล่า? นั่นเพิ่มมันเป็น dependency จริงของ module คุณแบบเงียบ ๆ
+- `replace` directive ใน `go.mod` ของ library ชี้ไปที่ local path (`../something`) หรือ fork ที่ไม่ได้ publish หรือเปล่า? นั่นทำให้ build พังสำหรับ consumer ทุกคนทันทีที่พวกเขา build นอก checkout ที่ผู้เขียนใช้พอดี — `replace` ใน library ที่ publish แล้วคือสัญญาณเตือน ไม่ใช่ความสะดวกส่วนตัว
+- `GOFLAGS=-insecure` หรือ `GONOSUMCHECK`/`GOSUMDB=off` ถูกตั้งแบบ global ใน script หรือ CI config "เพื่อให้ build ทำงาน" แทนที่จะจำกัด exception ไว้เฉพาะ private module path ด้วย `GOPRIVATE` หรือเปล่า?
+- documentation setup ที่ generate มายังอธิบายไฟล์ `tools.go` ที่มี blank import แบบ `//go:build tools` อยู่หรือเปล่า ทั้งที่ `go.mod` ของโปรเจกต์ประกาศ `go 1.24` ขึ้นไปแล้วและใช้ `tool` directive แทนได้?
+- `go.work` ถูก commit ลง version control ใน repository ของ library หรือเปล่า? มันมีไว้สำหรับ local multi-module development ส่วนตัว การ commit มันอาจ redirect build ของทีมไปที่ local path ที่ไม่มีอยู่จริงบนเครื่องพวกเขาแบบเงียบ ๆ
+
+<SpotTheBug lang="bash" code={`# setup.sh — generated project bootstrap script
+go get golang.org/x/tools/cmd/stringer@latest
+go get github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`}>
+ทั้งสองตัวนี้เป็น developer *tool* ไม่ใช่ package ที่โค้ดของโปรเจกต์เอง import — แต่ `go get` เพิ่มแต่ละตัวเป็น dependency จริงใน block `require` ของ `go.mod` อยู่ดี เพราะนั่นคือสิ่งที่ `go get` มีไว้ทำ `go mod tidy` และ CI build ของทุกคนในทีมตอนนี้ดาวน์โหลดและ track `stringer` กับ `golangci-lint` ราวกับว่า application depend บนมันตอน runtime วิธีแก้คือ `go install golang.org/x/tools/cmd/stringer@latest` และ `go install .../golangci-lint@latest` (ซึ่ง install binary ลง `$GOBIN` โดยไม่แตะ `go.mod` เลย) หรือถ้าทีมอยากให้ version ถูก pin และแชร์ผ่าน git — `go get -tool golang.org/x/tools/cmd/stringer@latest` ซึ่งใช้ `tool` directive ที่สร้างมาเพื่อกรณีนี้เป๊ะ ๆ
+</SpotTheBug>
 
 export const quizModules = [
   {
@@ -151,17 +348,30 @@ export const quizModules = [
       "go mod init <module-path>",
       "go create module"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go mod init <module-path> สร้างไฟล์ go.mod พร้อม module path ที่ระบุและ version ของ toolchain ปัจจุบันในบรรทัด go"
   },
   {
-    q: "วัตถุประสงค์ของ go.sum คืออะไร?",
+    q: "```text\n$ go mod graph\nyourmodule github.com/foo/bar@v1.2.0\nyourmodule github.com/baz/qux@v2.0.0\ngithub.com/baz/qux@v2.0.0 github.com/foo/bar@v1.5.0\n```\nminimal version selection ใส่ version ไหนของ github.com/foo/bar ใน build?",
     options: [
-      "แสดงรายการเฉพาะ direct dependencies ของ module",
-      "เก็บ cryptographic checksums เพื่อรับประกัน reproducibility และตรวจจับการแก้ไข",
-      "เป็นไฟล์ cache ที่ optional และลบได้อย่างปลอดภัย",
-      "แทนที่ go.mod ใน Go 1.27+"
+      "v1.2.0 เพราะเป็น direct requirement ของ module คุณเอง",
+      "v1.5.0 เพราะเป็น version สูงสุดที่มีอะไรบางอย่างใน graph ขอ",
+      "version ล่าสุดที่ publish ไว้ ไม่ว่า requirement เหล่านี้จะเป็นอะไร",
+      "build fail เพราะมีการขอสอง version ที่ต่างกัน"
     ],
-    answer: 1
+    answer: 1,
+    explain: "MVS เลือก version สูงสุดที่ถูกขอที่ไหนก็ตามใน dependency graph สำหรับแต่ละ module — ที่นี่ direct requirement ของคุณ (v1.2.0) ต่ำกว่าที่ baz/qux ต้องการ (v1.5.0) จึงเลือก v1.5.0 มันไม่มีทางกระโดดไป 'ล่าสุด' ที่ไม่มีใครขอจริง"
+  },
+  {
+    q: "library ที่คุณ publish มีสิ่งนี้ใน go.mod:\n```\nreplace github.com/foo/bar => ../local-fork-of-bar\n```\nจะเกิดอะไรขึ้นเมื่อคนอื่น import library ของคุณ?",
+    options: [
+      "build ของเขาก็ใช้ ../local-fork-of-bar เหมือนกัน",
+      "build ของเขา fail ทันทีเพราะ path นั้นไม่มีอยู่จริงสำหรับเขา",
+      "build ของเขา resolve github.com/foo/bar ตามปกติ — replace directive ใน go.mod ของคุณมีผลแค่กับ build ของ module คุณเองเท่านั้น ไม่ใช่ consumer ปลายทาง",
+      "Go แปลง relative path ให้เป็น absolute อัตโนมัติที่ใช้ได้ทุกที่"
+    ],
+    answer: 2,
+    explain: "replace directive อยู่ในขอบเขตของ module ที่ประกาศมันเท่านั้น — มันไม่ได้เป็นส่วนหนึ่งของ module graph ที่ build ของ consumer ปลายทาง resolve นี่คือเหตุผลที่ replace ที่ชี้ไป local path ที่ไม่ได้ publish ใน library ที่ publish แล้วเป็น bug: มันไม่ทำอะไรให้ consumer เลย จึงไม่ใช่กลไกที่ทำให้ build ของพวกเขาทำงาน (หรือพัง) ได้จริง"
   },
   {
     q: "go mod tidy ทำอะไร?",
@@ -171,7 +381,19 @@ export const quizModules = [
       "เพิ่ม require entries ที่ขาดหายและลบที่ไม่ได้ใช้ จากนั้นอัปเดต go.sum",
       "จัดรูปแบบไฟล์ go.mod"
     ],
-    answer: 2
+    answer: 2,
+    explain: "go mod tidy ปรับ go.mod/go.sum ให้ตรงกับสิ่งที่ source code ของคุณ import จริง — มันไม่ bump dependency ไป version ใหม่กว่าเองโดยอัตโนมัติ (go get -u ทำแบบนั้น)"
+  },
+  {
+    q: "```bash\ngo get golang.org/x/tools/cmd/stringer@latest\n```\nsetup script ใช้บรรทัดนี้เพื่อ install tool stringer สำหรับ code generation ผิดตรงไหน และวิธีแก้แบบ Go 1.24+ คืออะไร?",
+    options: [
+      "ไม่มีอะไรผิด — นี่คือวิธีที่ถูกต้องในการ install CLI tool",
+      "มันเพิ่ม stringer เป็น dependency จริงใน block require ของ go.mod แทนที่จะ install binary เดี่ยว ๆ ใช้ go install stringer@latest แทน หรือ go get -tool ถ้าอยาก track version ใน git",
+      "@latest เป็น syntax ที่ไม่ถูกต้องสำหรับ go get",
+      "ต้อง build stringer จาก source เองด้วยมือ go get ดึง tool ไม่ได้เลย"
+    ],
+    answer: 1,
+    explain: "go get จัดการ dependency graph ของ module คุณเอง developer tool ที่โค้ดคุณไม่ได้ import ควรถูกดึงด้วย go install (ไม่แก้ go.mod) หรือ track ด้วย go get -tool / tool directive (Go 1.24+) ถ้าทีมอยาก pin version ไว้ใน git โดยไม่ต้องใช้ trick blank-import ของ tools.go แบบเก่า"
   },
   {
     q: "module ออก v2.0.0 พร้อม breaking changes import path ต้องเปลี่ยนอย่างไร?",
@@ -181,7 +403,8 @@ export const quizModules = [
       "ต้องเปลี่ยนชื่อ module ทั้งหมด",
       "เพิ่ม replace directive ใน go.mod"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Semantic import versioning ต้องการ major version อยู่ใน import path เองสำหรับ v2 ขึ้นไป ซึ่งนี่คือสิ่งที่ทำให้ major version ที่เข้ากันไม่ได้สองตัวของ module เดียวกันอยู่ร่วมกันใน build เดียวได้"
   }
 ];
 

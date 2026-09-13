@@ -1,14 +1,16 @@
 ---
 title: 'Packages & Imports'
-description: 'package main, func main, single and grouped imports, exported vs unexported identifiers, and the standard library.'
+description: 'package main, func main, initialization order, import aliases, internal packages, and go.mod.'
 sidebar:
-  order: 2
+  order: 5
 ---
 
 import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The package declaration
 
@@ -78,20 +80,94 @@ func helper() {}
 
 This applies to functions, types, variables, constants, struct fields, and interface methods alike.
 
-## The standard library
+## Program initialization order
 
-Go ships with a rich standard library. A few packages you will use constantly:
+Before `main` runs, Go initializes the whole program in a strict, well-defined order — understanding it explains why a package-level variable can safely refer to another one, and where to put setup code that has to run before anything else:
 
-| Package | Purpose |
-|---------|---------|
-| `fmt` | Formatted I/O: `Println`, `Printf`, `Sprintf`, `Errorf` |
-| `strings` | String manipulation: `Contains`, `Split`, `ToUpper`, `TrimSpace` |
-| `strconv` | String ↔ number conversions: `Itoa`, `Atoi`, `FormatFloat` |
-| `errors` | Error creation: `errors.New`, `errors.Is`, `errors.As` |
-| `sort` | Sorting slices and custom types |
-| `math` | Math functions: `math.Abs`, `math.Sqrt`, `math.Pi` |
-| `time` | Time values, durations, and formatting |
-| `os` | OS interface: file I/O, environment variables, command-line args |
+1. **Imported packages first.** If your package imports another, that package is fully initialized — its own variables and `init` functions run to completion — before your package's initialization begins. This happens recursively, following the import graph.
+2. **Package-level variables next, in dependency order.** Go figures out which variables depend on which (by reading the initializer expressions) and initializes them so every dependency is ready before the variable that needs it — not necessarily in the order they're written in the file.
+3. **`init` functions last, in the order they appear.** A single file can declare more than one `func init()`, and a package can spread `init` functions across multiple files; they all run, in the order the compiler encounters them (file order, then declaration order within a file), after every package-level variable is initialized.
+4. **`main` runs last of all**, and only in `package main`.
+
+<Mermaid code={packagesInitDiagram} title="Initialization order: imported packages, then this package's vars, then its init funcs, then main" />
+
+export const packagesInitDiagram = `flowchart TB
+  subgraph Imported["Each imported package (recursively, dependency order)"]
+    IV["its package-level vars"] --> II["its init() funcs"]
+  end
+  Imported --> V["this package's vars, in dependency order"]
+  V --> I["this package's init() funcs, in file/declaration order"]
+  I --> Main["main()"]`;
+
+```go
+var base = 10
+var derived = base * 2 // base is guaranteed initialized first
+
+func init() {
+    fmt.Println("init #1: derived =", derived)
+}
+
+func init() {
+    fmt.Println("init #2: a file can have more than one init()")
+}
+```
+
+## Import aliases and dot imports
+
+An import can be given a local name, which is useful when two imported packages would otherwise share the same default name, or when you simply want a shorter one:
+
+```go
+import (
+    f "fmt"
+)
+
+f.Println("aliased import")
+```
+
+A **dot import** — `import . "strings"` — pulls every exported identifier from that package directly into the current file's scope, so you call `ToUpper(...)` instead of `strings.ToUpper(...)`. It compiles and runs fine, but it is almost never used in production code: it makes it impossible to tell, just by reading a call site, which package an identifier came from, and it silently risks colliding with names already in scope. The one place it shows up legitimately is in some test files, to make table-driven assertions read closer to plain English.
+
+## `internal/` packages
+
+Any package whose import path contains a directory literally named `internal` is only importable by code inside the module rooted at the parent of that `internal` directory. This is enforced by the compiler, not a convention:
+
+```text
+main.go:5:2: use of internal package internaldemo/internal/secret not allowed
+```
+
+That real error appears the moment code *outside* the `internaldemo` module tries to import `internaldemo/internal/secret` — even though the package is otherwise a normal, exported-identifier-having Go package. Code inside the same module tree can import it freely. Library authors use `internal/` to share code between their own packages without it becoming part of their public API.
+
+## Package name vs. import path
+
+The name you use to refer to a package in code is its **package name** — the identifier after the `package` keyword in its source files — which is not always the last element of its **import path**. `math/rand/v2` is the clearest example: its import path ends in `/v2` (a *major version suffix*, part of Go's module versioning convention for breaking changes), but every file in it still says `package rand`, so you write `rand.IntN(...)`, not `v2.IntN(...)`:
+
+```go
+import "math/rand/v2"
+
+rand.IntN(100) // the package is called rand, not v2
+```
+
+A few standard library packages have a newer, generics-based sibling worth knowing about when reading code of any age:
+
+| Older package | Newer replacement | Why |
+|---|---|---|
+| `math/rand` | `math/rand/v2` | Better default algorithm, cleaner API (`IntN` instead of `Intn`), no need to seed for good randomness |
+| `sort` | `slices` (Go 1.21) | Generic `slices.Sort`, `slices.SortFunc` — no `sort.Interface` boilerplate |
+
+## Circular imports
+
+Go's import graph must be acyclic: if package `a` imports package `b`, package `b` cannot import package `a`, directly or through any chain of other packages. The compiler rejects it outright:
+
+```text
+package circdemo/a
+        imports circdemo/b from a.go
+        imports circdemo/a from b.go: import cycle not allowed
+```
+
+The standard fix is to break the cycle by extracting the shared pieces both packages need into a third, lower-level package that both of the originals import — or, if the dependency is only in one direction conceptually, to have the higher-level package define an interface that the lower-level one implements, removing the need for the lower-level package to import anything from the higher one at all.
+
+## `go.mod` in one paragraph
+
+Every module has a `go.mod` file at its root, declaring the module's import path (`module example.com/myapp`), its dependencies with pinned versions, and a `go` directive (`go 1.27`) that records the minimum language version the module requires. That `go` directive is more than documentation: the compiler reads it to decide which language semantics apply to *that module's own code* — most notably, it is what gates the Go 1.22 per-iteration loop-variable change discussed in Functions, so code in a module still declaring `go 1.21` keeps the pre-1.22 shared-loop-variable behavior, even when built with a much newer Go toolchain.
 
 export const packagesCode = `package main
 
@@ -129,26 +205,96 @@ func main() {
 
 <Playground code={packagesCode} />
 
+The second playground demonstrates initialization order, an import alias, a dot import, and a package whose name differs from its import path.
+
+export const packagesDepthCode = `package main
+
+import (
+\tf "fmt"
+\t. "strings"
+\t"math/rand/v2"
+)
+
+// Package-level variables initialize first, in dependency order.
+var base = 10
+var derived = base * 2 // depends on base, so base is guaranteed ready first
+
+func init() {
+\tf.Println("init #1: derived =", derived)
+}
+
+func init() {
+\tf.Println("init #2: a file can have more than one init()")
+}
+
+func main() {
+\tf.Println("main: base =", base, "derived =", derived)
+
+\t// f is an import alias for fmt.
+\tf.Println("aliased import works:", ToUpper("dot import too")) // ToUpper comes from the dot-imported strings package
+
+\t// math/rand/v2's import path ends in /v2, but its package name is rand.
+\tf.Println("rand.IntN(1) =", rand.IntN(1))
+}`;
+
+<Playground code={packagesDepthCode} />
+
+## The standard library
+
+Go ships with a rich standard library. A few packages you will use constantly:
+
+| Package | Purpose |
+|---------|---------|
+| `fmt` | Formatted I/O: `Println`, `Printf`, `Sprintf`, `Errorf` |
+| `strings` | String manipulation: `Contains`, `Split`, `ToUpper`, `TrimSpace` |
+| `strconv` | String ↔ number conversions: `Itoa`, `Atoi`, `FormatFloat` |
+| `errors` | Error creation: `errors.New`, `errors.Is`, `errors.As` |
+| `sort` | Sorting slices and custom types |
+| `math` | Math functions: `math.Abs`, `math.Sqrt`, `math.Pi` |
+| `time` | Time values, durations, and formatting |
+| `os` | OS interface: file I/O, environment variables, command-line args |
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
 |---------------|---------|------|
 | Uppercase = exported | Visibility rule is simple — no `public`/`private` keyword needed | You must rename an identifier to change its visibility |
 | Unused import = compile error | No dead imports lingering in the codebase | You must remove every unused import (`goimports` helps) |
-| `init()` function | Setup happens automatically | Hidden side effects that are hard to debug and test |
-| Module system (`go.mod`) | Reproducible builds, explicit dependencies | Steeper learning curve than the old GOPATH model |
+| `init()` function | Setup happens automatically, in a well-defined order | Hidden side effects that are hard to debug and test |
+| `internal/` packages | Share code across your own packages without exposing it publicly | Anything under `internal/` cannot be imported by other modules, even if you later want it to be |
+| Module system (`go.mod`) | Reproducible builds, explicit dependencies, per-module language semantics | Steeper learning curve than the old GOPATH model |
 
 ## Common Misconceptions
 
 - **"Circular imports work in test files."** Go does not allow circular imports, whether in production code or test files.
 - **"`import _` only works with database drivers."** It works with any package whose `init()` you want to run — for example, registering a codec, plugin, or HTTP handler.
 - **"A Go module is just a package manager like npm."** A Go module manages versioning and reproducible builds at the whole-module level, not just for a single package.
+- **"A package's name always matches the last segment of its import path."** `math/rand/v2` is `package rand`; the `/v2` is a version suffix in the path, not part of the name.
+- **"`internal/` is just a naming convention, like a leading underscore."** It is enforced by the compiler — importing an internal package from outside its module tree is a compile error, not a lint warning.
 
 > 💡 Real-world example
 >
 > `database/sql` uses a blank import so a driver such as `github.com/lib/pq` can register itself via `init()`, which calls `sql.Register("postgres", ...)`.
 >
 > `net/http/pprof` uses the same mechanism — `import _ "net/http/pprof"` registers debug handlers under `/debug/pprof/` via `init()`, without calling anything from the package directly.
+
+## Reading AI-generated code
+
+Generated code that declares packages, imports, or `init` functions tends to hide these issues:
+
+- Does an `init()` function do something that would be clearer, safer, or more testable as an explicit function called from `main`? Not every `init()` earns its implicitness.
+- Does a package-level variable's initializer call a function with side effects (a network call, reading a file)? That runs before `main` even starts, with no way to handle an error from it.
+- Is a dot import (`import . "pkg"`) used outside of a test file? It hides where identifiers come from and risks silent name collisions.
+- Does an import path ending in `/v2` (or higher) get referred to as `v2.Something` in code, instead of the package's real name?
+- Does the code try to import something under an `internal/` directory from outside that module? That is a compile error, not a runtime surprise — but generated code sometimes assumes internal helpers are reusable across projects.
+
+<SpotTheBug code={`import "math/rand/v2"
+
+func main() {
+	fmt.Println(v2.IntN(100))
+}`}>
+The import path `math/rand/v2` ends in `/v2`, but the package's actual name — declared with `package rand` in its own source — is `rand`, not `v2`. The real compiler error is `undefined: v2`. The fix is to refer to it by its real name: `rand.IntN(100)`. The `/v2` suffix in the import path is Go's module-versioning convention for a breaking change to the same logical package; it is not part of the identifier you use in code.
+</SpotTheBug>
 
 <Callout title="Capitalization controls visibility">
 An identifier that starts with an **uppercase** letter (`Add`, `Client`, `MaxRetries`) is exported and accessible from other packages. A **lowercase** identifier (`add`, `client`, `maxRetries`) is package-private. The compiler enforces this — there is no `public` or `private` keyword. When you design a package, deliberately choose which identifiers to capitalize; unexported identifiers are free to change without breaking callers.
@@ -163,7 +309,8 @@ export const quizPackages = [
       "package main",
       "package binary"
     ],
-    answer: 2
+    answer: 2,
+    explain: "package main, combined with a func main(), is the only combination the Go toolchain will build into an executable rather than a library."
   },
   {
     q: "What does an identifier starting with a lowercase letter mean in Go?",
@@ -173,17 +320,19 @@ export const quizPackages = [
       "It is a pointer type",
       "It is deprecated"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Visibility in Go is purely about the first letter's case — lowercase means the identifier cannot be referenced from any other package."
   },
   {
-    q: "When would you use a blank import `import _ \"pkg\"`?",
+    q: "In what order does Go initialize a program before main runs?",
     options: [
-      "When you want to import a package but rename it to nothing",
-      "To silence a linter warning about an unused package",
-      "To import a package solely for its side effects such as registering a driver",
-      "To import all exported identifiers into the current namespace"
+      "main first, then package variables, then init functions",
+      "init functions first, then package variables, then imported packages",
+      "Imported packages fully initialize, then this package's variables (dependency order), then its init functions",
+      "All init functions across every package run first, then every variable"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Initialization follows the import graph outward-in: every imported package finishes first, then this package's own variables in dependency order, then its init functions, and only then main."
   },
   {
     q: "Which of the following is the idiomatic Go style when importing multiple packages?",
@@ -193,7 +342,30 @@ export const quizPackages = [
       "A comma-separated list: import \"fmt\", \"strings\"",
       "Import order does not matter; gofmt handles it"
     ],
-    answer: 1
+    answer: 1,
+    explain: "gofmt itself groups and sorts a parenthesized import block; a single grouped block is the idiomatic form once you have more than one import."
+  },
+  {
+    q: "```go\nimport \"math/rand/v2\"\n\nfunc main() {\n    fmt.Println(v2.IntN(100))\n}\n```\nDoes this compile?",
+    options: [
+      "Yes — v2 is the package's name",
+      "No — undefined: v2",
+      "Yes, but it always panics at runtime",
+      "No — cannot import a versioned path directly"
+    ],
+    answer: 1,
+    explain: "The import path's /v2 suffix is a version marker, not the package name. The package itself declares package rand, so the correct call is rand.IntN(100).",
+  },
+  {
+    q: "A package outside module `internaldemo` tries `import \"internaldemo/internal/secret\"`. What happens?",
+    options: [
+      "It compiles, but the identifiers inside are all unexported",
+      "It compiles only if the importing code also sets GOPRIVATE",
+      "It fails to compile: use of internal package ... not allowed",
+      "It compiles, but only functions (not variables) are visible"
+    ],
+    answer: 2,
+    explain: "internal/ visibility is enforced by the compiler for any package path containing an internal segment — code outside the module rooted at internal's parent cannot import it, full stop."
   }
 ];
 
