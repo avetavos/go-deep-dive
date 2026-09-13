@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Three foundational patterns
 
@@ -27,6 +29,43 @@ Pipelines are ideal for stream processing where each transformation is independe
 ## Fan-out / fan-in
 
 **Fan-out** starts multiple goroutines that read from the same input channel, parallelising work. **Fan-in** merges multiple output channels into one for the consumer to read. Together they implement a parallel processing stage inside a pipeline.
+
+### merge: a real fan-in implementation
+
+`merge` below is the canonical fan-in: it takes any number of input channels and returns one channel carrying every value from all of them.
+
+```go
+func merge(cs ...<-chan int) <-chan int {
+	out := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(len(cs))
+	for _, c := range cs {
+		go func(c <-chan int) {
+			defer wg.Done()
+			for v := range c {
+				out <- v
+			}
+		}(c)
+	}
+	// A single dedicated goroutine waits for every input goroutine to finish,
+	// then closes out exactly once.
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
+}
+```
+
+Two details make this correct where a naive version breaks: `wg.Add(len(cs))` happens once, before any goroutine starts, so `wg.Wait()` can never observe a counter of zero prematurely; and only the dedicated closer goroutine ever calls `close(out)`, exactly once, after confirming every input goroutine has returned. The Channels lesson's Reading AI-generated code section shows the classic broken variant — every input goroutine calling `close(out)` itself — and the real `panic: send on closed channel` and `WARNING: DATA RACE` output that produces.
+
+export const fanInDiagram = `flowchart LR
+  C1["chan 1"] --> M["merge"]
+  C2["chan 2"] --> M
+  C3["chan 3"] --> M
+  M --> Out["out (closed once, by a dedicated goroutine, after wg.Wait())"]`;
+
+<Mermaid code={fanInDiagram} title="Fan-in: every input channel gets its own forwarding goroutine, but only one goroutine ever closes the merged output" />
 
 ## Worker pool
 
@@ -127,6 +166,248 @@ func main() {
 
 The `wg` here counts *workers*, not jobs: `Add(numWorkers)` runs once before the workers start, and each worker calls `Done()` exactly once — when its `for j := range jobs` loop exits because `jobs` was closed. That is what makes a separate `go func() { wg.Wait(); close(results) }()` necessary: something has to wait for every worker to finish and then close `results`, and it cannot be `main` itself, because `main` is busy draining `results` with `for r := range results` at the same time. On Go 1.25+ each worker's `wg.Add`/`go`/`defer wg.Done()` triple could instead be written as `wg.Go(func() { ... })`; the playground keeps the classic `Add`/`Done` form because its in-browser runner predates that method. Because three workers race to write into `results`, the values arrive in whatever order the scheduler happens to finish them — the code sorts before printing so the output is deterministic despite that.
 
+## A cancellable pipeline
+
+The plain `generate` → `square` pipeline above has no way to stop early — if the consumer walks away, both stages keep running (and leak, per the Goroutines lesson) forever. Giving every stage a `context.Context` and a `select` on `ctx.Done()` fixes that: each stage stops producing the moment the context is cancelled, instead of only when its input closes.
+
+```go
+func generate(ctx context.Context, nums ...int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for _, n := range nums {
+			select {
+			case out <- n:
+			case <-ctx.Done():
+				return // stop producing once the consumer gives up
+			}
+		}
+	}()
+	return out
+}
+
+func square(ctx context.Context, in <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for n := range in {
+			select {
+			case out <- n * n:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
+}
+```
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+squares := square(ctx, generate(ctx, 1, 2, 3, 4, 5))
+
+var got []int
+for v := range squares {
+	got = append(got, v)
+	if len(got) == 2 {
+		cancel() // stop the pipeline after exactly 2 values, deterministically
+		break
+	}
+}
+fmt.Println(got) // [1 4] -- always exactly these two, cancel fires at a fixed point
+```
+
+Every stage's own `select` is what makes cancellation propagate upstream: `square` stops receiving from `generate`'s output the moment `ctx` is done, which in turn means `generate`'s blocked `out <- n` send also unblocks via its own `ctx.Done()` case instead of blocking forever on a channel nobody is reading anymore.
+
+## Bounded parallelism
+
+A buffered channel used purely as a counting semaphore — introduced in the Channels lesson — caps how many goroutines run their critical section at once, independent of how many goroutines were launched in total:
+
+```go
+const n = 6
+const limit = 2 // at most 2 tasks run at once
+
+sem := make(chan struct{}, limit)
+results := make([]int, n) // pre-sized: every goroutine owns a distinct index
+var wg sync.WaitGroup
+
+for i := 0; i < n; i++ {
+	wg.Add(1)
+	go func(i int) {
+		defer wg.Done()
+		sem <- struct{}{}        // acquire a permit
+		defer func() { <-sem }() // release it on the way out
+
+		results[i] = i * i // each goroutine writes a different index -- no overlap, no race
+	}(i)
+}
+wg.Wait()
+fmt.Println(results) // [0 1 4 9 16 25], always in this order despite concurrent writes
+```
+
+### Why the indexed writes are not a race
+
+All 6 goroutines write into the *same* `results` slice concurrently, with no mutex around `results[i] = i * i` — and this is correctly race-free, not accidentally so. A data race requires two goroutines to access the *same memory location* with at least one write and no synchronization. Here, `results` is allocated once with `make([]int, n)` before any goroutine starts, so its backing array and length never change, and every goroutine writes to a different index — `results[i]` for a distinct `i` each time. Different indices are different memory locations; there is no overlapping access for the race detector to find. This is exactly the same reasoning behind the worker pool's `results[id-1] = ...` pattern used elsewhere in this course, and it is why `go run -race` reports nothing for this snippet.
+
+The `errgroup.SetLimit` method from the Sync Primitives lesson expresses the same bound declaratively — `g.SetLimit(limit)` instead of a hand-sized channel — and is usually the better choice in real code; the raw semaphore channel is worth knowing because it is what `SetLimit` does internally, and because it needs no external module.
+
+## Graceful shutdown
+
+A production HTTP server needs to stop accepting new connections and finish in-flight requests before the process exits — not drop connections mid-response the instant a deploy sends `SIGTERM`. `signal.NotifyContext` turns an OS signal into a `context.Context`, and `http.Server.Shutdown` does the actual graceful stop:
+
+```go
+func main() {
+	srv := &http.Server{Handler: mux}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+
+	<-ctx.Done() // blocks until SIGINT/SIGTERM, then stop() lets the next signal kill it
+	stop()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Println("forced shutdown:", err)
+	}
+}
+```
+
+`srv.Shutdown` stops the listener immediately, then waits (up to the context's deadline) for every in-flight handler to return on its own before returning itself; `ListenAndServe` unblocks with exactly `http.ErrServerClosed`, which is the expected, non-error outcome of a deliberate shutdown, not a failure to log. A separate deterministic version of this — listening on an OS-assigned port and shutting down via a plain `cancel()` instead of waiting for a real OS signal — verified locally with `go run -race`:
+
+```text
+server shut down cleanly
+Serve returned: true
+```
+
+(`true` here is `errors.Is(err, http.ErrServerClosed)`, confirming `Serve` returned because of the shutdown, not a real error.) This variant needs a real TCP listener, so it does not run in this page's browser-based Playground.
+
+The three patterns that don't need a real network connection — fan-in, the cancellable pipeline, and bounded parallelism — are combined in the runnable snippet below.
+
+export const patternsAdvancedCode = `package main
+
+import (
+\t"context"
+\t"fmt"
+\t"sort"
+\t"sync"
+)
+
+// --- Fan-in: merge ---
+
+func merge(cs ...<-chan int) <-chan int {
+\tout := make(chan int)
+\tvar wg sync.WaitGroup
+\twg.Add(len(cs))
+\tfor _, c := range cs {
+\t\tgo func(c <-chan int) {
+\t\t\tdefer wg.Done()
+\t\t\tfor v := range c {
+\t\t\t\tout <- v
+\t\t\t}
+\t\t}(c)
+\t}
+\tgo func() {
+\t\twg.Wait()
+\t\tclose(out)
+\t}()
+\treturn out
+}
+
+func gen(vals ...int) <-chan int {
+\tout := make(chan int, len(vals))
+\tfor _, v := range vals {
+\t\tout <- v
+\t}
+\tclose(out)
+\treturn out
+}
+
+// --- Cancellable pipeline ---
+
+func generate(ctx context.Context, nums ...int) <-chan int {
+\tout := make(chan int)
+\tgo func() {
+\t\tdefer close(out)
+\t\tfor _, n := range nums {
+\t\t\tselect {
+\t\t\tcase out <- n:
+\t\t\tcase <-ctx.Done():
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}()
+\treturn out
+}
+
+func square(ctx context.Context, in <-chan int) <-chan int {
+\tout := make(chan int)
+\tgo func() {
+\t\tdefer close(out)
+\t\tfor n := range in {
+\t\t\tselect {
+\t\t\tcase out <- n * n:
+\t\t\tcase <-ctx.Done():
+\t\t\t\treturn
+\t\t\t}
+\t\t}
+\t}()
+\treturn out
+}
+
+func main() {
+\t// Fan-in
+\tmerged := merge(gen(1, 2, 3), gen(4, 5), gen(6))
+\tvar got []int
+\tfor v := range merged {
+\t\tgot = append(got, v)
+\t}
+\tsort.Ints(got) // merge order is nondeterministic; sort for a stable print
+\tfmt.Println("merged:", got)
+
+\t// Cancellable pipeline
+\tctx, cancel := context.WithCancel(context.Background())
+\tdefer cancel()
+\tsquares := square(ctx, generate(ctx, 1, 2, 3, 4, 5))
+\tvar squared []int
+\tfor v := range squares {
+\t\tsquared = append(squared, v)
+\t\tif len(squared) == 2 {
+\t\t\tcancel() // stop after exactly 2 values, deterministically
+\t\t\tbreak
+\t\t}
+\t}
+\tfmt.Println("squared before cancel:", squared)
+
+\t// Bounded parallelism: indexed writes to a pre-sized slice are not a race
+\tconst n = 6
+\tconst limit = 2
+\tsem := make(chan struct{}, limit)
+\tresults := make([]int, n)
+\tvar wg sync.WaitGroup
+\tfor i := 0; i < n; i++ {
+\t\twg.Add(1)
+\t\tgo func(i int) {
+\t\t\tdefer wg.Done()
+\t\t\tsem <- struct{}{}
+\t\t\tdefer func() { <-sem }()
+\t\t\tresults[i] = i * i
+\t\t}(i)
+\t}
+\twg.Wait()
+\tfmt.Println("bounded results:", results)
+}`;
+
+<Playground code={patternsAdvancedCode} />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -146,6 +427,56 @@ The `wg` here counts *workers*, not jobs: `Add(numWorkers)` runs once before the
 >
 > **k8s.io/client-go** uses this same worker-queue pattern as the core of its controller framework, in `util/workqueue/queue.go` — multiple workers pull from the same queue to bound concurrent reconciliation.
 
+## Reading AI-generated code
+
+When a generated snippet combines these patterns, check for these before trusting it:
+
+- In a fan-in `merge`, does every input goroutine call `close(out)` itself, or does exactly one dedicated goroutine call it once, after a `wg.Wait()`?
+- Does every stage of a pipeline that should be cancellable actually `select` on `ctx.Done()` around its channel send — or does it only check `ctx.Err()` once at the top, missing a cancellation that arrives mid-loop?
+- Is the number of concurrently running goroutines actually bounded by a semaphore, worker pool, or `errgroup.SetLimit` — or does "bounded parallelism" in a comment not match unbounded `go` statements in the code?
+- Does a graceful-shutdown handler call `srv.Shutdown(ctx)` with a real timeout, or does it call `os.Exit` immediately on receiving the signal, dropping in-flight requests?
+- If multiple goroutines write into a shared slice by index, are the indices actually guaranteed disjoint (no two goroutines can ever compute the same index), or could two of them collide and turn a "safe" indexed write into a real race?
+
+<SpotTheBug code={`func worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for j := range jobs {
+		out <- j * 2
+	}
+	close(out) // called once per worker, but out is shared by all of them
+}
+
+func main() {
+	jobs := make(chan int, 3)
+	out := make(chan int, 3)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go worker(jobs, out, &wg)
+	}
+	jobs <- 1
+	jobs <- 2
+	jobs <- 3
+	close(jobs)
+	wg.Wait()
+	for v := range out {
+		fmt.Println(v)
+	}
+}`}>
+This is the same shared-channel-close bug as the Channels lesson's fan-in `merge`, wearing a worker-pool costume: `out` is shared by all 3 workers, but each one calls `close(out)` when its own `for j := range jobs` loop ends. The first worker to finish closes `out`; the next worker that also finishes calls `close(out)` again and panics — captured real output on Go 1.26.5 (`out` here is buffered, so a worker usually finishes its sends before racing on the close, but the exact failure varies by run):
+
+```text
+panic: close of closed channel
+
+goroutine 5 [running]:
+main.worker(0xc000020120, 0xc0000201b0, 0xc000012180)
+	/tmp/workerclosebug/main.go:13 +0xb0
+created by main.main in goroutine 1
+	/tmp/workerclosebug/main.go:22 +0x80
+```
+
+`go run -race` on a separate run of the identical program instead caught a `WARNING: DATA RACE` between one worker's send and another's close — same root cause, different symptom depending on scheduling. The fix is the same one used throughout this lesson: nobody inside the worker closes `out` — a single `go func() { wg.Wait(); close(out) }()` after launching the workers does it exactly once, as the runnable worker-pool example above does.
+</SpotTheBug>
+
 <Callout title="Gotcha: goroutine leaks when nobody drains a channel">
 If a goroutine is blocked sending to a channel and the receiver exits without draining it, the goroutine is **leaked** — it lives forever in the runtime, wasting memory and a goroutine slot. The fix is always to ensure either: (a) the channel is buffered large enough to accept all sends, (b) a receiver always drains the channel to `close`, or (c) the sender also selects on `ctx.Done()` so it can exit when the work is abandoned. In production, run `go tool pprof` on the goroutine profile to detect leaks.
 </Callout>
@@ -159,7 +490,8 @@ export const quizPatterns = [
       "The fixed number of worker goroutines launched before the jobs are sent",
       "sync.WaitGroup's internal counter"
     ],
-    answer: 2
+    answer: 2,
+    explain: "The pool size is however many worker goroutines you launched up front -- the jobs channel just feeds them, and every worker keeps pulling from it until it closes, regardless of how many jobs are queued behind it."
   },
   {
     q: "In the pipeline pattern, what makes the stages run concurrently?",
@@ -169,7 +501,8 @@ export const quizPatterns = [
       "The pipeline function is called with go pipeline()",
       "Channels automatically parallelise work when read from"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Each stage function launches its own goroutine internally and returns a channel immediately -- the caller composes stages by feeding one stage's output channel into the next stage's input, and all of them run concurrently by construction."
   },
   {
     q: "What is fan-out in the context of Go concurrency?",
@@ -179,7 +512,8 @@ export const quizPatterns = [
       "Broadcasting the same value to multiple channels using a single send",
       "Using select with multiple send cases"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Fan-out means multiple goroutines competing to read from the same channel, so work is automatically distributed across them -- the channel itself guarantees each value goes to exactly one reader."
   },
   {
     q: "A goroutine is blocked on `out <- result` and the consumer has already returned. What is this called and how do you prevent it?",
@@ -189,7 +523,30 @@ export const quizPatterns = [
       "A goroutine leak — prevent by using context cancellation or ensuring the consumer always drains the channel",
       "A stack overflow — use a buffered channel sized to 1"
     ],
-    answer: 2
+    answer: 2,
+    explain: "The sender is stuck forever with nothing that will ever receive -- that is a leak, not a whole-program deadlock (other goroutines may still be running fine). Giving the sender a ctx.Done() case, or guaranteeing the consumer always drains to close, are the two standard fixes."
+  },
+  {
+    q: "```go\nfunc worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {\n    defer wg.Done()\n    for j := range jobs {\n        out <- j * 2\n    }\n    close(out)\n}\n```\nThree of these workers share the same out channel. What goes wrong?",
+    options: [
+      "Nothing -- close is idempotent, so multiple calls are harmless",
+      "Every worker's close(out) races with the others, and the second one to run panics with \"close of closed channel\"",
+      "The workers deadlock because out is never buffered",
+      "The program fails to compile because chan<- cannot be closed"
+    ],
+    answer: 1,
+    explain: "close is not idempotent, and out is shared: the first worker to finish closes it successfully, and any other worker that also finishes and calls close(out) again panics -- exactly the bug the fan-in merge in this lesson is careful to avoid with a single dedicated closer goroutine."
+  },
+  {
+    q: "```go\nresults := make([]int, 6)\nvar wg sync.WaitGroup\nfor i := 0; i < 6; i++ {\n    wg.Add(1)\n    go func(i int) {\n        defer wg.Done()\n        results[i] = i * i\n    }(i)\n}\nwg.Wait()\n```\nWhy does `go run -race` report no race here, despite 6 goroutines writing to the same slice concurrently?",
+    options: [
+      "go run -race does not check slice writes, only map writes",
+      "Each goroutine writes to a different index -- different memory locations, so there is no overlapping access",
+      "sync.WaitGroup automatically serializes all writes to shared memory",
+      "Slices are safe for concurrent writes by design, unlike maps"
+    ],
+    answer: 1,
+    explain: "A data race requires two goroutines touching the same memory location with at least one write. results is allocated once before any goroutine starts, and every goroutine writes results[i] for its own distinct i -- disjoint locations, so nothing overlaps, race or no synchronization needed."
   }
 ];
 

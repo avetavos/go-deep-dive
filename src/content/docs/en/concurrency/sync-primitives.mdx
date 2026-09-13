@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## When channels are not enough
 
@@ -29,11 +31,121 @@ mu.Unlock()
 
 Always use `defer mu.Unlock()` immediately after `mu.Lock()` so the lock is released even if the function panics or returns early.
 
+## Copying a mutex
+
+A `sync.Mutex` (and anything that embeds one) must never be copied after it is first used — a copy has its own independent lock state, so code that thinks it is locking the original is actually locking a lock nobody else looks at. This happens more easily than it sounds, because Go copies on assignment, on `range`, and on every plain function call:
+
+```go
+type Counter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func main() {
+	counters := []Counter{{}, {}, {}}
+	for _, c := range counters { // c is a copy of each Counter, including its mutex
+		c.mu.Lock()
+		c.n++
+		c.mu.Unlock()
+	}
+}
+```
+
+`go vet` catches exactly this on Go 1.26.5:
+
+```text
+main.go:12:9: range var c copies lock: command-line-arguments.Counter contains sync.Mutex
+```
+
+The fix is always to range by index or pointer instead — `for i := range counters { counters[i].mu.Lock() ... }` — so every iteration locks the one shared mutex rather than a fresh copy of it. The Methods lesson covers the same trap for a value-receiver method on a mutex-holding struct; this is the loop-shaped version of the identical bug.
+
+## The memory model and happens-before
+
+The Go memory model defines exactly when a write in one goroutine is guaranteed to be visible to a read in another — and, critically, an ordinary variable read or write that is not connected to the other goroutine by a mutex, channel, or atomic operation has **no such guarantee**, even if the write "obviously" happens first in wall-clock time. The compiler and CPU are both free to reorder or cache plain memory accesses as long as the single goroutine that issued them still sees a consistent result; nothing forces that result to become visible to any other goroutine on any particular schedule.
+
+This is exactly why the race detector treats a plain boolean flag used for signalling as a bug, even when the program "seems to work" in casual testing:
+
+```go
+done := false
+go func() {
+	time.Sleep(10 * time.Millisecond)
+	done = true // plain write, no synchronization
+}()
+for !done { // plain read, no synchronization
+}
+fmt.Println("done")
+```
+
+```text
+WARNING: DATA RACE
+Write at 0x00c00019c03f by goroutine 7:
+  main.main.func1()
+      /tmp/boolflag/main.go:12 +0x38
+
+Previous read at 0x00c00019c03f by main goroutine:
+  main.main()
+      /tmp/boolflag/main.go:14 +0xa0
+...
+Found 1 data race(s)
+```
+
+Both the read and the write compile and, on most machines, most of the time, appear to work — which is precisely the danger. A `sync.Mutex`, a channel operation, or a `sync/atomic` type all establish a real happens-before edge; a bare `bool`, `int`, or pointer read/write never does, no matter how it looks in the source.
+
 ## sync.RWMutex
 
 `sync.RWMutex` is an optimized variant for the read-heavy case. Multiple goroutines can hold a **read lock** simultaneously with `RLock/RUnlock`. A **write lock** (`Lock/Unlock`) is exclusive — it waits for all readers to finish, then blocks new readers until the writer is done.
 
 Use it when reads are far more frequent than writes (e.g., an in-memory cache).
+
+export const rwLockDiagram = `flowchart LR
+  Unlocked --> ReadLocked["read-locked (N readers)"]
+  Unlocked --> WriteLocked["write-locked (1 writer)"]
+  ReadLocked -->|"another RLock()"| ReadLocked
+  ReadLocked -->|"last RUnlock(), no writer waiting"| Unlocked
+  WriteLocked -->|Unlock| Unlocked
+  ReadLocked -.->|"Lock() called: writer queues and blocks"| WriterWaiting["writer waiting"]
+  WriterWaiting -.->|"all current readers RUnlock"| WriteLocked
+  WriterWaiting -.->|"new RLock() while writer waits: blocks too"| WriterWaiting`;
+
+<Mermaid code={rwLockDiagram} title="RWMutex favors a waiting writer: once Lock() is queued, even a new RLock() from an existing reader blocks until the writer has run" />
+
+### The recursive-RLock deadlock
+
+Go's `RWMutex` gives a **waiting writer priority**: once a goroutine calls `Lock()`, every *new* `RLock()` call — even one made by a goroutine that already holds a read lock elsewhere — blocks until that writer has acquired and released the lock. This makes recursive read-locking from the same goroutine genuinely dangerous, not just wasteful:
+
+```go
+var mu sync.RWMutex
+
+mu.RLock()
+fmt.Println("main: acquired first RLock")
+
+go func() {
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock() // queues behind main's held RLock, and blocks new readers
+	defer mu.Unlock()
+}()
+
+time.Sleep(100 * time.Millisecond) // let the writer start waiting
+mu.RLock() // blocks forever -- a writer is already queued
+```
+
+```text
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [sync.RWMutex.RLock]:
+sync.(*RWMutex).RLock(0xc000120018)
+	/tmp/rwrecursive/main.go:25 +0x50
+main.main()
+	/tmp/rwrecursive/main.go:25 +0x154
+
+goroutine 19 [sync.RWMutex.Lock]:
+sync.(*RWMutex).Lock(0xc000120018)
+	/tmp/rwrecursive/main.go:18 +0x78
+main.main.func1()
+	/tmp/rwrecursive/main.go:18 +0x8c
+```
+
+The goroutine holding the first `RLock` is waiting for its own second `RLock` to succeed; the writer it is queued behind cannot proceed until the first `RLock` is released; and nothing ever releases it. Never call `RLock` a second time on the same `RWMutex` from a goroutine that might already hold one — including indirectly, through a function call several layers deep.
 
 ## sync.Once
 
@@ -50,6 +162,19 @@ func getConfig() *Config {
     return instance
 }
 ```
+
+### sync.OnceValue and friends
+
+The `once.Do` pattern above needs a package-level variable to hold the result and a closure to capture it. Since Go 1.21, `sync.OnceValue` collapses both into a single call: it takes a function and returns a new function that runs the original exactly once and caches its return value, safe for any number of concurrent callers:
+
+```go
+var loadConfig = sync.OnceValue(func() string {
+	fmt.Println("loading config...") // printed exactly once, however many callers there are
+	return "config-data"
+})
+```
+
+`sync.OnceFunc` is the equivalent for a function with no return value, and `sync.OnceValues` handles a function that returns two values (typically a value and an error). All three also propagate a panic: if the wrapped function panics on its one real call, every subsequent call to the returned function panics with that same value instead of silently returning a zero value.
 
 ## sync/atomic
 
@@ -78,6 +203,64 @@ Reach for `wg.Go` in new code — it cannot get the `Add` placement wrong — an
 | Transferring ownership of data | Protecting a shared cache or struct |
 | Coordinating goroutine lifecycles | Managing a simple counter or flag |
 | Pipelines and fan-out patterns | Read-heavy data with sync.RWMutex |
+
+## sync.Map
+
+`sync.Map` is a specialized map safe for concurrent use without a separate `Mutex` — but the standard library documentation is explicit that most code should still use a plain `map` with its own lock, for better type safety and easier-to-maintain invariants. `sync.Map` earns its keep in exactly two shapes of workload: (1) a key is written once and then read many times, as in a cache that only grows, or (2) many goroutines each read, write, and overwrite a *disjoint* set of keys, so they rarely contend with each other. Outside those two patterns, a `map` protected by a `sync.RWMutex` is usually simpler to reason about and just as fast.
+
+```go
+var cache sync.Map
+cache.Store("key", 42)
+v, ok := cache.Load("key")
+cache.Range(func(k, v any) bool {
+	// called for each entry; return false to stop early
+	return true
+})
+```
+
+Like a mutex, a `sync.Map` must never be copied after first use.
+
+## errgroup.SetLimit
+
+The `sync.WaitGroup` + shared-error-variable pattern for running goroutines and collecting the first error is common enough that `golang.org/x/sync/errgroup` packages it up: `g.Go(func() error { ... })` starts a goroutine, and `g.Wait()` returns the first non-nil error any of them returned (cancelling a group `Context`, if you created one with `errgroup.WithContext`, so sibling goroutines can stop early too). Since Go 1.20's `errgroup`, `SetLimit(n)` bounds how many of those goroutines run at once — the same problem as the Goroutines lesson's "unbounded spawning," solved declaratively instead of with a hand-rolled semaphore channel:
+
+```go
+var g errgroup.Group
+g.SetLimit(2) // at most 2 goroutines run at once
+
+for _, url := range urls {
+	url := url
+	g.Go(func() error {
+		return fetch(url) // returns an error; SetLimit still applies
+	})
+}
+
+if err := g.Wait(); err != nil {
+	log.Fatal(err)
+}
+```
+
+`errgroup` is not in the standard library — it lives in the `golang.org/x/sync` module, so it needs a `go get golang.org/x/sync/errgroup` and cannot run in this page's browser-based Playground, but it is the idiomatic choice in real Go services whenever "bounded parallel work, first error wins" is the shape of the problem.
+
+## Lock scope
+
+A lock should be held for the shortest span that keeps the protected data consistent — never across an I/O call, a channel send or receive, or any other operation that might block for a while. Holding a mutex across a slow operation turns every other goroutine that needs the same lock into a queue behind that one slow call, even though none of them touch the same I/O:
+
+```go
+// Bad: the lock is held across a network call
+mu.Lock()
+defer mu.Unlock()
+resp, err := http.Get(url) // every other locker waits for the network here too
+cache[url] = resp
+
+// Better: only the map access needs the lock
+resp, err := http.Get(url)
+mu.Lock()
+cache[url] = resp
+mu.Unlock()
+```
+
+The same reasoning applies to holding a lock while sending on a channel: if the receiver is slow or the channel is full, the lock stays held for exactly as long as the send blocks, even though sending has nothing to do with what the lock protects.
 
 export const syncCode = `package main
 
@@ -141,6 +324,59 @@ func main() {
 
 <Playground code={syncCode} />
 
+The second runnable snippet below covers `sync.OnceValue` and `sync.Map` from earlier in this lesson.
+
+export const syncMapOnceCode = `package main
+
+import (
+\t"fmt"
+\t"sort"
+\t"sync"
+)
+
+// loadConfig computes its value at most once, no matter how many goroutines
+// call it concurrently -- sync.OnceValue handles the locking internally.
+var loadConfig = sync.OnceValue(func() string {
+\tfmt.Println("loading config...") // printed exactly once
+\treturn "config-data"
+})
+
+func main() {
+\tvar wg sync.WaitGroup
+\tfor i := 0; i < 3; i++ {
+\t\twg.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg.Done()
+\t\t\t_ = loadConfig()
+\t\t}()
+\t}
+\twg.Wait()
+\tfmt.Println(loadConfig())
+
+\t// sync.Map: safe for concurrent use without a separate Mutex, best suited
+\t// to the write-once-read-many or disjoint-keys access patterns.
+\tvar cache sync.Map
+\tvar wg2 sync.WaitGroup
+\tfor i := 0; i < 5; i++ {
+\t\twg2.Add(1)
+\t\tgo func(i int) {
+\t\t\tdefer wg2.Done()
+\t\t\tcache.Store(fmt.Sprintf("key%d", i), i*i)
+\t\t}(i)
+\t}
+\twg2.Wait()
+
+\tvar entries []string
+\tcache.Range(func(k, v any) bool {
+\t\tentries = append(entries, fmt.Sprintf("%s=%v", k, v))
+\t\treturn true
+\t})
+\tsort.Strings(entries) // Range order is unspecified, so sort for a stable print
+\tfmt.Println(entries)
+}`;
+
+<Playground code={syncMapOnceCode} />
+
 ## Trade-offs
 
 | What you get | Benefit | Cost |
@@ -162,6 +398,38 @@ func main() {
 >
 > **Prometheus client_golang** increments its counter metric lock-free with `atomic.AddUint64` in `prometheus/counter.go` — a hot path called on every metric update, so it avoids lock contention with an atomic instead of a mutex.
 
+## Reading AI-generated code
+
+When a generated snippet uses a lock or another sync primitive, check for these before trusting it:
+
+- Is a struct containing a `sync.Mutex`, `sync.RWMutex`, or `sync.WaitGroup` ever copied — by `range`, by assignment, by being passed or returned by value, or by a value-receiver method?
+- Does a goroutine call `RLock` a second time while it might already hold one — directly, or through a function call several layers deep? That deadlocks the moment any goroutine is waiting on `Lock`.
+- Is a plain `bool`, `int`, or pointer used as a signal between goroutines instead of a channel, mutex, or `sync/atomic` type? It compiles, often "works" in testing, and has no happens-before guarantee at all.
+- Is a lock held across a network call, a channel operation, or any other call that might block — instead of being released before that call and reacquired only for the shared-state access?
+- Would `sync.Map` be a better fit here than a `map` guarded by a `Mutex`, or is it being reached for out of habit on a workload that is not write-once-read-many or disjoint-keys?
+
+<SpotTheBug code={`type Counter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func main() {
+	counters := []Counter{{}, {}, {}}
+	for _, c := range counters {
+		c.mu.Lock()
+		c.n++
+		c.mu.Unlock()
+	}
+}`}>
+`range` copies each element into `c` on every iteration — including its `sync.Mutex` — so every `Lock`/`Unlock` pair in the loop operates on a throwaway copy of the mutex, and `c.n++` never touches the real `Counter` in the slice at all. `go vet` catches it on Go 1.26.5:
+
+```text
+main.go:12:9: range var c copies lock: command-line-arguments.Counter contains sync.Mutex
+```
+
+The fix is to index instead of copying: `for i := range counters { counters[i].mu.Lock(); counters[i].n++; counters[i].mu.Unlock() }`, or range over `*Counter` if the slice holds pointers to begin with.
+</SpotTheBug>
+
 <Callout title="Data races: find them with go run -race">
 A data race occurs when two goroutines access the same variable concurrently and at least one access is a write, with no synchronization between them. The result is undefined behaviour. Go ships a built-in race detector: run `go run -race main.go` or `go test -race ./...` to instrument your binary. The detector adds roughly 2–20x runtime overhead and is not suitable for production, but it is mandatory in CI. Mutexes, channels, and atomics all eliminate races.
 </Callout>
@@ -175,7 +443,8 @@ export const quizSync = [
       "Mutex is deprecated in favour of RWMutex",
       "RWMutex requires a separate unlock call for each lock call"
     ],
-    answer: 0
+    answer: 0,
+    explain: "RWMutex splits locking into a shared RLock (many readers at once) and an exclusive Lock (one writer, no readers) — plain Mutex has only one kind of lock, held by exactly one goroutine at a time."
   },
   {
     q: "How many times will the function passed to sync.Once.Do execute, even if 100 goroutines call Do?",
@@ -185,7 +454,8 @@ export const quizSync = [
       "Exactly once",
       "Zero times — Do is lazy and only runs on the first explicit call"
     ],
-    answer: 2
+    answer: 2,
+    explain: "sync.Once internally synchronizes all concurrent callers so that exactly one of them runs the function and every other caller blocks until that run completes, then returns without running it again."
   },
   {
     q: "When should you prefer sync/atomic over sync.Mutex for a shared integer counter?",
@@ -195,7 +465,8 @@ export const quizSync = [
       "Only when GOMAXPROCS equals 1",
       "When the counter is modified from more than 8 goroutines simultaneously"
     ],
-    answer: 1
+    answer: 1,
+    explain: "A single atomic add or load maps directly to a lock-free CPU instruction, which is cheaper than a mutex's lock/unlock pair. Once you need to update more than one related value together, a mutex (which protects a whole critical section) is the right tool again."
   },
   {
     q: "What does `go test -race` do?",
@@ -205,7 +476,30 @@ export const quizSync = [
       "Disables the GC during tests to catch memory leaks",
       "Runs tests multiple times in parallel to find flaky tests"
     ],
-    answer: 1
+    answer: 1,
+    explain: "The race detector instruments every memory access and synchronization event at compile time, then reports at runtime any pair of concurrent accesses to the same location where at least one is a write and there is no happens-before edge between them."
+  },
+  {
+    q: "```go\ntype Counter struct {\n    mu sync.Mutex\n    n  int\n}\n\nfunc main() {\n    counters := []Counter{{}, {}, {}}\n    for _, c := range counters {\n        c.mu.Lock()\n        c.n++\n        c.mu.Unlock()\n    }\n}\n```\nWhat does `go vet` report, and what actually happens to counters?",
+    options: [
+      "No vet warning; each Counter's n is incremented correctly",
+      "\"range var c copies lock\"; each iteration locks and increments a throwaway copy, so counters itself is never modified",
+      "A compile error: sync.Mutex cannot appear in a struct literal",
+      "\"range var c copies lock\"; the program panics at runtime on the first Lock call"
+    ],
+    answer: 1,
+    explain: "range copies each element into c, mutex included. Locking c.mu locks a copy that nothing else ever sees, and c.n++ increments that copy's field -- the original counters slice is left completely untouched, silently."
+  },
+  {
+    q: "A goroutine already holding an RLock on a sync.RWMutex calls RLock() again while a different goroutine is blocked in Lock(). What happens?",
+    options: [
+      "The second RLock succeeds immediately -- RWMutex allows unlimited concurrent readers",
+      "The second RLock blocks forever: RWMutex gives the waiting writer priority, so no new reader (even a recursive one) can proceed until the writer runs",
+      "The waiting Lock() call is cancelled to let the recursive RLock through",
+      "A panic is raised: \"recursive RLock not allowed\""
+    ],
+    answer: 1,
+    explain: "Once a writer is queued, RWMutex blocks every subsequent RLock to guarantee the writer isn't starved -- including one from a goroutine that already holds a read lock. Since that same goroutine is the one that would eventually RUnlock and let the writer through, it deadlocks against itself."
   }
 ];
 

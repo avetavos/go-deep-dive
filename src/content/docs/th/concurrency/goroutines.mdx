@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Goroutine คืออะไร?
 
@@ -37,6 +39,33 @@ Scheduler ทำงานบนสามแนวคิด:
 | **P** | Processor — scheduling context (มี GOMAXPROCS ตัว) |
 
 แต่ละ P มี run queue ของ Gs M ต้องถือ P ถึงจะรัน G ได้ เมื่อ goroutine block บน network I/O, netpoller จะ park goroutine นั้นไว้และ M ยังถือ P ต่อไป แต่เมื่อ goroutine block ใน *system call* (file I/O, cgo), M จะส่งต่อ P ให้ thread อื่นเพื่อให้ goroutine อื่นทำงานต่อได้
+
+## Work Stealing และ Async Preemption
+
+เมื่อ run queue ของ P ตัวหนึ่งว่างเปล่า มันจะไม่นั่งรอเฉย ๆ — มันจะ **steal** ครึ่งหนึ่งของ Gs จาก run queue ของ P ตัวอื่น วิธีนี้ทำให้ทุก core ยุ่งอยู่เสมอแม้งานจะกระจายไม่เท่ากันระหว่าง goroutine โดยไม่ต้องมีการประสานงานจากโค้ดของคุณเลย
+
+Work stealing จะช่วยได้ก็ต่อเมื่อ G เปิดโอกาสให้ scheduler ย้ายมันได้บ้าง ก่อน Go 1.14 goroutine จะ yield แค่ที่จุดเฉพาะเจาะจงเท่านั้น — function call, channel operation, allocation — ดังนั้น loop แน่นที่ไม่มีจุดเหล่านั้นเลย (`for { x++ }`) สามารถยึด P ของมันไว้ตลอดไป ทำให้ goroutine อื่นที่ถูก assign ไปที่ P เดียวกันอดตาย Go 1.14 เพิ่ม **asynchronous preemption**: runtime ส่ง signal (`SIGURG` บน Unix) เป็นระยะไปยัง thread ที่รัน goroutine ที่ถือ P ของมันนานเกินไป (ประมาณ 10ms) และ signal handler จะบังคับให้ goroutine นั้น yield ที่ safe point แม้จะอยู่กลาง loop ก็ตาม นี่คือเหตุผลที่ CPU-bound loop ที่ไม่มี function call เลยไม่สามารถล็อกส่วนที่เหลือของโปรแกรมได้อีกต่อไป เหมือนที่เคยเกิดขึ้นได้บน Go 1.13 และเก่ากว่า
+
+## GOMAXPROCS vs NumCPU
+
+สองตัวนี้สับสนกันง่าย แต่ตอบคำถามคนละอย่าง:
+
+| | `runtime.NumCPU()` | `runtime.GOMAXPROCS(0)` |
+|---|---|---|
+| **ตอบคำถาม** | OS รายงาน logical CPU กี่ตัวสำหรับ process นี้? | มี P กี่ตัว — goroutine รัน Go code พร้อมกันได้กี่ตัวในเวลาเดียวกัน? |
+| **เปลี่ยนตอน runtime ได้ไหม?** | ไม่ได้ — อ่านครั้งเดียวตอน process เริ่ม | ได้ — `GOMAXPROCS(n)` ที่ `n >= 1` เปลี่ยนค่าทันที |
+| **ความสัมพันธ์ default** | — | ในอดีตเท่ากับ `NumCPU()`; ตั้งแต่ Go 1.25 ถูกจำกัดด้วย cgroup CPU quota ใน container ด้วย และตรวจซ้ำเป็นระยะ |
+| **ส่ง 0 เข้าไป** | ไม่เกี่ยวข้อง | return ค่าปัจจุบันโดยไม่เปลี่ยนแปลง — วิธี idiomatic ในการอ่านค่าเฉย ๆ |
+
+`runtime.GOMAXPROCS` จะไม่ตั้งค่าต่ำกว่า 2 เองเด็ดขาด (เว้นแต่เครื่องมี CPU ใช้งานได้น้อยกว่า 2 จริง ๆ) แม้อยู่ภายใต้ cgroup quota ที่จำกัดมาก — รายละเอียดที่ควรรู้ถ้า CPU limit ของ container เป็นเศษส่วนอย่าง 0.5
+
+สำหรับดู internal state ของ scheduler แบบสด ๆ ไม่ใช่แค่จำนวน P ให้รันโปรแกรมไหนก็ได้ด้วย `GODEBUG=schedtrace=1000` เพื่อพิมพ์ snapshot ของ scheduler ทุก 1000ms ไปที่ stderr:
+
+```text
+SCHED 0ms: gomaxprocs=11 idleprocs=8 threads=5 spinningthreads=1 needspinning=0 idlethreads=0 runqueue=0 [ 1 0 0 0 0 0 0 0 0 0 0 ] schedticks=[ 0 0 0 0 0 0 0 0 0 0 2 ]
+```
+
+(`gomaxprocs` ตรงนี้เป็น 11 เพราะ trace นี้จับมาจากเครื่อง 11 core — ตัวเลขจริงขึ้นอยู่กับเครื่องที่รันเสมอ) `runqueue` คือความยาวของ global run queue ส่วน list ในวงเล็บคือความยาว local run queue ของแต่ละ P ใช้เครื่องมือนี้เมื่อ goroutine ดูเหมือนค้างและต้องดูว่า scheduler ขาด P หรือแค่โค้ดมี logic bug
 
 ## รอด้วย sync.WaitGroup
 
@@ -95,6 +124,77 @@ func main() {
 
 <Playground code={goroutinesCode} />
 
+## Goroutine Leak
+
+**Goroutine leak** คือ goroutine ที่ยังมีชีวิตอยู่แต่ไม่มีทางไปต่อได้และไม่มีทาง exit เลย — มันหยุดค้างอยู่ตลอดไป ถือ stack ของมันและทุกอย่างที่มัน closure ไว้ ต่างจาก memory leak จาก allocation ที่ไม่มีการอ้างอิงถึง garbage collector ไม่สามารถปล่อยมันได้ เพราะ runtime เองยังถือ reference ที่ยังมีชีวิตอยู่ไปยังมัน สามสาเหตุนี้ครอบคลุม leak เกือบทั้งหมดในโค้ดจริง:
+
+1. **Block บน channel ที่ไม่มีคู่.** goroutine receive จาก (หรือ send เข้า) channel ที่ไม่มีใคร send เข้า (หรือ receive จาก) มันเลย — สาเหตุที่พบบ่อยที่สุด
+2. **Block บน lock ที่ไม่เคยถูกปล่อย.** goroutine เรียก `mu.Lock()` และ goroutine ที่ควรเรียก `Unlock()` panic, return ก่อนเวลา, หรือตัวมันเองก็รั่วไปแล้ว
+3. **Loop ที่ไม่มีเงื่อนไขออก.** `for` loop ที่ตั้งใจให้รัน "จนกว่าจะถูกยกเลิก" แต่ไม่เคยเช็ก `ctx.Done()` หรือ stop channel เลยสักรอบ
+
+โปรแกรมที่รันได้ด้านล่างคือสาเหตุ #1: ห้า goroutine แต่ละตัว receive จาก unbuffered channel ที่ไม่มีใคร send เข้าเลย
+
+```go
+func leaky() {
+	ch := make(chan int) // unbuffered, nobody ever sends
+	go func() {
+		<-ch // blocks forever: nothing ever sends on ch or closes it
+	}()
+}
+
+func main() {
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		leaky()
+	}
+	time.Sleep(50 * time.Millisecond) // let the leaked goroutines actually start
+	after := runtime.NumGoroutine()
+	fmt.Println("leaked goroutines:", after-before)
+}
+```
+
+```text
+leaked goroutines: 5
+```
+
+`runtime.NumGoroutine()` คือเครื่องมือตรวจ leak ที่ถูกที่สุด — table-driven test ที่ snapshot จำนวนก่อนและหลังเรียกโค้ดที่ทดสอบ แล้ว assert ว่ามันกลับมาที่ baseline จับ leak ส่วนใหญ่ได้ใน CI ก่อนที่จะไปถึง production ใน production, goroutine profile ของ `runtime/pprof` (หรือตั้งแต่ Go 1.27 คือ profile เฉพาะทาง `goroutineleak` ที่พูดถึงด้านล่าง) จะแสดงตำแหน่งที่ goroutine ที่ยังมีชีวิตอยู่ทุกตัว block อยู่พอดี
+
+## Panic ใน Goroutine เดียวฆ่าทั้ง Process
+
+`recover()` จับ panic ได้เฉพาะใน **goroutine เดียวกัน** ที่มันถูก defer ไว้เท่านั้น panic ใน goroutine ที่คุณเปิดด้วย `go f()` ไม่มีทางถูก recover โดย `defer`/`recover()` ใน `main` หรือ goroutine อื่นเลย — ถ้า goroutine นั้นไม่ recover panic ของตัวเอง ทั้ง process จะจบทันที พา goroutine อื่นทั้งหมดรวมถึง `main` ไปด้วย ไม่ว่าจะเหลืองานค้างอยู่แค่ไหน:
+
+```go
+func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("recovered:", r) // never reached
+		}
+	}()
+	go func() {
+		panic("boom")
+	}()
+	time.Sleep(100 * time.Millisecond)
+	fmt.Println("main finished normally") // never reached
+}
+```
+
+```text
+panic: boom
+
+goroutine 7 [running]:
+main.main.func2()
+	/tmp/goroutine-panic/main.go:15 +0x2c
+created by main.main in goroutine 1
+	/tmp/goroutine-panic/main.go:14 +0x40
+exit status 2
+```
+
+`defer`/`recover()` ใน `main` ไม่เคยรันเลย — runtime ไม่พยายามด้วยซ้ำ เพราะ recover ใช้ได้เฉพาะกับ goroutine ที่กำลัง unwind อยู่ตอนนั้นเท่านั้น goroutine ไหนก็ตามที่ panic ได้ต้อง recover panic ของตัวเองถ้าอยากให้โปรแกรมรอดชีวิต รูปแบบที่ใช้กันบ่อยคือ `defer func() { recover() }()` เล็ก ๆ ที่ต้นของทุก worker goroutine ที่มีอายุยืน โดย log ค่าที่ recover ได้แทนที่จะทิ้งไปเฉย ๆ
+
+## Unbounded Spawning
+
+`go handle(req)` ครั้งเดียวต่อ request ที่เข้ามาคือโมเดล concurrency ที่ง่ายที่สุดเท่าที่จะเป็นไปได้ และมันทำงานได้ดี — จนกว่าปริมาณ request จะพุ่งขึ้นและจำนวน goroutine ที่กำลังทำงานอยู่จะโตขึ้นโดยไม่มีเพดานเลย แต่ละตัวถือ stack, สิ่งที่มัน capture ไว้ และบ่อยครั้งคือ database connection หรือ file handle มากพอก็ทำให้ memory หรือ connection pool หมดก่อนที่ CPU จะกลายเป็นคอขวดด้วยซ้ำ วิธีแก้เสมอคือต้องมีเพดานว่ารันพร้อมกันได้กี่ตัว — worker pool ขนาดคงที่, buffered channel ที่ใช้เป็น semaphore (ดูบท Channels), หรือ `errgroup.SetLimit` (อยู่ในบท Sync Primitives) — แทนที่จะเชื่อว่า input จะเล็กตลอดไป
+
 ## Runtime ในปี 2026
 
 การเปลี่ยนแปลงของ runtime สามอย่างจาก Go 1.25–1.27 ที่มีผลกับโค้ด goroutine ในชีวิตประจำวัน:
@@ -133,6 +233,31 @@ Work stealing:
   P1 run queue ว่าง → steal G จาก P2 run queue
 ```
 
+export const gmpDiagram = `flowchart TD
+  subgraph Gs["Goroutines (G) -- thousands, cheap"]
+    G1["G"]
+    G2["G"]
+    G3["G"]
+    G4["G"]
+  end
+  subgraph Ps["Processors (P) -- GOMAXPROCS of these"]
+    P1["P1 run queue"]
+    P2["P2 run queue"]
+  end
+  subgraph Ms["OS threads (M)"]
+    M1["M1"]
+    M2["M2"]
+  end
+  G1 --> P1
+  G2 --> P1
+  G3 --> P2
+  G4 --> P2
+  P1 --> M1 --> CPU0["CPU core 0"]
+  P2 --> M2 --> CPU1["CPU core 1"]
+  P1 -.P1 idle: steal a G from P2.-> P2`;
+
+<Mermaid code={gmpDiagram} title="GMP model: goroutine เข้าคิวที่ P, P ต้องถูก M ถือไว้ถึงจะรันบน CPU core ได้ และ P ที่ว่างจะขโมยงานจาก P ที่ยุ่ง" />
+
 ## ข้อแลกเปลี่ยน
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
@@ -149,6 +274,50 @@ Work stealing:
 - **GOMAXPROCS มากขึ้น = เร็วขึ้นเสมอ** — I/O-bound workload ได้ประโยชน์น้อยกว่า CPU-bound
 - **goroutine leak ไม่เป็นปัญหา** — goroutine ที่ไม่มีทางออกคือ memory leak
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อโค้ดที่ AI สร้างมาเปิด goroutine ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- `wg.Add(1)` ถูกเรียก *ก่อน* `go` statement ใน calling goroutine จริงไหม — ไม่ใช่เป็นบรรทัดแรกข้างใน goroutine ใหม่?
+- ทุก goroutine มีทางออกจริงไหม: loop condition ที่จบลงในที่สุด, case `ctx.Done()`, หรือ channel ที่การันตีว่ามันจะ receive หรือ send แค่ครั้งเดียวแน่ ๆ?
+- ถ้า goroutine นี้ panic ได้ มีอะไรสมมติว่า `recover()` ที่อื่น (รวมถึง `main`) จะจับมันได้ไหม? มันจับไม่ได้ — panic ใน goroutine ที่ไม่ recover panic ของตัวเองจะฆ่าทั้ง process
+- จำนวน goroutine ที่เปิดถูกจำกัดด้วย worker pool, semaphore, หรือ `errgroup.SetLimit` ไหม — หรือมันโตไปตาม input ที่ไม่มีขอบเขตอย่างหนึ่งตัวต่อ request หรือหนึ่งตัวต่อบรรทัดของไฟล์?
+- `sync.WaitGroup` (หรือ struct ที่มีมันอยู่ข้างใน) ถูกส่งหรือ return โดยค่าแทนที่จะเป็น pointer หรือเปล่า?
+
+<SpotTheBug code={`func main() {
+	var wg sync.WaitGroup
+	results := make([]int, 5)
+	for i := 0; i < 5; i++ {
+		go func(id int) {
+			wg.Add(1) // BUG: Add happens inside the goroutine
+			defer wg.Done()
+			results[id] = id * id
+		}(i)
+	}
+	wg.Wait()
+	fmt.Println(results)
+}`}>
+`wg.Add(1)` ต้องรันใน calling goroutine ก่อนที่ `wg.Wait()` จะมีโอกาสเห็นมันได้ — ตรงนี้มันรันข้างใน goroutine ใหม่แต่ละตัวแทน ดังนั้น scheduler จึงมีสิทธิ์ไปถึง `wg.Wait()` ขณะที่ counter ยังเป็น `0` เพราะยังไม่มีตัวไหนในห้า goroutine เรียก `Add` เลย `Wait()` จึง return ทันที `main` อ่าน `results` ขณะที่บาง goroutine ยังเขียนอยู่ และ `go run -race` จับ race บน `results` ได้:
+
+```text
+WARNING: DATA RACE
+Read at 0x00c000140000 by main goroutine:
+  fmt.Println()
+      /opt/homebrew/Cellar/go/1.26.5/libexec/src/fmt/print.go:315 +0x1ec
+  main.main()
+      /tmp/wgaddbug/main.go:19 +0x88
+
+Previous write at 0x00c000140000 by goroutine 7:
+  main.main.func1()
+      /tmp/wgaddbug/main.go:15 +0x94
+...
+Found 1 data race(s)
+exit status 66
+```
+
+slice ที่ print ออกมาอาจมีค่าขาดหรือเป็น 0 หรือ race detector อาจรายงาน race มากกว่าหนึ่งจุด ขึ้นอยู่กับ scheduling ล้วน ๆ — ความไม่แน่นอนนี้เองคือตัวบอกใบ้ วิธีแก้คือกฎเดิมจากบท Goroutines: เรียก `wg.Add(1)` หนึ่งครั้งต่อรอบ loop ก่อน `go` statement
+</SpotTheBug>
+
 <Callout title="ข้อควรระวัง: goroutines ที่เริ่มใน main อาจไม่รันถ้า main return ก่อน">
 ถ้า `main` return ก่อนที่ goroutine จะมีโอกาสรัน goroutine นั้นจะถูกยกเลิกอย่างเงียบ ๆ Go runtime exit ทันทีที่ `main` goroutine return — ไม่รอ background goroutines ใช้ `sync.WaitGroup`, channel, หรือ synchronization mechanism อื่น ๆ เพื่อให้ `main` มีชีวิตนานพอให้ goroutines เสร็จสิ้น
 </Callout>
@@ -162,7 +331,8 @@ export const quizGoroutines = [
       "64 KB คงที่",
       "ขึ้นอยู่กับระบบปฏิบัติการ"
     ],
-    answer: 1
+    answer: 1,
+    explain: "Goroutine เริ่มเล็กมากแล้วขยาย stack ตามต้องการ (สูงสุด 1 GB โดย default) นี่คือเหตุผลที่โปรแกรมรัน goroutine ได้หลักแสนตัวในที่ที่ OS thread ตัวละ 1-8 MB ทำไม่ได้"
   },
   {
     q: "ต้องเรียก wg.Add(1) ที่ไหนสัมพันธ์กับ go statement?",
@@ -172,7 +342,8 @@ export const quizGoroutines = [
       "ก่อน go statement ใน calling goroutine",
       "หลัง wg.Wait()"
     ],
-    answer: 2
+    answer: 2,
+    explain: "ถ้า Add รันข้างใน goroutine scheduler มีสิทธิ์ไปถึง wg.Wait() ก่อนที่ goroutine นั้นจะเริ่มทำงานด้วยซ้ำ ทำให้ Wait เห็น counter เป็น 0 และ return ทั้งที่งานยังค้างอยู่"
   },
   {
     q: "เกิดอะไรขึ้นถ้า main return ขณะที่ goroutines ยังรันอยู่?",
@@ -182,7 +353,8 @@ export const quizGoroutines = [
       "Goroutines ทั้งหมดถูกยกเลิกทันที — process exit",
       "เกิด panic"
     ],
-    answer: 2
+    answer: 2,
+    explain: "Go ไม่มีแนวคิด background/daemon goroutine ที่อยู่รอดต่อจาก main ทันทีที่ main goroutine return process จะ exit และ goroutine อื่นทุกตัวถูกยกเลิก ไม่ว่าจะทำงานค้างอยู่แค่ไหน"
   },
   {
     q: "GOMAXPROCS ควบคุมอะไร?",
@@ -192,7 +364,30 @@ export const quizGoroutines = [
       "ขนาด stack สูงสุดของ goroutine",
       "จำนวน CPU cores ที่ OS กำหนดให้ process"
     ],
-    answer: 1
+    answer: 1,
+    explain: "GOMAXPROCS กำหนดจำนวน P — scheduling context ที่ทำให้ goroutine รัน Go code ได้จริง มันจำกัด parallelism ไม่ใช่จำนวน goroutine ทั้งหมดที่สร้างได้ ซึ่งไม่มีขอบเขตจนกว่าจะชน memory limit"
+  },
+  {
+    q: "```go\nfunc leaky() {\n    ch := make(chan int)\n    go func() {\n        <-ch\n    }()\n}\n\nfunc main() {\n    for i := 0; i < 5; i++ {\n        leaky()\n    }\n    time.Sleep(50 * time.Millisecond)\n    fmt.Println(runtime.NumGoroutine())\n}\n```\nเกิดอะไรขึ้นกับ 5 goroutine ที่เปิดข้างใน leaky?",
+    options: [
+      "แต่ละตัวรันจบเพราะ ch เป็น buffered โดย default",
+      "รั่วทั้งหมด — ch ไม่มี sender และไม่เคยถูก close ทำให้ทุก receive block ตลอดไป",
+      "โปรแกรม deadlock ทันทีด้วย fatal error",
+      "Go garbage collector ตรวจพบ goroutine ที่ unreachable แล้วหยุดมัน"
+    ],
+    answer: 1,
+    explain: "ch เป็น unbuffered และไม่มีใคร send เข้าไปหรือ close มันเลย ทำให้ทั้งห้า receive block ตลอดไป GC ไม่สามารถ reclaim goroutine ที่ยัง runnable/blocked ได้ — นี่คือสิ่งที่ทำให้มันเป็น leak ไม่ใช่แค่ allocation ที่ถูกปล่อย"
+  },
+  {
+    q: "```go\nfunc main() {\n    defer func() {\n        if r := recover(); r != nil {\n            fmt.Println(\"recovered:\", r)\n        }\n    }()\n    go func() { panic(\"boom\") }()\n    time.Sleep(100 * time.Millisecond)\n}\n```\ndeferred recover() ใน main จับ panic นี้ได้ไหม?",
+    options: [
+      "ได้ — recover() จับ panic ได้ทุกที่ในโปรแกรม",
+      "ไม่ได้ — recover จับ panic ได้เฉพาะ goroutine เดียวกันที่มันถูก defer ไว้เท่านั้น ทำให้ process crash",
+      "ได้ แต่เพราะ time.Sleep ให้เวลา scheduler ส่งต่อมันเท่านั้น",
+      "ไม่ได้ — โปรแกรม hang ตลอดไปแทนที่จะ crash"
+    ],
+    answer: 1,
+    explain: "recover() ผูกกับ goroutine ที่กำลัง panic อยู่เท่านั้น goroutine ที่ถูกเปิดไม่เคย recover panic ของตัวเอง ทำให้ runtime จบทั้ง process ด้วย fatal panic message — deferred recover ของ main ไม่ได้รันเลยด้วยซ้ำ"
   }
 ];
 

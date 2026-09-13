@@ -9,6 +9,8 @@ import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## โมเดล Concurrency ของ Go
 
@@ -24,6 +26,19 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 การออกแบบนี้ทำให้โปรแกรม concurrent เข้าใจง่ายขึ้น เมื่อข้อมูลไหลผ่าน channel ความเป็นเจ้าของ (ownership) ชัดเจน: sender เคยถือมันอยู่ ตอนนี้ receiver ถือแทน ไม่ต้องใช้ mutex สำหรับการส่งต่อนั้นเลย
 
+export const csModelDiagram = `flowchart LR
+  subgraph SharedMemory["Shared-memory style (most languages)"]
+    T1["Thread A"] -.Lock/Unlock.-> Mu["mutex"]
+    T2["Thread B"] -.Lock/Unlock.-> Mu
+    Mu --> Data["shared variable"]
+  end
+  subgraph CSP["Go's CSP style"]
+    G1["Goroutine A"] -->|send| Ch["channel"]
+    Ch -->|receive| G2["Goroutine B"]
+  end`;
+
+<Mermaid code={csModelDiagram} title="Shared memory ใต้ lock เทียบกับ CSP: channel ย้ายตัวข้อมูลไปเลย ทำให้ไม่มีอะไรเหลือให้ต้อง lock" />
+
 ## โมดูลนี้ครอบคลุมอะไรบ้าง
 
 | บทเรียน | หัวข้อ |
@@ -38,7 +53,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## โปรแกรม concurrent ตัวแรกของคุณ
 
-snippet ด้านล่างสร้าง goroutines 3 ตัวแบบขนาน แต่ละตัวเขียนผลลัพธ์ลงใน slice ที่จัดสรรไว้ล่วงหน้า indexed ตาม id ของตัวเอง ทำให้ผลลัพธ์เรียงลำดับเสมอ `sync.WaitGroup` บล็อก `main` จนกว่าทั้งสามตัวจะเสร็จสิ้น
+snippet ด้านล่างสร้าง goroutines 3 ตัวแบบขนาน แต่ละตัวเขียนผลลัพธ์ลงใน slice ที่จัดสรรไว้ล่วงหน้า indexed ตาม id ของตัวเอง ทำให้ผลลัพธ์เรียงลำดับเสมอ `sync.WaitGroup` บล็อก `main` จนกว่าทั้งสามตัวจะเสร็จสิ้น — บท Goroutines สอน `WaitGroup` เองแบบเจาะลึก (รวมถึงบัคคลาสสิกเรื่องตำแหน่ง `wg.Add`) หน้านี้แค่ต้องการมันเพื่อให้ `main` มีชีวิตอยู่นานพอที่จะเห็น output เท่านั้น
 
 export const indexCode = `package main
 
@@ -82,6 +97,36 @@ func main() {
 - **concurrent = parallel** — concurrent คือจัดการหลาย task พร้อมกัน, parallel คือรันพร้อมกันจริงบน multi-core
 - **channel เสมอดีกว่า mutex** — mutex เหมาะกับ simple shared state, channel เหมาะกับ data flow
 
+## อ่านโค้ดที่ AI เขียน
+
+ทุกบทในโมดูลนี้จบด้วย section แบบเจาะลึกของตัวเอง นี่คือเวอร์ชันภาพรวมที่ควรเช็กตั้งแต่แรกเห็น ก่อนจะลงลึกในรายละเอียดของ snippet ที่ generate มา:
+
+- `main` (หรือ goroutine ที่เรียก) รอ goroutine ทุกตัวที่มันเริ่มไหม — ด้วย `WaitGroup`, channel, หรือ return channel ที่ caller drain — หรือมันอาจ return ทั้งที่ goroutine ยังรันอยู่?
+- ทุก goroutine มีทางออกไหม และมีอะไรป้องกัน state ที่ goroutine มากกว่าหนึ่งตัวแตะไหม?
+- ถ้า snippet ถูกนำเสนอว่า deterministic ลำดับที่ print ออกมาถูกบังคับจริงไหม (sort แล้ว หรืออ่านกลับผ่าน indexed slice) หรือสองรอบที่รันอาจ print ลำดับต่างกันได้จริง ๆ?
+
+<SpotTheBug code={`func main() {
+	for i := 0; i < 3; i++ {
+		go func(id int) {
+			fmt.Println("goroutine", id, "says hello")
+		}(i)
+	}
+	fmt.Println("main exits")
+}`}>
+ไม่มีอะไรตรงนี้รอให้ทั้งสาม goroutine รันก่อนที่ `main` จะ return เลย Go runtime ไม่ได้เก็บ process ให้มีชีวิตอยู่เพื่อ background goroutine — ทันทีที่ `main` return process จะ exit ไม่ว่า goroutine ไหนจะถูก schedule ไปแล้วหรือยังก็ตาม output จริงที่จับได้จากสองรอบที่รันโปรแกรมเดียวกันเป๊ะนี้:
+
+```text
+main exits
+```
+
+```text
+main exits
+goroutine 0 says hello
+```
+
+ทั้งสองเป็นผลลัพธ์ที่ถูกต้องของ binary เดียวกัน — บางครั้งไม่มี goroutine ไหนได้รันเลย บางครั้งหนึ่งหรือสองตัวได้รัน ขึ้นอยู่กับ scheduling ล้วน ๆ วิธีแก้คือ `sync.WaitGroup` ที่ตัวอย่างที่รันได้ของหน้านี้เองใช้: `main` ต้องไม่ return จนกว่าจะยืนยันแล้วว่า goroutine ทุกตัวที่มันเริ่มเสร็จสิ้นแล้ว
+</SpotTheBug>
+
 <Callout title="จุดสำคัญ: ตัวแปร loop เป็นของแต่ละ iteration ตั้งแต่ Go 1.22">
 ตั้งแต่ Go 1.22 (สำหรับ module ที่ระบุ `go 1.22` ขึ้นไป) ทุก iteration ของ `for` loop มี `i` เป็นของตัวเอง `go func() { use(i) }()` จึง capture ค่าที่คุณคาดหวัง ก่อน 1.22 ตัวแปรถูกแชร์และ goroutine ทุกตัวอาจเห็นค่าสุดท้าย — นั่นคือเหตุผลที่โค้ดเก่าส่งค่าเข้าไปชัด ๆ แบบ `go func(id int) { ... }(i)` หรือ copy ด้วย `i := i` (copy ที่ตอนนี้ `go fix` ลบให้) การส่งค่าเป็น argument ยังใช้ได้ดีและทำให้เห็น dependency ชัด แค่รู้ไว้ว่า bug ที่มันเคยกันไว้หายไปแล้วบน Go 1.27
 </Callout>
@@ -95,7 +140,8 @@ export const quizIndex = [
       "หลีกเลี่ยง shared state ทั้งหมดโดยรัน goroutines ใน process แยกต่างหาก",
       "ใช้ sync.Map สำหรับทุก shared variable"
     ],
-    answer: 1
+    answer: 1,
+    explain: "channel send ส่งค่าจาก goroutine หนึ่งไปยังอีกตัวจริง ๆ — sender ไม่ใช้มันต่อหลังจากนั้น การส่งต่อแบบนี้แทนที่ความจำเป็นต้องมี lock รอบตัวแปรที่ goroutine ทั้งสองจะต้องแตะร่วมกัน"
   },
   {
     q: "GOMAXPROCS ควบคุมอะไร?",
@@ -105,7 +151,8 @@ export const quizIndex = [
       "จำนวน goroutines ที่รัน Go code พร้อมกันได้ในเวลาเดียวกัน — คือจำนวน Ps",
       "จำนวน CPU cores ที่ OS จองไว้ให้ process โดยเฉพาะ"
     ],
-    answer: 2
+    answer: 2,
+    explain: "GOMAXPROCS คือจำนวน P — scheduling context ที่ goroutine ต้องมีเพื่อรัน Go code ได้จริง มันจำกัด parallelism ไม่ใช่จำนวน goroutine ที่สร้างได้ (ซึ่งถูกจำกัดแค่โดย memory เท่านั้น)"
   },
   {
     q: "ทำไม `wg.Add(1)` ถึงต้องเรียกก่อน `go func()`?",
@@ -115,7 +162,30 @@ export const quizIndex = [
       "go func() บล็อกจนกว่า Add จะถูกเรียก",
       "sync.WaitGroup กำหนดให้ Add ต้องเรียกจาก main goroutine"
     ],
-    answer: 1
+    answer: 1,
+    explain: "wg.Wait() block แค่ตอน counter มากกว่าศูนย์เท่านั้น ถ้า Add ยังไม่รันตอนที่ Wait ถูกเช็ก counter อาจยังเป็นศูนย์อยู่ และ Wait จะ return ทันทีทั้งที่ goroutine ยังไม่เริ่มเลย"
+  },
+  {
+    q: "```go\nfunc main() {\n    for i := 0; i < 3; i++ {\n        go func(id int) {\n            fmt.Println(\"goroutine\", id, \"says hello\")\n        }(i)\n    }\n    fmt.Println(\"main exits\")\n}\n```\nโปรแกรมนี้ print อะไรได้บ้าง?",
+    options: [
+      "print \"goroutine N says hello\" ครบทั้งสามบรรทัดเสมอ แล้วตามด้วย \"main exits\"",
+      "print แค่ \"main exits\" เสมอ ไม่มี output จาก goroutine เลย",
+      "\"main exits\" บวกกับบรรทัดของ goroutine ตั้งแต่ศูนย์ถึงสามบรรทัด ขึ้นอยู่กับ scheduling",
+      "compile error เพราะ main return ก่อนที่ goroutine จะเสร็จ"
+    ],
+    answer: 2,
+    explain: "ไม่มีอะไร synchronize main กับ goroutine ทั้งสามเลย ดังนั้น process อาจ exit ก่อนที่ไม่มี บาง หรือทั้งหมดจะถูก schedule นี่ compile และรันผ่านปกติ — แค่ไม่ได้ทำสิ่งที่ดูเหมือนว่ามันควรทำอย่างน่าเชื่อถือ"
+  },
+  {
+    q: "ข้อความไหนเกี่ยวกับ goroutine กับ OS thread ที่ถูกต้อง?",
+    options: [
+      "goroutine ถูก implement เป็น OS thread เฉพาะทางหนึ่งตัว",
+      "goroutine เริ่มต้นด้วย stack เล็กที่ขยายได้ และหลายตัวถูกจัดสรรลงบน OS thread จำนวนน้อยกว่า",
+      "goroutine กับ OS thread คือชื่อสองชื่อของ runtime concept เดียวกันใน Go",
+      "goroutine กินหน่วยความจำมากกว่า OS thread เสมอ"
+    ],
+    answer: 1,
+    explain: "ความสัมพันธ์แบบ M:N นี้ — goroutine (G) จำนวนมากถูก schedule ลงบน OS thread (M) จำนวนหยิบมือผ่าน P — คือเหตุผลที่โปรแกรม Go มี goroutine ได้หลักแสนตัวโดยไม่ต้องมี OS thread หลักแสนตัว"
   }
 ];
 
