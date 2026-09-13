@@ -50,7 +50,7 @@ Both record a failure, but they differ in whether the test continues:
 | `t.Errorf` | Yes | No — test continues |
 | `t.Fatalf` | Yes | Yes — test stops immediately |
 
-Use `t.Fatalf` when a later assertion would panic if the earlier one failed (e.g., dereferencing a pointer that you just checked is nil).
+Use `t.Fatalf` when continuing makes no sense — e.g. `err != nil` and the next line would dereference the nil result.
 
 ```go
 func TestDivide(t *testing.T) {
@@ -114,19 +114,48 @@ Tests that involve goroutines, timers, or timeouts used to need real sleeps and 
 
 ```go
 // cache_test.go — a test file; run it with: go test ./...
+package cache_test
+
 import (
     "testing"
     "testing/synctest"
     "time"
 )
 
+// Cache is a minimal TTL cache: entries expire lazily, checked on Get —
+// there is no background goroutine driving expiry.
+type Cache struct {
+    ttl   time.Duration
+    items map[string]cacheItem
+}
+
+type cacheItem struct {
+    value   string
+    expires time.Time
+}
+
+func NewCache(ttl time.Duration) *Cache {
+    return &Cache{ttl: ttl, items: make(map[string]cacheItem)}
+}
+
+func (c *Cache) Set(key, value string) {
+    c.items[key] = cacheItem{value: value, expires: time.Now().Add(c.ttl)}
+}
+
+func (c *Cache) Get(key string) (string, bool) {
+    item, ok := c.items[key]
+    if !ok || time.Now().After(item.expires) {
+        return "", false
+    }
+    return item.value, true
+}
+
 func TestCacheExpiry(t *testing.T) {
     synctest.Test(t, func(t *testing.T) {
         c := NewCache(1 * time.Minute)
         c.Set("k", "v")
 
-        time.Sleep(2 * time.Minute) // returns immediately in the bubble
-        synctest.Wait()             // let the expiry goroutine run
+        time.Sleep(2 * time.Minute) // the fake clock jumps ahead once every goroutine in the bubble is blocked
 
         if _, ok := c.Get("k"); ok {
             t.Fatal("entry should have expired")
@@ -135,7 +164,9 @@ func TestCacheExpiry(t *testing.T) {
 }
 ```
 
-Go 1.27 adds `synctest.Sleep(d)` (a sleep followed by `Wait`) and `httptest.NewTestServer()`, an `httptest.Server` on an in-memory fake network that works inside a bubble — so an HTTP client with a 30-second timeout can be tested in microseconds.
+There is no `synctest.Wait()` call here: `Get` checks expiry synchronously against the fake clock, so there is no background goroutine to wait for. `Wait()` only matters when some *other* goroutine in the bubble needs to finish before you can assert on its effect.
+
+Go 1.27 adds `synctest.Sleep(d)` (a sleep followed by `Wait`) and `httptest.NewTestServer()`, an `httptest.Server` on an in-memory fake network that works inside a bubble — so an HTTP client with a 30-second timeout can be tested in microseconds. Neither is available on this course's local toolchain (Go 1.26.5) — the snippet above compiles and passes there as written; test `synctest.Sleep`/`NewTestServer` on go.dev or a local Go 1.27 install.
 
 ## Test artifacts and attributes (Go 1.25–1.26)
 
@@ -151,7 +182,7 @@ Add `-race` to catch data races at test time — this is mandatory in CI:
 go test -race -coverprofile=coverage.out -covermode=atomic ./...
 ```
 
-The `-covermode=atomic` flag is required alongside `-race` for accurate coverage counts because the race detector rewrites memory accesses.
+`go test -race` switches coverage to `-covermode=atomic` automatically — `go help testflag` documents the default as `set` unless `-race` is enabled, in which case it becomes `atomic`. Pass `-covermode=atomic` explicitly only for clarity; it is not required.
 
 `go test` also runs a small subset of `go vet` before every run; since Go 1.27 that subset includes `stdversion`, which fails the build when you call a standard-library API newer than the `go` line in your `go.mod` — so a module that says `go 1.25` cannot silently depend on a 1.27 function.
 
@@ -192,14 +223,14 @@ export const quizGoTest = [
     answer: 1
   },
   {
-    q: "Why is -covermode=atomic required when using -race?",
+    q: "What does a clean go test -race run (no races reported) actually tell you?",
     options: [
-      "It makes coverage faster",
-      "It is required by the go test specification",
-      "The race detector rewrites memory accesses, and atomic mode gives accurate counts",
-      "It enables branch coverage instead of statement coverage"
+      "The program has no data races under any possible execution",
+      "Only that no data race happened to occur during this particular run — a clean pass is not a proof of race-freedom",
+      "That -covermode=atomic is unnecessary",
+      "That the code no longer needs further testing"
     ],
-    answer: 2
+    answer: 1
   }
 ];
 

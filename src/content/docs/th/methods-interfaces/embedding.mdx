@@ -37,7 +37,22 @@ fmt.Println(e.Describe()) // promoted method
 
 ## Promotion ทำงานอย่างไร
 
-เมื่อคุณเข้าถึง `e.Name`, Go มองหา field หรือ method ชื่อ `Name` ใน `Employee` โดยตรงก่อน ถ้าไม่พบ จะลงไปใน embedded type แต่ละอันตามลำดับ การ lookup นี้เป็นแค่ syntactic sugar — รูปแบบยาว `e.Named.Name` ใช้ได้เสมอ
+เมื่อคุณเข้าถึง `e.Name`, Go มองหา field หรือ method ชื่อ `Name` ใน `Employee` โดยตรงก่อน ถ้าไม่พบ compiler จะค้นหาตาม **depth**: field หรือ method ที่อยู่ตื้นกว่าจะชนะ ถ้าสอง candidate อยู่ที่ depth เดียวกัน จะเป็น ambiguous และการใช้ selector นั้นเป็น compile error:
+
+```go
+type A struct{ Name string }
+type B struct{ Name string }
+
+type E struct {
+    A
+    B
+}
+
+e := E{A{"a"}, B{"b"}}
+e.Name // compile error: ambiguous selector e.Name
+```
+
+Promotion ถูก resolve ที่ compile time และ promoted methods เข้าร่วม method set ของ outer type — นี่คือเหตุผลที่ `Employee` satisfy `Describer` ด้านล่าง รูปแบบยาว `e.Named.Name` ใช้ได้เสมอ แม้ในกรณีที่รูปแบบสั้นจะ ambiguous
 
 คุณสามารถ **override** promoted method ได้โดยประกาศ method ที่มีชื่อเดียวกันบน outer type:
 
@@ -72,7 +87,7 @@ type ใดที่ตอบสนอง `Describer` ก็ตอบสนอ�
 
 | Inheritance (Java/C++) | Embedding (Go) |
 |------------------------|----------------|
-| Virtual dispatch: method call บน outer type สามารถ dispatch ไปยัง override ของ inner | ไม่มี virtual dispatch: การเรียก inner method เรียก *method นั้น* เสมอ ไม่ว่า outer type จะมีอะไร |
+| Virtual dispatch: การเรียก method ผ่าน base type จะ dispatch ไปยัง override ของ derived | ไม่มี virtual dispatch: การเรียก inner method เรียก *method นั้น* เสมอ ไม่ว่า outer type จะมีอะไร |
 | `instanceof` / type hierarchy | ไม่มี hierarchy — types ไม่มีความสัมพันธ์ |
 | Base class อ้างถึง derived class ได้ผ่าน virtual methods | Embedded type ไม่รู้จัก outer type |
 
@@ -86,13 +101,23 @@ type Named struct {
 \tName string
 }
 
+func (n Named) String() string {
+\treturn "Named(" + n.Name + ")"
+}
+
 func (n Named) Describe() string {
-\treturn "Name: " + n.Name
+\t// Describe calls String on itself — always Named's String, never an outer override
+\treturn "Name: " + n.String()
 }
 
 type Employee struct {
 \tNamed
 \tDepartment string
+}
+
+// Employee's own String — NOT used by Named.Describe() above
+func (e Employee) String() string {
+\treturn fmt.Sprintf("%s (Dept: %s)", e.Name, e.Department)
 }
 
 // Interface embedding
@@ -105,13 +130,9 @@ type Describer interface {
 \tDescribe() string
 }
 
-func (e Employee) String() string {
-\treturn fmt.Sprintf("%s (Dept: %s)", e.Name, e.Department)
-}
-
 func print(d Describer) {
-\tfmt.Println(d.String())
-\tfmt.Println(d.Describe())
+\tfmt.Println(d.String())   // Employee's own String, reached through the interface
+\tfmt.Println(d.Describe()) // promoted Describe still calls Named's String, not Employee's
 }
 
 func main() {
@@ -120,8 +141,8 @@ func main() {
 \t\tDepartment: "Engineering",
 \t}
 \t// promoted field and method
-\tfmt.Println(e.Name)
-\tfmt.Println(e.Describe())
+\tfmt.Println(e.Name)       // Alice
+\tfmt.Println(e.Describe()) // Name: Named(Alice) — Named's own String, not Employee's override
 \tprint(e)
 }`;
 
@@ -145,10 +166,10 @@ func main() {
 >
 > **io.ReadWriter** embed io.Reader และ io.Writer — type ที่ implement ทั้งสองอัตโนมัติ satisfy io.ReadWriter โดยไม่ต้องประกาศเพิ่ม
 >
-> **sync.RWMutex** expose Lock/Unlock จาก embedded sync.Mutex — embedding ช่วยเพิ่ม write-lock API โดยไม่ต้อง duplicate code
+> **bufio.ReadWriter** embed `*bufio.Reader` และ `*bufio.Writer` โดยตรง — promote methods `Read`/`Write` (และอื่น ๆ ) ของทั้งสองให้เรียกผ่าน `ReadWriter` ตัวเดียวได้เลย โดยไม่ต้อง duplicate code
 
 <Callout title="Embedding คือ composition ไม่ใช่ inheritance">
-ไม่มี virtual dispatch บน outer type ถ้า `Employee` embeds `Named` และคุณเรียก `e.Named.Describe()` คุณเรียก `Describe` ของ `Named` เสมอ — compiler ไม่มองหา override ใน `Employee` นี่เป็นเจตนา: embedding ของ Go คือกลไก code-reuse ไม่ใช่กลไก polymorphism สำหรับ polymorphism ให้นิยาม interface และให้ทั้งสอง types ตอบสนองอย่างอิสระ
+ไม่มี virtual dispatch บน outer type `Named.Describe()` เรียก `n.String()` บนตัวเอง ดังนั้นจึง resolve ไปยัง `String` ของ `Named` เองเสมอ — แม้ concrete value จะเป็น `Employee` ที่มี `String()` ของตัวเอง และแม้ `Describe` จะถูกเรียกผ่าน interface `Describer` ก็ตาม เทียบกับ `d.String()` ที่เรียกตรงบน interface: มัน dispatch ไปยัง override ของ `Employee` เพราะ call นั้นไม่ได้ผ่าน `Named` เลย นี่เป็นเจตนา: embedding ของ Go คือกลไก code-reuse ไม่ใช่กลไก polymorphism สำหรับ polymorphism ให้นิยาม interface และให้ทั้งสอง types ตอบสนองอย่างอิสระ
 </Callout>
 
 export const quizEmbedding = [

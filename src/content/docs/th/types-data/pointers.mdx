@@ -79,7 +79,10 @@ type Person struct {
     Age  *int // optional
 }
 
-p := Person{Name: "Ada", Age: new(36)}          // *int ชี้ไปที่ 36
+yearsSince := func(y int) int { return 2026 - y }
+born := 1990
+
+p := Person{Name: "Ada", Age: new(36)}               // *int ชี้ไปที่ 36
 q := Person{Name: "Bob", Age: new(yearsSince(born))} // ใช้ expression อะไรก็ได้
 ```
 
@@ -172,19 +175,16 @@ Escape Analysis ตัดสินใจว่า variable ควรอยู่
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **pointer ใน Go อันตรายเหมือน C** — Go ไม่มี pointer arithmetic; GC จัดการ lifetime ให้; dangling pointer เป็นไปไม่ได้
+- **pointer ใน Go อันตรายเหมือน C** — Go ไม่มี pointer arithmetic และ GC จัดการ lifetime ให้ — use-after-free เป็นไปไม่ได้ แต่ pointer ที่ยังชี้ไปยัง element เก่าหลัง `append` reallocate backing array ใหม่นั้นยังเกิดได้ (ดู [Slices](/go/th/types-data/slices/))
 - **pointer เสมอเร็วกว่า value** — pointer อาจทำให้ variable escape to heap → GC ต้องทำงานเพิ่ม → latency สูงขึ้น
-- **interface value เก็บ value โดยตรง** — interface value เก็บ (type metadata, data pointer) pair — เสมอมี indirection อย่างน้อยหนึ่งชั้น
 - **nil pointer = ปัญหาเหมือน NullPointerException ใน Java** — Go panic มี stack trace ชัดเจน และตรวจสอบ nil ได้ง่ายด้วย `if p == nil`
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Kubernetes** ใช้ pointer to struct สำหรับ object ที่แชร์ระหว่าง goroutine เช่น `*corev1.Pod` — ลด copy overhead ใน reconciliation loop
->
 > **Go standard library** ใช้ pointer receiver สำหรับ stateful type เช่น `(*bytes.Buffer).Write()` — เพื่อ maintain internal state ระหว่าง call
 
 <Callout title="Go มี pointer แต่ไม่มี pointer arithmetic">
-Go มีความสามารถด้าน pointer อย่างเต็มที่ — นำ address, dereference, ส่ง pointer ไปยัง function — แต่ตั้งใจไม่รวม pointer arithmetic คุณไม่สามารถบวก integer เข้ากับ pointer เพื่อเดินผ่าน memory ได้ การตัดสินใจออกแบบเพียงข้อเดียวนี้ขจัด buffer overflow, การเดิน memory แบบ off-by-one, และบั๊ก use-after-free ในระดับภาษา หากต้องการ memory operation ระดับต่ำ package `unsafe` มีให้ใช้ แต่ควรสงวนไว้สำหรับงาน FFI และ runtime เท่านั้น
+Go มีความสามารถด้าน pointer อย่างเต็มที่ — นำ address, dereference, ส่ง pointer ไปยัง function — แต่ตั้งใจไม่รวม pointer arithmetic คุณไม่สามารถบวก integer เข้ากับ pointer เพื่อเดินผ่าน memory ได้ การไม่มี pointer arithmetic ทำให้ pointer ชี้ไปยังค่าจริงของ Go เสมอ; garbage collector ตัดปัญหา use-after-free ออกไป และ bounds check ตัดปัญหา buffer overflow ออกไป หากต้องการ memory operation ระดับต่ำ package `unsafe` มีให้ใช้ แต่ควรสงวนไว้สำหรับงาน FFI และ runtime เท่านั้น
 </Callout>
 
 export const quizPointers = [

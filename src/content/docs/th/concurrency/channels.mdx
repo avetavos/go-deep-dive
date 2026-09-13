@@ -42,6 +42,8 @@ func producer(out chan<- int) { out <- 1 }   // send-only
 func consumer(in <-chan int)  { v := <-in; _ = v }  // receive-only
 ```
 
+`chan T` ที่เป็นสองทิศทางสามารถ assign ให้กับ direction ไหนก็ได้ Compiler จะบังคับว่า receive-only channel จะถูกส่งเข้าไม่ได้ และในทางกลับกันก็เช่นกัน
+
 ## การปิด Channel และ Range
 
 Sender เรียก `close(ch)` เพื่อบอกว่าจะไม่มีค่าอีกแล้ว Receivers ใช้ `for range` loop เพื่อดึงค่าทั้งหมดจนกว่าจะ close:
@@ -75,14 +77,14 @@ func producer(ch chan<- int, n int) {
 }
 
 func main() {
-\t// Unbuffered channel: producer รันใน goroutine
+\t// Unbuffered channel: producer runs in a goroutine
 \tch := make(chan int)
 \tgo producer(ch, 5)
 \tfor v := range ch {
 \t\tfmt.Println(v)
 \t}
 
-\t// Buffered channel: ส่งทั้งหมดพอดี buffer
+\t// Buffered channel: all sends fit in the buffer
 \tbuf := make(chan string, 3)
 \tbuf <- "a"
 \tbuf <- "b"
@@ -92,7 +94,7 @@ func main() {
 \t\tfmt.Println(s)
 \t}
 
-\t// Comma-ok: แยกค่าจริงจาก zero value ของ channel ที่ปิด
+\t// Comma-ok: distinguish real value from closed zero value
 \tdone := make(chan bool, 1)
 \tdone <- true
 \tclose(done)
@@ -136,14 +138,6 @@ G1 ──send──→ [_][_][_] ←──recv── G2
 - **buffered channel ช่วยป้องกัน deadlock** — ไม่เสมอ — deadlock ยังเกิดได้ถ้า buffer เต็มและไม่มี receiver
 - **close(ch) ลบข้อมูลใน buffer** — ไม่ — receiver ยังรับข้อมูลที่เหลือใน buffer ได้หลัง close
 - **สามารถ close channel จาก receiver ได้** — sender เท่านั้นที่ควร close channel
-
-> 💡 ตัวอย่างจากของจริง
->
-> **net/http** ใช้ channel pattern ภายใน สำหรับ read/write pipeline ระหว่าง connection handler กับ request body
->
-> **Kubernetes** ใช้ event channel ส่ง object changes ไป controller loop
->
-> **Docker** ใช้ channel เชื่อม container process กับ log collector สำหรับ container log streaming
 
 <Callout title="ข้อควรระวัง: ส่งเข้า channel ที่ปิดแล้วจะ panic">
 การเรียก `close(ch)` แล้วส่งเข้า `ch` จะทำให้เกิด runtime panic การรับจาก channel ที่ปิดแล้วไม่มีทาง panic — แต่จะ return zero value ของ type นั้น และ return value ตัวที่สอง comma-ok จะเป็น `false` หลักง่าย ๆ: เฉพาะ **sender** เท่านั้นที่ปิด channel และปิดก็ต่อเมื่อรู้ว่าจะไม่ส่งอีกแล้ว อย่าปิด channel จากฝั่ง receiver

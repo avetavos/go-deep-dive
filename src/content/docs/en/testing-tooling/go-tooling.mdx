@@ -25,7 +25,7 @@ go run ./cmd/server        # run a specific cmd sub-package
 
 ## go build — produce a binary
 
-`go build` compiles the package and writes the binary to disk. Without a `-o` flag the binary is named after the module in the current directory.
+`go build` compiles the package and writes the binary to disk. Without a `-o` flag the binary is named after the last element of the package path (`./cmd/server` → `server`); at the module root that is the module's last path element (`go build .` in `github.com/yourname/myapp` writes `myapp`).
 
 ```bash
 go build .                         # build current package, output: ./myapp
@@ -86,11 +86,11 @@ Typical rewrites: a hand-written `for` loop that finds the minimum becomes `min(
 
 ## What else changed in the toolchain (Go 1.25–1.27)
 
-- `go mod init` now writes a `go` line one minor version *below* the toolchain (`go 1.26.0` from Go 1.27) so a fresh module builds on the previous release too; raise it with `go get go@1.27` when you need 1.27 features.
+- `go mod init` writes the `go` line as the exact version of the toolchain that ran it — not one minor below. Confirmed locally: Go 1.26.5 writes `go 1.26.5`; running it under Go 1.27.0 writes `go 1.27.0`. Raise or pin the line explicitly with `go get go@1.27` when you need a specific floor.
 - `go doc example.com/pkg@v1.2.3` (Go 1.27) documents a specific module version, and `go doc -ex` lists runnable examples.
 - `go doc -http` (Go 1.25) serves the documentation in a browser; `pkgsite` is no longer needed for local use.
 - `go tool pprof -http` (Go 1.26) opens on the flame-graph view; `go tool trace -http=:6060` (Go 1.27) binds to localhost only unless you give a full address.
-- `go build -asan` (Go 1.25) reports memory leaks at exit; `go version -m -json` prints build info as JSON.
+- `go version -m -json` (Go 1.24) prints build info as JSON; `go build -asan` (Go 1.25) reports memory leaks at exit.
 
 ## go doc — browse documentation
 
@@ -110,7 +110,7 @@ For a browser-based view run `go doc -http` (Go 1.25+) or browse `pkg.go.dev`.
 ## Putting it together — a typical CI pipeline
 
 ```bash
-go fmt ./... && \
+test -z "$(gofmt -l .)" && \
 go vet ./... && \
 go test -race -coverprofile=coverage.out -covermode=atomic ./... && \
 go build ./...

@@ -79,9 +79,10 @@ key, val, ok := strings.Cut("user=alice", "=")      // "user", "alice", true
 dir, file, ok := strings.CutLast("a/b/c.txt", "/") // "a/b", "c.txt", true
 
 // Go 1.24: lazy iterators — no intermediate []string allocation
-for line := range strings.Lines(text) { fmt.Print(line) }      // keeps the "\n"
-for part := range strings.SplitSeq("a,b,c", ",") { use(part) }
-for word := range strings.FieldsSeq("  a  b ") { use(word) }
+text := "a=1\nb=2\n"
+for line := range strings.Lines(text) { fmt.Print(line) }              // keeps the "\n"
+for part := range strings.SplitSeq("a,b,c", ",") { fmt.Println(part) }
+for word := range strings.FieldsSeq("  a  b ") { fmt.Println(word) }
 ```
 
 `Lines`, `SplitSeq`, and `FieldsSeq` return `iter.Seq[string]`; use them when you only need to walk the pieces once, and keep `Split`/`Fields` when you need a slice you index into. `bytes` has the same set (`bytes.CutLast` and friends).

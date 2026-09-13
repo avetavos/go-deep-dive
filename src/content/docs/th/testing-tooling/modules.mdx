@@ -27,12 +27,12 @@ go mod init github.com/yourname/myapp
 ```go
 module github.com/yourname/myapp
 
-go 1.26.0
+go 1.27.0
 ```
 
 module path (`github.com/yourname/myapp`) ทำหน้าที่ทั้งเป็น import path prefix สำหรับ packages ของคุณเองและเป็น identifier ที่ modules อื่นใช้เมื่อ depend บน module ของคุณ ไม่จำเป็นต้องเป็น URL จริงระหว่าง development แต่ต้องไม่ซ้ำกันหากคุณเผยแพร่ใน Go module proxy
 
-สังเกตเวอร์ชัน: `go mod init` ของ Go 1.27 จงใจเขียน `go 1.26.0` ต่ำกว่า toolchain หนึ่ง minor release เพื่อให้ module ใหม่เอี่ยม build บน Go รุ่นก่อนได้ด้วย เมื่อต้องใช้ API ที่มีเฉพาะ 1.27 ให้ยกบรรทัดขึ้น:
+สังเกตเวอร์ชัน: `go mod init` เขียนเวอร์ชันจริงของ toolchain ที่รันมัน — ไม่ใช่ต่ำกว่าหนึ่ง minor release ยืนยันในเครื่องแล้ว: รันด้วย Go 1.26.5 จะเขียน `go 1.26.5`; บน Go 1.27.0 จะเขียน `go 1.27.0` หากต้องการตรึง floor เองให้ใช้:
 
 ```bash
 go get go@1.27          # เขียนบรรทัด go ใหม่เป็น 1.27.x
@@ -63,9 +63,9 @@ require (
 )
 ```
 
-สามบรรทัดที่ควรดูใกล้ ๆ:
+สามบรรทัดที่ควรดูให้ละเอียด:
 
-- **`go 1.27`** คือเวอร์ชันของภาษาและ library ที่ module นี้เขียนขึ้นมาเทียบกับ — compiler บังคับใช้ และตั้งแต่ Go 1.27 การตรวจ `stdversion` ของ `go test` จะปฏิเสธการเรียก API ที่ใหม่กว่าบรรทัดนี้
+- **`go 1.27`** คือเวอร์ชันของภาษาและ library ที่ module นี้ยึดเป็นฐาน — compiler บังคับใช้ และตั้งแต่ Go 1.27 การตรวจ `stdversion` ของ `go test` จะปฏิเสธการเรียก API ที่ใหม่กว่าบรรทัดนี้
 - **`toolchain go1.27.1`** (ไม่บังคับ) ตรึง toolchain ตัวเป๊ะ binary `go` ที่เก่ากว่าจะดาวน์โหลดและรันตัวนั้นให้อัตโนมัติ
 - **`ignore`** (Go 1.25) บอกคำสั่ง `go` ให้ข้าม directory tree นั้นไปเลย — มีประโยชน์กับโฟลเดอร์ใหญ่แบบ `node_modules` หรือ fixture ที่ไม่ใช่โค้ด Go
 
@@ -131,16 +131,12 @@ go get github.com/foo/bar/v2@v2.0.0
 
 - **`go get` เหมือน `npm install`** — `go get` update `go.mod` และ download source ไม่ install binary แยก ต่างจาก npm มาก
 - **สามารถ ignore `go.sum`** — `go.sum` ต้อง commit ร่วมกับ `go.mod` เพื่อ verify dependency integrity — ถ้าขาด build อาจไม่ reproducible
-- **`replace` directive ใช้ใน production ได้** — `replace` directive ควรเป็น temporary เท่านั้น (เช่น local testing) ไม่ควรอยู่ใน production `go.mod`
+- **`replace` directive ห้ามใช้ใน production เด็ดขาด** — `replace` ใน `go.mod` ของ main module ใช้ได้ (เช่น fork ที่ดูแลเอง) แต่ไม่มีผลกับผู้ที่ import module ของคุณ — `go.mod` ของ dependent มองไม่เห็น `replace` ของคุณ
 - **`GOPATH/pkg/mod` เป็น module cache ถาวร** — `go clean -modcache` ล้าง cache ได้ — ไม่ใช่ permanent storage ควร treat เป็น cache
 
 > 💡 ตัวอย่างจากของจริง
 >
 > **Kubernetes** มี `go.mod` ที่มี dependency หลักร้อยตัว — `vendor/` ถูก commit เพื่อให้ build reproducible ในทุก environment
->
-> **Go ecosystem**: semantic versioning + `go.sum` hash verification ทำให้ supply chain attack ยากขึ้นมาก — Kubernetes, Docker, Prometheus ทั้งหมด depend on this
->
-> **Docker**: multi-stage Dockerfile ใช้ `go mod download` ก่อน copy source เพื่อ cache layer — rebuild เร็วขึ้นมากเมื่อ source เปลี่ยนแต่ dependency ไม่เปลี่ยน
 
 <Callout title="module คือกลุ่มของ packages ที่มี version ร่วมกัน">
 คิดว่า module คือหน่วยของการแจกจ่ายและ versioning ส่วน package คือหน่วยของการ compile module หนึ่งประกอบด้วยหลาย packages เมื่อคุณรัน `go get` คุณกำลังเพิ่ม module (และ packages ทั้งหมดข้างในพร้อมใช้งาน) เมื่อคุณเขียน `import` คุณกำลัง import package path เฉพาะภายใน module สองแนวคิดนี้มีความเกี่ยวข้องกันอย่างใกล้ชิดแต่แตกต่างกัน

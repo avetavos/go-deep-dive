@@ -67,7 +67,7 @@ The idiomatic Go guideline:
 
 ```go
 // Good: accepts an interface, returns a concrete type
-func NewBuffer(r io.Reader) *bytes.Buffer { ... }
+func NewReader(rd io.Reader) *bufio.Reader { ... }
 ```
 
 export const interfacesCode = `package main

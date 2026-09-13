@@ -1,6 +1,6 @@
 # Go Deep Dive
 
-A bilingual (EN / TH), interactive course that teaches the Go language in depth — on its own terms, using CSP and Go's own idioms. All runnable examples execute entirely in the browser; no backend or local Go installation is required for reading the course.
+A bilingual (EN / TH), interactive course that teaches the Go language in depth — on its own terms, using CSP and Go's own idioms. Runnable examples compile on go.dev with the current Go release and fall back to an in-browser interpreter when that is unreachable, so no local Go installation is required for reading the course.
 
 ## Tech Stack
 
@@ -8,7 +8,8 @@ A bilingual (EN / TH), interactive course that teaches the Go language in depth 
 | ----- | ---------- |
 | Site framework | [Astro 6](https://astro.build) + [Starlight 0.40](https://starlight.astro.build) |
 | UI islands | [Preact](https://preactjs.com) (via `@astrojs/preact`) |
-| In-browser Go runner | [yaegi](https://github.com/traefik/yaegi) compiled to WebAssembly (`public/go-runner.wasm`) |
+| Primary Go runner | go.dev compile service (current Go release) via a Cloudflare Pages Function proxy |
+| Offline fallback runner | [yaegi](https://github.com/traefik/yaegi) compiled to WebAssembly (`public/go-runner.wasm`), Go 1.26 APIs only |
 | Unit tests | [Vitest](https://vitest.dev) + `@testing-library/preact` |
 | Styling | Starlight default + custom CSS (`src/styles/custom.css`) |
 | i18n | Starlight built-in, `defaultLocale: 'en'`, locales: `en` + `th` |
@@ -99,13 +100,13 @@ EN and TH lesson files must share identical: `export const` variable names, comp
 
 ## How Runnable Code Works
 
-The Go runner is a build of [yaegi](https://github.com/traefik/yaegi) — a pure-Go interpreter — compiled to WebAssembly. When a reader clicks "Run" in a `<Playground>`:
+When a reader clicks "Run" in a `<Playground>`:
 
-1. The browser loads `public/go-runner.wasm` once (cached after first load, ~8 MB gzip).
-2. The snippet is passed to the WASM module via `public/wasm_exec.js`.
-3. Output is captured and displayed inline.
+1. The snippet is POSTed to the site's own compile proxy, which forwards it to the go.dev compile service and returns its output. This is the current Go release, so snippets using the newest language and stdlib features work.
+2. If that request fails (offline, blocked), the browser falls back to `public/go-runner.wasm` — a build of [yaegi](https://github.com/traefik/yaegi), a pure-Go interpreter, compiled to WebAssembly and loaded once via `public/wasm_exec.js` (~8 MB gzip, cached after first load).
+3. Output is captured and displayed inline either way.
 
-**Coverage:** most of the Go standard library including `fmt`, `sync`, `sync/atomic`, `context`, and `time`. Snippets requiring real file I/O, OS signals, or network connections are not runnable in the browser — use the "Open in Go Playground" fallback link.
+**Fallback coverage:** the interpreter targets Go 1.26 APIs and covers most of the standard library including `fmt`, `sync`, `sync/atomic`, `context`, and `time`. Snippets that need a newer release, real file I/O, OS signals, or network connections only run through go.dev — those lessons say so, and the "Open in Playground" button copies the snippet so the reader can paste it there.
 
 ## Components
 

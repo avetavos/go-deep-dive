@@ -42,7 +42,7 @@ func (c *Counter) Inc()       { c.count++ }        // pointer receiver
 
 ## Methods on any named type
 
-Methods are not limited to structs. You can define methods on any named type in your package:
+Methods are not limited to structs. You can define methods on any named type in your package — except pointer types and interface types:
 
 ```go
 type Celsius float64
@@ -52,7 +52,7 @@ func (t Celsius) String() string {
 }
 ```
 
-You cannot define a method on a type from another package (e.g., `func (s string) Upper()` is illegal), but wrapping it in a local named type is always allowed.
+You cannot define a method on a type from another package — for example, `func (t time.Time) Weekday2() string { ... }` fails with `cannot define new methods on non-local type time.Time` — but wrapping it in a local named type is always allowed.
 
 ## Method sets
 

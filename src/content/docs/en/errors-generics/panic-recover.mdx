@@ -16,7 +16,7 @@ A **panic** stops normal execution of the current goroutine. The goroutine immed
 
 Panics happen in two ways:
 
-- **Runtime errors** — the Go runtime triggers them automatically for nil pointer dereferences, out-of-bounds slice/array accesses, type assertion failures on non-interface types, and similar impossible operations.
+- **Runtime errors** — the Go runtime triggers them automatically for nil pointer dereferences, out-of-bounds slice/array accesses, a failed single-value type assertion `x.(T)` on an interface value, and similar impossible operations.
 - **Explicit calls** — you call `panic(value)` with any value you like (commonly a string or an error).
 
 ```go
@@ -27,6 +27,8 @@ panic(fmt.Errorf("invariant violated: %v", state))
 Both forms unwind the stack the same way. The only difference is what value `recover()` returns.
 
 ## defer + recover
+
+Recall from Functions: deferred calls run in **LIFO order** — the last `defer` registered runs first. During a panic this still holds: every deferred function on the stack runs, in reverse registration order, before the goroutine gives up (unless one of them calls `recover()`).
 
 `recover()` is a built-in function that intercepts a panic. It only works when called **inside a deferred function** — calling `recover()` outside a defer always returns `nil`.
 
@@ -71,7 +73,7 @@ Not appropriate:
 
 - File not found, network timeout, invalid user input, missing database rows — these are expected runtime conditions that callers must handle. Return `(T, error)` for all of these.
 
-Library code has an extra obligation: a library should almost never panic on bad caller input. If an internal operation might panic (e.g., parsing with `regexp.MustCompile`), convert it to an error at the boundary before returning to the caller.
+Library code has an extra obligation: a library should almost never panic on bad caller input. `regexp.MustCompile` is a good example of the boundary: it is appropriate for a **fixed pattern known at package init** — a bad pattern there is a programmer error, and panicking during startup is cheap and immediate. If the pattern instead comes from a caller or user input, use `regexp.Compile` and return the error normally; never wrap a caller-supplied pattern in `MustCompile`.
 
 ## Panic vs error: a quick guide
 

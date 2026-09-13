@@ -147,7 +147,7 @@ func main() {
 <Playground code={variablesCode} />
 
 <Callout title="No implicit numeric conversions">
-Go will not silently convert between numeric types. An expression like `int(3) + float64(1.5)` is a **compile error**. You must write `float64(3) + 1.5` or `3 + int(1.5)` depending on which precision you want. This is stricter than most languages, but it prevents entire classes of subtle precision and overflow bugs that occur when a language silently widens or narrows values for you.
+Go will not silently convert between numeric types. An expression like `int(3) + float64(1.5)` is a **compile error** — mismatched types `int` and `float64`. You must write `float64(3) + 1.5` when you want a float64 result. Converting a numeric *constant* is checked even more strictly: `int(1.5)` is also a compile error (`cannot convert 1.5 (untyped float constant) to type int`), because the constant 1.5 has no exact integer representation. The same conversion on a *variable* is allowed and truncates instead — `f := 1.5; n := 3 + int(f)` compiles and gives `n == 4`. This is stricter than most languages, but it prevents entire classes of subtle precision and overflow bugs that occur when a language silently widens or narrows values for you.
 </Callout>
 
 export const quizVariables = [

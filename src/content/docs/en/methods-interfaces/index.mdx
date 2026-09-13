@@ -14,7 +14,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 Most object-oriented languages bolt polymorphism onto a class hierarchy: you declare that a type *implements* an interface, you *extends* a base class, and the compiler enforces the lineage. Go throws away the hierarchy entirely.
 
-In Go, **any named type can have methods**, and **any type that has the right methods automatically satisfies an interface** — no declaration required. This is called *implicit interface satisfaction*, and it is the single most important design decision in the language.
+In Go, **any named type can have methods** (except pointer types and interface types), and **any type that has the right methods automatically satisfies an interface** — no declaration required. This is called *implicit interface satisfaction*, and it is the single most important design decision in the language.
 
 The combination of methods and interfaces gives you:
 
@@ -83,7 +83,7 @@ export const quizMethodsInterfaces = [
     options: [
       "Only structs",
       "Only pointer types",
-      "Any named type defined in the same package",
+      "Any named type defined in the same package, except pointer types and interface types",
       "Only types that implement at least one interface"
     ],
     answer: 2

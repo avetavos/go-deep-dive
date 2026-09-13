@@ -80,6 +80,7 @@ after    := deadline.After(t)           // true
 - **timer ที่ไม่มีใครอ้างถึงถูก GC เก็บได้** — `time.After` ใน `select` ภายใน loop ไม่รั่วจนกว่าจะ fire อีกต่อไป เมื่อไม่มีอะไรอ้างถึง timer มันก็ถูกเก็บได้
 
 ```go
+// given ctx context.Context
 timer := time.NewTimer(50 * time.Millisecond)
 select {
 case <-timer.C:
@@ -139,7 +140,6 @@ func main() {
 |---------|---------|------|
 | time.Time เป็น value type | immutable, safe to copy และ share | ต้องระวัง timezone ที่แต่ละ Time carry |
 | time.Duration (int64 nanoseconds) | arithmetic ชัดเจน — 5*time.Second | ต้อง multiply constant ชัดเจน ไม่ใช่แค่ "5" |
-| time.After / time.NewTimer | สร้าง timeout ง่าย | time.After leak goroutine ใน tight loop — ควรใช้ time.NewTimer |
 | reference layout ("2006-01-02") | อ่านเข้าใจได้โดยดู example | ต่างจาก YYYY/MM/DD ของภาษาอื่น — ต้องจำ magic numbers |
 
 ## ความเข้าใจผิดที่พบบ่อย
@@ -147,13 +147,12 @@ func main() {
 - **time.Now() return UTC เสมอ** — ขึ้นกับ local timezone ของเครื่อง — ควรใช้ time.Now().UTC() เมื่อต้องการ UTC ชัดเจน
 - **time.Sleep(1*time.Second) precise** — OS scheduler อาจ sleep นานกว่าที่กำหนด เช่น 1.05s — ไม่ใช่ hard real-time
 - **time.Equal เหมือน ==** — time.Equal เปรียบเทียบ instant ในเวลา (ignore timezone), == เปรียบเทียบ memory layout ทั้งหมดรวม timezone
-- **time.After ใน loop ไม่เป็นปัญหา** — time.After สร้าง channel และ goroutine ใหม่ทุกครั้ง — ใน hot loop ใช้ time.NewTimer + Reset() แทน
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Kubernetes**: pod timeout, job deadline, lease expiry ล้วนใช้ time.Duration — เช่น `terminationGracePeriodSeconds` คือ `time.Duration`
+> **net/http.Server**: `http.Server{ReadHeaderTimeout: 5 * time.Second}` ตั้งค่า timeout เป็น time.Duration เพื่อกัน slow-header client ค้าง connection ไว้
 >
-> **Prometheus**: scrape interval และ timeout ใช้ time.Duration — alerting rule duration เช่น "5m" parse ด้วย time.ParseDuration
+> **context.WithTimeout**: สร้าง deadline ที่ต้องส่งต่อข้าม function call — เช่นเรียก downstream service แล้วยกเลิกอัตโนมัติเมื่อหมดเวลา
 >
 > **Go HTTP server**: http.TimeoutHandler ใช้ context + time.AfterFunc สำหรับ request timeout — ตัด connection เมื่อ handler ช้าเกินกำหนด
 
@@ -196,7 +195,7 @@ export const quizTime = [
     q: "ทำไมควรหลีกเลี่ยง time.Now() ใน playground / test snippet?",
     options: [
       "time.Now() ไม่มีใน Go 1.27+",
-      "time.Now() จะ panic ใน WASM runtime",
+      "คืนเวลาที่ binary ถูก compile",
       "ให้ output ที่ไม่แน่นอนซึ่งเปลี่ยนแปลงทุกครั้งที่รัน",
       "คืนค่าเที่ยงคืน UTC เสมอ"
     ],

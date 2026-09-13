@@ -80,6 +80,7 @@ after    := deadline.After(t)           // true
 - **Unreferenced timers are garbage-collected.** A `time.After` inside a `select` in a loop no longer leaks until it fires; once nothing references the timer it can be collected.
 
 ```go
+// given ctx context.Context
 timer := time.NewTimer(50 * time.Millisecond)
 select {
 case <-timer.C:
@@ -172,7 +173,7 @@ export const quizTime = [
     q: "Why should you avoid time.Now() in playground / test snippets?",
     options: [
       "time.Now() is not available in Go 1.27+",
-      "time.Now() panics in a WASM runtime",
+      "It returns the time the binary was compiled",
       "It produces non-deterministic output that changes on every run",
       "It always returns midnight UTC"
     ],

@@ -22,7 +22,7 @@ Goroutines และ channels ของ Go ประกอบกันตาม 
 generate → square → print
 ```
 
-Pipelines เหมาะสำหรับ stream processing ที่แต่ละ transformation เป็นอิสระ
+Pipelines เหมาะสำหรับ stream processing ที่แต่ละ transformation เป็นอิสระ และ stages สามารถประกอบกันได้แบบ Unix pipes
 
 ## Fan-out / Fan-in
 
@@ -36,12 +36,15 @@ Pipelines เหมาะสำหรับ stream processing ที่แต่
 main → jobs channel → [worker 1, worker 2, worker 3] → results
 ```
 
+มันคือสิ่งที่เทียบเท่ากับ thread pool ใน Go
+
 ตัวอย่างที่รันได้ด้านล่างรวมทั้งสาม patterns: pipeline ที่มี generator และ squaring stage ตามด้วย worker pool ที่ประมวลผล batch of jobs แบบ deterministic
 
 export const patternsCode = `package main
 
 import (
 \t"fmt"
+\t"sort"
 \t"sync"
 )
 
@@ -67,12 +70,12 @@ func square(in <-chan int) <-chan int {
 \treturn out
 }
 
-// --- Worker Pool ---
+// --- Worker pool ---
 
-func workerPool(jobs <-chan int, results []int, wg *sync.WaitGroup) {
+func worker(jobs <-chan int, results chan<- int, wg *sync.WaitGroup) {
+\tdefer wg.Done() // one Done per worker, not per job
 \tfor j := range jobs {
-\t\tresults[j-1] = j * 2
-\t\twg.Done()
+\t\tresults <- j * 2
 \t}
 }
 
@@ -84,30 +87,47 @@ func main() {
 \t\tfmt.Println(v)
 \t}
 
-\t// Worker pool: 3 workers, 5 jobs แต่ละงาน double index
+\t// Worker pool: 3 workers, 5 jobs, each job doubles its value.
+\t// wg counts *workers*: Add(numWorkers) once, one Done() per worker
+\t// when its "for j := range jobs" loop exits (jobs is closed).
 \tconst numJobs = 5
+\tconst numWorkers = 3
 \tjobs := make(chan int, numJobs)
-\tresults := make([]int, numJobs)
+\tresults := make(chan int, numJobs)
 \tvar wg sync.WaitGroup
 
-\tfor w := 0; w < 3; w++ {
-\t\tgo workerPool(jobs, results, &wg)
+\twg.Add(numWorkers)
+\tfor w := 0; w < numWorkers; w++ {
+\t\tgo worker(jobs, results, &wg)
 \t}
 \tfor j := 1; j <= numJobs; j++ {
-\t\twg.Add(1)
 \t\tjobs <- j
 \t}
 \tclose(jobs)
-\twg.Wait()
 
-\tfor _, r := range results {
+\t// A dedicated goroutine closes results once every worker has
+\t// returned — closing from main directly would race with the
+\t// workers that are still sending.
+\tgo func() {
+\t\twg.Wait()
+\t\tclose(results)
+\t}()
+
+\t// Workers finish in a nondeterministic order, so sort before
+\t// printing to get a stable, comparable output.
+\tvar out []int
+\tfor r := range results {
+\t\tout = append(out, r)
+\t}
+\tsort.Ints(out)
+\tfor _, r := range out {
 \t\tfmt.Println(r)
 \t}
 }`;
 
 <Playground code={patternsCode} />
 
-บน Go 1.25+ สามบรรทัด `wg.Add(1)` / `go` / `defer wg.Done()` ใน `workerPool` ยุบเหลือ `wg.Go(func() { ... })` playground ยังใช้รูปแบบคลาสสิกเพราะ runner ของมันเกิดก่อน method นี้
+`wg` ในที่นี้นับ *worker* ไม่ใช่ *job*: `Add(numWorkers)` เรียกครั้งเดียวก่อน worker ทุกตัวเริ่ม และแต่ละ worker เรียก `Done()` แค่ครั้งเดียว — ตอนที่ loop `for j := range jobs` จบลงเพราะ `jobs` ถูก close นี่คือเหตุผลที่ต้องมี goroutine แยกทำ `go func() { wg.Wait(); close(results) }()` เพราะต้องมีใครสักคนรอให้ worker ทุกตัวเสร็จแล้วค่อย close `results` และนั่นเป็น `main` เองไม่ได้ เพราะ `main` กำลังยุ่งอยู่กับการ drain `results` ด้วย `for r := range results` พร้อมกันอยู่ บน Go 1.25+ สามบรรทัด `Add`/`go`/`defer wg.Done()` ของแต่ละ worker เขียนเป็น `wg.Go(func() { ... })` แทนได้ playground ยังใช้รูปแบบคลาสสิกเพราะ runner ในเบราว์เซอร์เกิดก่อน method นี้ เนื่องจาก worker สามตัวแข่งกันเขียนลง `results` ค่าจึงมาถึงตามลำดับที่ scheduler สั่งงานเสร็จแบบสุ่ม — โค้ดจึง sort ก่อน print เพื่อให้ output deterministic
 
 
 ## ข้อแลกเปลี่ยน
@@ -127,13 +147,9 @@ func main() {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Kubernetes** ใช้ work queue + worker pool เป็น core ของ controller framework — จำกัด concurrent reconciliation
->
-> **Prometheus** ใช้ fan-out ต่อ scrape target และ fan-in aggregate ผลลัพธ์กลับมาที่ TSDB
->
-> **Docker build** ใช้ pipeline pattern สำหรับ layer building — แต่ละ stage เป็น goroutine แยกกัน
+> **k8s.io/client-go** ใช้ worker-queue pattern เดียวกันนี้เป็นแกนของ controller framework ใน `util/workqueue/queue.go` — worker หลายตัวดึงงานจาก queue เดียวกันเพื่อจำกัด concurrent reconciliation
 
-<Callout title="ข้อควรระวัง: goroutine leak เมื่อไม่มีใด drain channel">
+<Callout title="ข้อควรระวัง: goroutine leak เมื่อไม่มีใคร drain channel">
 ถ้า goroutine บล็อกอยู่บน `out <- result` และ receiver ออกไปโดยไม่ drain channel goroutine นั้นจะ **leak** — ค้างอยู่ใน runtime ตลอดไป เปลืองหน่วยความจำและ goroutine slot วิธีแก้คือตรวจสอบให้แน่ใจว่า: (a) channel มี buffer พอสำหรับ sends ทั้งหมด, (b) receiver drain channel จนกว่า `close`, หรือ (c) sender ก็ select บน `ctx.Done()` ด้วย ใน production รัน `go tool pprof` บน goroutine profile เพื่อตรวจจับ leak
 </Callout>
 

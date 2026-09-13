@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Interface คืออะไร?
 
-**Interface** คือชื่อที่รวบรวม method signatures ไว้ด้วยกัน type ใดที่มี methods ทั้งหมดนั้นจะตอบสนอง interface — โดยไม่ต้องบอกอย่างชัดเจน
+**Interface** คือชุดของ method signature ที่มีชื่อ type ใดที่มี methods ทั้งหมดนั้นจะตอบสนอง interface — โดยไม่ต้องบอกอย่างชัดเจน
 
 ```go
 type Shape interface {
@@ -67,7 +67,7 @@ v = []int{1, 2, 3}
 
 ```go
 // ดี: รับ interface, คืน concrete type
-func NewBuffer(r io.Reader) *bytes.Buffer { ... }
+func NewReader(rd io.Reader) *bufio.Reader { ... }
 ```
 
 export const interfacesCode = `package main
@@ -124,7 +124,7 @@ interface value คือ 2 words:
 
 iface
  ├─ *itab  →  ┌──────────────────────┐
- │            │ type: *Circle        │
+ │            │ type: Circle         │
  │            │ methods: [Area,      │
  │            │          Perimeter]  │
  │            └──────────────────────┘
@@ -133,7 +133,7 @@ iface
 dynamic dispatch:
   shape.Area()
     ↓
-  itab.methods[0](*data)  ← indirect call
+  itab.fun[0](data)  ← indirect call
     ↓
   Circle.Area(data)
 ```
@@ -145,7 +145,7 @@ dynamic dispatch:
 | implicit satisfaction | decoupled, no import dependency | ยากต่อการ discover ว่า type ใด implement interface ใด |
 | small interface (1-2 methods) | composable, implement ง่าย | อาจต้องใช้หลาย interface ร่วมกัน |
 | any / empty interface | รับ type ใดก็ได้ | สูญเสีย type safety ทั้งหมด |
-| dynamic dispatch | flexibility | ~5-10ns overhead ต่อ call vs direct call |
+| dynamic dispatch | flexibility | ต้นทุนจริง: indirect call (~1–3 ns) + เสีย inlining + ค่าอาจ escape ไป heap เมื่อ box |
 
 ## ความเข้าใจผิดที่พบบ่อย
 

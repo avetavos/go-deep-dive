@@ -38,8 +38,43 @@ syntax ของ tag คือ `` `json:"<name>[,options]"` `` option ที่�
 | Tag | ผล |
 |-----|--------|
 | `json:"name"` | ใช้ `name` เป็น JSON key แทนชื่อ field |
-| `json:"name,omitempty"` | ละเว้น field นี้ใน output เมื่อค่าเป็น zero value |
+| `json:"name,omitempty"` | ละเว้น field นี้เมื่อเป็น `false`, `0`, nil pointer/interface หรือ empty string/slice/map/array — **ไม่รวม** zero struct หรือ zero `time.Time` |
+| `json:"name,omitzero"` (Go 1.24) | ละเว้น field นี้เมื่อเป็น zero value ของ type นั้น รวมถึง struct และ `time.Time` — เรียก method `IsZero() bool` ถ้า type มี method นี้ |
 | `json:"-"` | ละเว้น field นี้เสมอ |
+
+`omitempty` เช็กแค่ความ "ว่าง" ระดับภาษา (zero value ของ basic type หรือความยาวเป็น 0 สำหรับ slice/map) struct — แม้ทุก field ข้างในจะเป็น zero — ไม่ถือว่า "ว่าง" ตามกฎนี้ `omitempty` จึงไม่มีวันละเว้น struct `time.Time` เองก็เป็น struct ผลจึงเหมือนกัน: `time.Time{}` ที่เป็น zero ยัง marshal ออกมาเป็น `"0001-01-01T00:00:00Z"`
+
+```go
+type Location struct {
+	City string
+}
+
+type Event struct {
+	Name     string    `json:"name"`
+	Location Location  `json:"location,omitempty"` // struct — NOT omitted when zero
+	When     time.Time `json:"when,omitempty"`     // time.Time — NOT omitted when zero
+}
+
+e := Event{Name: "party"} // Location and When left at their zero values
+data, _ := json.Marshal(e)
+fmt.Println(string(data))
+// {"name":"party","location":{"City":""},"when":"0001-01-01T00:00:00Z"}
+```
+
+`omitzero` (Go 1.24) แก้ปัญหานี้ตรงๆ: มันละเว้น field ทุกครั้งที่ค่าเท่ากับ zero value ของ type นั้น รวมถึง struct ด้วย และเรียก `IsZero()` บน field เมื่อ type นั้นนิยาม method ไว้ — ซึ่งเป็นเหตุผลที่มันถือว่า `time.Time{}` เป็นค่าว่างได้ถูกต้อง
+
+```go
+type Event2 struct {
+	Name     string    `json:"name"`
+	Location Location  `json:"location,omitzero"` // omits zero structs too
+	When     time.Time `json:"when,omitzero"`     // uses time.Time.IsZero()
+}
+
+e2 := Event2{Name: "party"}
+data2, _ := json.Marshal(e2)
+fmt.Println(string(data2))
+// {"name":"party"}
+```
 
 ## Nested structs
 
@@ -137,8 +172,6 @@ Go 1.27 มาพร้อม `encoding/json/v2` และ package ระดั�
 
 ให้ import v2 เมื่อต้องการ API และ default ที่เข้มงวดกว่า:
 
-<Playground code={jsonV2Code} />
-
 export const jsonV2Code = `package main
 
 import (
@@ -174,6 +207,12 @@ func main() {
 \tfmt.Println("duplicate key:", err)
 }`;
 
+<Playground code={jsonV2Code} />
+
+<Callout title="needs go.dev (Go 1.27)">
+Snippet นี้ต้องใช้ `encoding/json/v2` ซึ่ง stable ตั้งแต่ Go 1.27 — offline WASM runtime ของคอร์สนี้ build จาก Go รุ่นก่อนหน้าจึงรันไม่ได้ ให้กดปุ่ม **Open in Playground** เพื่อรันบน go.dev แทน หรือรัน local ด้วย `GOEXPERIMENT=jsonv2 go run` บน Go 1.26
+</Callout>
+
 `json.UnmarshalRead(r, &u)` คือด้านกลับของ `MarshalWrite` — decode จาก `io.Reader` อย่าง `resp.Body` ได้ตรง ๆ
 
 สิ่งที่ต่างจาก v1:
@@ -186,6 +225,21 @@ func main() {
 | Options | setter ระดับ `Encoder` | ค่า `Options` ต่อการเรียก ประกอบกันได้ |
 | ฝัง field ของ struct | anonymous field | tag `json:",embed"` (ชื่อเก่า `inline` ถูกเปลี่ยน) |
 | ความเร็ว Unmarshal | baseline | เร็วขึ้นอย่างมีนัยสำคัญ Marshal เท่าเดิม |
+
+การจับคู่ชื่อ field แบบเข้มงวดของ v2 พลาดได้ง่ายแบบเงียบ ๆ เมื่อ import `encoding/json/v2` แล้ว unmarshal key ตัวพิมพ์เล็กลง field ที่ไม่มี tag จะคืน error เป็น `nil` และปล่อย field ว่างไว้:
+
+```go
+type User struct {
+	Name string // no tag
+}
+
+var u User
+err := json.Unmarshal([]byte(`{"name":"Ada"}`), &u)
+// v1: err == nil, u.Name == "Ada" — matched case-insensitively
+// v2: err == nil, u.Name == ""    — no exact match, field left alone
+```
+
+v1 จับคู่ `name` กับ `Name` แบบไม่สนตัวพิมพ์ แต่ v2 ต้องตรงตัวพิมพ์ (หรือมี tag `json:"name"`) เป็นค่าเริ่มต้น ดังนั้นเวลาย้าย code มาใช้ v2 ให้ใส่ tag ให้ชัดเจนเสมอ
 
 `jsontext` คือชั้น streaming ที่อยู่ข้างใต้: `jsontext.Decoder` และ `jsontext.Encoder` เดินผ่าน document เป็น `Token` และ `Value` พร้อมตรวจ syntax ไปด้วย เหมาะกับ payload ขนาดใหญ่มากหรือการเขียน JSON ใหม่โดยไม่ decode เป็นค่า Go
 
@@ -222,8 +276,6 @@ for {
 > **Kubernetes API**: ทุก Kubernetes resource (Pod, Deployment, Service) marshal/unmarshal ผ่าน encoding/json — struct tags ควบคุม JSON key ทั้งหมด
 >
 > **Go REST API**: json.NewDecoder(r.Body).Decode(&req) คือ pattern มาตรฐานที่ทุก Go API server ใช้สำหรับ parse request body
->
-> **Prometheus**: /metrics endpoint ใช้ custom text format แต่ HTTP config และ rule file ใช้ json.Unmarshal สำหรับ admin API
 
 <Callout title="เฉพาะ exported field เท่านั้นที่ถูก marshal; tag ควบคุมชื่อ JSON key">
 Field ที่ขึ้นต้นด้วยตัวอักษรพิมพ์เล็กเป็น unexported และ `encoding/json` จะมองไม่เห็นเลย — จะไม่ปรากฏใน output และจะไม่ถูก populate ระหว่าง unmarshal ไม่ว่าจะเขียน tag อะไรก็ตาม ควรทำให้ field ที่ต้องการ serialize ขึ้นต้นด้วยตัวพิมพ์ใหญ่เสมอ จากนั้น tag `json:"name"` จะควบคุมชื่อ key ใน JSON output โดยอิสระจากชื่อ field ใน Go ทำให้สามารถใช้ naming convention ของ Go (`UserID`) และได้ JSON ที่สะอาด (`"user_id"`) ในเวลาเดียวกัน

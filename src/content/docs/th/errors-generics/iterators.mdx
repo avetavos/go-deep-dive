@@ -38,7 +38,7 @@ func Count(n int) iter.Seq[int] {
     return func(yield func(int) bool) {
         for i := 0; i < n; i++ {
             if !yield(i) {
-                return // ฝั่งผู้ใช้ break ออกจาก loop แล้ว
+                return // consumer broke out of the loop
             }
         }
     }
@@ -46,7 +46,7 @@ func Count(n int) iter.Seq[int] {
 
 for v := range Count(5) {
     if v == 3 {
-        break // yield ใน Count คืน false แล้ว Count ก็ return
+        break // yield returns false inside Count, which returns
     }
     fmt.Println(v)
 }
@@ -82,23 +82,23 @@ for i, v := range list.All() {
 
 ## Standard library พูดภาษา iterator
 
-ตั้งแต่ Go 1.23 package `slices`, `maps` และ `strings` ทั้ง **ผลิต** และ **ใช้** iterator:
+ตั้งแต่ Go 1.23 package `slices` และ `maps` (ส่วน `strings`/`bytes` ตั้งแต่ Go 1.24) ทั้ง **ผลิต** และ **ใช้** iterator:
 
 ```go
 import ("maps"; "slices"; "strings")
 
-// ใช้: เปลี่ยน iterator เป็น slice
+// consume: turn an iterator into a slice
 evens := slices.Collect(filter(Count(10), isEven))   // []int
-keys  := slices.Sorted(maps.Keys(m))                  // key ที่ sort แล้ว บรรทัดเดียว
+keys  := slices.Sorted(maps.Keys(m))                  // sorted keys, one line
 
-// ผลิต: วนซ้ำโดยไม่ copy
+// produce: iterate without copying
 for i, v := range slices.All(xs)    { /* index, value */ }
-for v := range slices.Values(xs)    { /* value อย่างเดียว */ }
+for v := range slices.Values(xs)    { /* value only */ }
 for k, v := range maps.All(m)       { /* key, value */ }
 
-// strings (Go 1.24): แยกแบบ lazy
-for line := range strings.Lines(text)          { /* ทีละบรรทัด คง newline ไว้ */ }
-for part := range strings.SplitSeq(csv, ",")   { /* ไม่ allocate []string */ }
+// strings (Go 1.24): lazy splitting
+for line := range strings.Lines(text)          { /* each line, newline kept */ }
+for part := range strings.SplitSeq(csv, ",")   { /* no []string allocated */ }
 ```
 
 `slices.Collect`, `slices.Sorted`, `slices.SortedFunc`, `maps.Collect` และ `maps.Insert` คือสะพานกลับสู่ข้อมูลจริง ส่วน `strings.SplitSeq` และ `strings.FieldsSeq` คือฝาแฝดแบบ lazy ของ `Split` และ `Fields`

@@ -5,6 +5,7 @@ sidebar:
   order: 1
 ---
 
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -54,35 +55,35 @@ Any type that implements `Error() string` satisfies the `error` interface. This 
 
 Here is a minimal function that returns `(string, error)`, demonstrating the fundamental shape of Go error handling:
 
-```go
-package main
+export const firstLookCode = `package main
 
 import (
-    "errors"
-    "fmt"
+\t"errors"
+\t"fmt"
 )
 
 func greet(name string) (string, error) {
-    if name == "" {
-        return "", errors.New("name must not be empty")
-    }
-    return fmt.Sprintf("Hello, %s!", name), nil
+\tif name == "" {
+\t\treturn "", errors.New("name must not be empty")
+\t}
+\treturn fmt.Sprintf("Hello, %s!", name), nil
 }
 
 func main() {
-    msg, err := greet("Gopher")
-    if err != nil {
-        fmt.Println("error:", err)
-        return
-    }
-    fmt.Println(msg) // Hello, Gopher!
+\tmsg, err := greet("Gopher")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\treturn
+\t}
+\tfmt.Println(msg) // Hello, Gopher!
 
-    _, err = greet("")
-    if err != nil {
-        fmt.Println("error:", err) // error: name must not be empty
-    }
-}
-```
+\t_, err = greet("")
+\tif err != nil {
+\t\tfmt.Println("error:", err) // error: name must not be empty
+\t}
+}`;
+
+<Playground code={firstLookCode} />
 
 `errors.New` creates a simple error value from a static string. The function returns `nil` as the error on the happy path and a non-nil error on the failure path. The caller checks `if err != nil` immediately after the call — this is the idiom you will write hundreds of times in Go.
 

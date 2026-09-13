@@ -20,7 +20,7 @@ func (r Rectangle) Area() float64 {
 }
 ```
 
-ที่นี่ `r Rectangle` คือ receiver `Area` กลายเป็น method ของ `Rectangle` เรียกได้ว่า `rect.Area()`
+ในที่นี้ `r Rectangle` คือ receiver `Area` กลายเป็น method ของ `Rectangle` เรียกได้ว่า `rect.Area()`
 
 ## Value receiver vs Pointer receiver
 
@@ -42,7 +42,7 @@ func (c *Counter) Inc()       { c.count++ }        // pointer receiver
 
 ## Methods บน named type ใดก็ได้
 
-Methods ไม่จำกัดแค่ structs คุณนิยาม methods บน named type ใด ๆ ใน package ของคุณได้:
+Methods ไม่จำกัดแค่ structs คุณนิยาม methods บน named type ใด ๆ ใน package ของคุณได้ — ยกเว้น pointer types และ interface types:
 
 ```go
 type Celsius float64
@@ -52,7 +52,7 @@ func (t Celsius) String() string {
 }
 ```
 
-คุณไม่สามารถนิยาม method บน type จาก package อื่น (เช่น `func (s string) Upper()` ผิดกฎ) แต่การห่อ type นั้นใน named type ในท้องถิ่นใช้ได้เสมอ
+คุณไม่สามารถนิยาม method บน type จาก package อื่น — เช่น `func (t time.Time) Weekday2() string { ... }` ผิดกฎ ด้วย error `cannot define new methods on non-local type time.Time` — แต่การห่อ type นั้นใน named type ใน package ของคุณเองใช้ได้เสมอ
 
 ## Method sets
 
@@ -118,7 +118,7 @@ func main() {
 >
 > **net/http**: http.ResponseWriter เป็น interface — Handler ทุกตัวรับ interface นี้แทน concrete type ทำให้ test ได้ง่ายด้วย mock
 >
-> **Kubernetes**: reconcile loop ใช้ pointer receiver ทุกตัวเพราะ controller มี state ที่ต้องแก้ไข — consistency ของ receiver type สำคัญมาก
+> **`*bytes.Buffer`** และ **`*http.Client`**: ทั้งคู่ใช้ pointer receiver ทุก method เพราะมี internal state ที่ต้องแก้ไข (buffer bytes, connection pool) — consistency ของ receiver type สำคัญมาก
 
 <Callout title="ใช้ pointer receiver เมื่อต้องการแก้ไข — และใช้ให้สม่ำเสมอ">
 Value receiver ทำงานบนสำเนาเสมอ ดังนั้นการแก้ไขจะหายไปเงียบ ๆ ใช้ pointer receiver ทุกครั้งที่ method ต้องเปลี่ยนสถานะของ receiver เมื่อเลือกใช้ pointer receiver กับ method ใดใน type หนึ่ง ให้ใช้กับทุก method ใน type นั้นเพื่อให้ method set สอดคล้องกันและหลีกเลี่ยงช่องว่าง interface-satisfaction ที่น่าแปลกใจ

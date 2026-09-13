@@ -53,7 +53,7 @@ case <-time.After(2 * time.Second):
 }
 ```
 
-For production code where many timeouts are set, prefer `context.WithTimeout` (covered in the Context lesson) because it propagates cancellation and avoids timer leaks.
+Prefer `context.WithTimeout` (covered in the Context lesson) when the deadline must propagate to callees; `time.After` is fine for a one-off local timeout — since Go 1.23 an unreferenced timer is garbage-collected even if you never call `Stop`.
 
 ## Runnable example
 

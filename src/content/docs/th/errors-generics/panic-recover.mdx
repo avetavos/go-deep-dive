@@ -16,7 +16,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 panic เกิดขึ้นสองแบบ:
 
-- **Runtime errors** — Go runtime ทำให้เกิดอัตโนมัติสำหรับ nil pointer dereferences, การเข้าถึง slice/array นอก bounds, type assertion failures บน non-interface types และ operation ที่เป็นไปไม่ได้ที่คล้ายกัน
+- **Runtime errors** — Go runtime ทำให้เกิดอัตโนมัติสำหรับ nil pointer dereferences, การเข้าถึง slice/array นอก bounds, type assertion แบบ single-value `x.(T)` บน interface value ที่ล้มเหลว และ operation ที่เป็นไปไม่ได้ที่คล้ายกัน
 - **การเรียกโดยตรง** — เรียก `panic(value)` ด้วยค่าใดก็ได้ (มักเป็น string หรือ error)
 
 ```go
@@ -27,6 +27,8 @@ panic(fmt.Errorf("invariant violated: %v", state))
 ทั้งสองรูปแบบคลาย stack เหมือนกัน ความแตกต่างเดียวคือค่าที่ `recover()` คืนให้
 
 ## defer + recover
+
+ทบทวนจาก Functions: deferred call ทำงานเป็น **LIFO order** — `defer` ตัวสุดท้ายที่ลงทะเบียนไว้ทำงานก่อน ระหว่าง panic ก็ยังเป็นแบบนี้: deferred function ทุกตัวบน stack ทำงานตามลำดับย้อนกลับ ก่อนที่ goroutine จะยอมแพ้ (เว้นแต่ตัวใดตัวหนึ่งเรียก `recover()`)
 
 `recover()` เป็น built-in function ที่ดักจับ panic ทำงานได้เฉพาะเมื่อเรียก **ภายใน deferred function** เท่านั้น การเรียก `recover()` นอก defer จะคืน `nil` เสมอ
 
@@ -71,7 +73,7 @@ panic ไม่ใช่เครื่องมือ error handling ทั่�
 
 - ไม่พบไฟล์, network timeout, input ผู้ใช้ไม่ถูกต้อง, ไม่พบ database rows สิ่งเหล่านี้คือสภาวะ runtime ที่คาดเดาได้ซึ่ง caller ต้องจัดการ คืน `(T, error)` สำหรับทั้งหมดนี้
 
-library code มีข้อผูกพันเพิ่มเติม: library ไม่ควร panic กับ input ของ caller ที่ไม่ดี ถ้า operation ภายในอาจ panic (เช่น parsing ด้วย `regexp.MustCompile`) ให้แปลงเป็น error ที่ boundary ก่อนคืนให้ caller
+library code มีข้อผูกพันเพิ่มเติม: library ไม่ควร panic กับ input ของ caller ที่ไม่ดี `regexp.MustCompile` เป็นตัวอย่างที่ดีของ boundary นี้: เหมาะกับ **pattern คงที่ที่รู้ตอน package init** — pattern ผิดตรงนั้นคือ programmer error และการ panic ตอน startup ก็ถูกและเจอทันที ถ้า pattern มาจาก caller หรือ input ผู้ใช้แทน ให้ใช้ `regexp.Compile` แล้วคืน error ตามปกติ — อย่าครอบ pattern ที่มาจาก caller ด้วย `MustCompile`
 
 ## Panic vs error: แนวทางเร็ว
 
@@ -144,7 +146,7 @@ func main() {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **net/http** server ใช้ recover ใน handler goroutine เพื่อป้องกัน 1 request panic crash ทั้ง server — panic ถูก log และ return 500 แทน
+> **net/http** server recover panic ที่เกิดใน handler ให้ทันที แล้ว log stack trace และ**ปิด connection** (ไม่ได้เขียน response 500 ให้ — connection ถูกตัดไปเลย); ถ้าต้องการปิดเงียบ ๆ โดยไม่ log ให้ panic ด้วยค่า `http.ErrAbortHandler`
 >
 > **encoding/json** internal panic ถูก recover และ convert เป็น error return ก่อน expose ออก public API
 

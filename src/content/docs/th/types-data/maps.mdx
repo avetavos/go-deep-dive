@@ -25,7 +25,7 @@ scores := map[string]int{
 }
 ```
 
-Key type ต้องเป็น **comparable** (รองรับ `==`) type ที่ใช้เป็น key ได้คือ `string`, `int`, ตัวเลขทุกชนิด, boolean, pointer, และ struct ที่ field ทุกตัวเป็น comparable แต่ slice, map, และ function ไม่สามารถใช้เป็น key ได้
+Key type ต้องเป็น **comparable** (รองรับ `==`) type ที่ใช้เป็น key ได้คือ `string`, `int`, ตัวเลขทุกชนิด, boolean, pointer, array, channel, interface, และ struct ที่ field ทุกตัวเป็น comparable interface key compile ผ่านได้เสมอ แต่จะ panic ตอน runtime ถ้า dynamic type ที่มันเก็บอยู่กลายเป็น incomparable (เช่น slice); pointer key เปรียบเทียบกันที่ address ไม่ใช่ค่าที่มันชี้ไป ส่วน slice, map, และ function ไม่สามารถใช้เป็น key ได้
 
 ## Set, get, delete
 
@@ -69,7 +69,7 @@ fmt.Println(a["x"]) // 99 — a และ b แชร์ map เดียวก�
 
 ## ลำดับ iteration แบบสุ่ม
 
-Go จงใจสุ่มลำดับ map iteration ทุกครั้งที่รันโปรแกรม เพื่อป้องกันโค้ดที่พึ่งพาลำดับที่ไม่ได้นิยาม หากต้องการ print entry ของ map แบบ deterministic ให้ sort key ก่อน:
+Spec ของภาษาไม่ได้กำหนดลำดับ iteration ไว้ และ runtime ก็จงใจสุ่มจุดเริ่มต้นของทุก `range` loop — สอง loop ในการรันเดียวกันยังให้ลำดับต่างกันได้ หากต้องการ print entry ของ map แบบ deterministic ให้ sort key ก่อน:
 
 ```go
 import "sort"
@@ -139,7 +139,7 @@ func main() {
 |---------|---------|------|
 | built-in hash map | O(1) average lookup, ใช้งานง่าย | ไม่ thread-safe — ต้องใช้ mutex หรือ sync.Map |
 | zero value for missing key | ไม่ panic เมื่ออ่าน key ที่ไม่มี | ซ่อน bug ถ้าลืมใช้ comma-ok idiom |
-| dynamic sizing | map ขยายอัตโนมัติ | map ไม่คืน memory หลัง delete — ต้องสร้างใหม่ถ้าต้องการ shrink |
+| dynamic sizing | map ขยายอัตโนมัติ | map ไม่ shrink อัตโนมัติ (Swiss table ตั้งแต่ 1.24 คืนบางส่วนเมื่อ grow); สร้างใหม่ถ้าต้องการปล่อย memory |
 | randomized iteration | ป้องกัน code ที่พึ่งพา order โดยไม่ตั้งใจ | ต้อง sort key ถ้าต้องการ deterministic output |
 
 ## ความเข้าใจผิดที่พบบ่อย
@@ -151,9 +151,7 @@ func main() {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Kubernetes** ใช้ `map[string]string` สำหรับ pod label, annotation, และ config — label selector ก็เป็น map เช่นกัน
->
-> **HTTP servers** ใช้ `map[string][]string` สำหรับ HTTP headers (`http.Header`) — protect ด้วย mutex ใน concurrent handler
+> **`http.Header`** คือ `map[string][]string` ธรรมดา — request แต่ละตัวมี Header ของตัวเอง จึงไม่ต้อง lock
 
 <Callout title="ลำดับ map iteration แบบสุ่ม — ควร sort เสมอสำหรับ output ที่ deterministic">
 Go จงใจสุ่มลำดับ map iteration ทุกครั้งที่รันโปรแกรม เพื่อป้องกันบั๊กที่พึ่งพา hash ordering แบบเงียบๆ ถ้าต้องการ output ที่คงที่ — สำหรับ test, log, หรือ user-facing data — ให้รวบรวม key ลงใน `[]string` แล้วเรียก `sort.Strings` แล้วค่อย range ผ่าน slice ที่เรียงแล้ว อย่าพึ่งพาลำดับของ `for k, v := range myMap`

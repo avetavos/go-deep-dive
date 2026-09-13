@@ -38,8 +38,43 @@ The tag syntax is `` `json:"<name>[,options]"` ``. Common options:
 | Tag | Effect |
 |-----|--------|
 | `json:"name"` | Use `name` as the JSON key instead of the field name |
-| `json:"name,omitempty"` | Omit this field from the output when its value is the zero value |
+| `json:"name,omitempty"` | Omit this field when it is `false`, `0`, a nil pointer/interface, or an empty string/slice/map/array — **not** a zero struct or a zero `time.Time` |
+| `json:"name,omitzero"` (Go 1.24) | Omit this field when it is the zero value of its type, including structs and `time.Time` — honours an `IsZero() bool` method if the type has one |
 | `json:"-"` | Always omit this field |
+
+`omitempty` only checks for "emptiness" at the language level (the field's zero value for basic types, or length zero for slices/maps). A struct value — even one whose fields are all zero — is never "empty" by that rule, so `omitempty` never omits it. `time.Time` is a struct, so the same applies: a zero `time.Time{}` is still marshaled, as `"0001-01-01T00:00:00Z"`.
+
+```go
+type Location struct {
+	City string
+}
+
+type Event struct {
+	Name     string    `json:"name"`
+	Location Location  `json:"location,omitempty"` // struct — NOT omitted when zero
+	When     time.Time `json:"when,omitempty"`     // time.Time — NOT omitted when zero
+}
+
+e := Event{Name: "party"} // Location and When left at their zero values
+data, _ := json.Marshal(e)
+fmt.Println(string(data))
+// {"name":"party","location":{"City":""},"when":"0001-01-01T00:00:00Z"}
+```
+
+`omitzero` (Go 1.24) fixes exactly this: it omits a field whenever the field's value equals its type's zero value, structs included, and it calls `IsZero()` on the field when the type defines one — which is how it correctly treats `time.Time{}` as empty.
+
+```go
+type Event2 struct {
+	Name     string    `json:"name"`
+	Location Location  `json:"location,omitzero"` // omits zero structs too
+	When     time.Time `json:"when,omitzero"`     // uses time.Time.IsZero()
+}
+
+e2 := Event2{Name: "party"}
+data2, _ := json.Marshal(e2)
+fmt.Println(string(data2))
+// {"name":"party"}
+```
 
 ## Nested structs
 
@@ -137,8 +172,6 @@ Go 1.27 ships `encoding/json/v2` and its low-level companion `encoding/json/json
 
 Import v2 when you want its API and stricter defaults:
 
-<Playground code={jsonV2Code} />
-
 export const jsonV2Code = `package main
 
 import (
@@ -174,6 +207,12 @@ func main() {
 \tfmt.Println("duplicate key:", err)
 }`;
 
+<Playground code={jsonV2Code} />
+
+<Callout title="needs go.dev (Go 1.27)">
+This snippet requires `encoding/json/v2`, stable only from Go 1.27 — the offline WASM runtime bundled with this course is built against an earlier Go release and cannot run it. Use the **Open in Playground** button to run it on go.dev instead, or run it locally with `GOEXPERIMENT=jsonv2 go run` on Go 1.26.
+</Callout>
+
 `json.UnmarshalRead(r, &u)` is the mirror image of `MarshalWrite` — it decodes straight from an `io.Reader` such as `resp.Body`.
 
 What is different from v1:
@@ -186,6 +225,21 @@ What is different from v1:
 | Options | global `Encoder` setters | per-call `Options` values, composable |
 | Embedding a struct's fields | anonymous field | `json:",embed"` tag (the old `inline` name was renamed) |
 | Unmarshal speed | baseline | significantly faster; Marshal on par |
+
+The stricter, case-sensitive name matching is easy to trip over silently. With `encoding/json/v2` imported, unmarshalling a lowercase key into an untagged field returns a `nil` error and leaves the field empty:
+
+```go
+type User struct {
+	Name string // no tag
+}
+
+var u User
+err := json.Unmarshal([]byte(`{"name":"Ada"}`), &u)
+// v1: err == nil, u.Name == "Ada" — matched case-insensitively
+// v2: err == nil, u.Name == ""    — no exact match, field left alone
+```
+
+v1 matched `name` to `Name` case-insensitively; v2 requires an exact match (or a `json:"name"` tag) by default. Always add explicit tags when moving code to v2.
 
 `jsontext` is the streaming layer underneath: `jsontext.Decoder` and `jsontext.Encoder` walk a document as `Token`s and `Value`s while validating syntax, which is what you want for very large payloads or for rewriting JSON without decoding it into Go values.
 

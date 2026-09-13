@@ -16,7 +16,7 @@ Go was designed around three ideas that shape everything you write in it.
 
 **Simplicity over cleverness.** The language has a small spec. There is deliberately no overloading, no default arguments, no implicit conversions, and no inheritance. When you read Go code written by someone else, it looks almost exactly like code you would have written yourself — that is intentional.
 
-**Explicit over implicit.** Type conversions, error handling, and memory allocation are all visible at the call site. Nothing happens behind the scenes that you have not written. This makes the code easy to trace and audit.
+**Explicit over implicit.** Type conversions and error handling are explicit — nothing happens behind the scenes that you have not written. Where a value lives, stack or heap, is decided by the compiler's escape analysis, not by anything visible at the call site — see Pointers. This makes the code easy to trace and audit.
 
 **One obvious way.** Go's tooling enforces a single code style (`gofmt`), a single module system (`go mod`), and a single test runner (`go test`). Debates about formatting, import order, and project layout simply do not happen.
 

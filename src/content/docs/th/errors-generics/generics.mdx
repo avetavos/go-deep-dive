@@ -46,7 +46,7 @@ type Number interface {
 }
 ```
 
-prefix `~` หมายถึง "type ใดก็ตามที่มี underlying type เป็น `int` หรือ `float64`" นี่คือ **tilde operator**: หากไม่มี `~` เฉพาะ named type นั้นเท่านั้นที่ตรงกัน; เมื่อมี `~` custom types เช่น `type Celsius float64` ก็ satisfy `~float64` ได้เช่นกัน ทำให้ constraints ทำงานได้ตามธรรมชาติกับ domain-specific type aliases
+prefix `~` หมายถึง "type ใดก็ตามที่มี underlying type เป็น `int` หรือ `float64`" นี่คือ **tilde operator**: หากไม่มี `~` เฉพาะ named type นั้นเท่านั้นที่ตรงกัน; เมื่อมี `~` custom types เช่น `type Celsius float64` ก็ satisfy `~float64` ได้เช่นกัน — นี่คือ defined (named) type ทำให้ constraints ทำงานได้ตามธรรมชาติกับ type แบบนี้ ส่วน true alias อย่าง `type C = float64` เป็น type เดียวกับ `float64` อยู่แล้ว จึงไม่ต้องใช้ `~` เลย
 
 ## Built-in constraints จาก cmp
 
@@ -98,7 +98,7 @@ methods บน generic type ใช้ type parameter ซ้ำใน receiver �
 ```go
 type Set[T comparable] = map[T]struct{}
 
-var seen Set[string] = map[string]struct{}{} // type เดียวกัน แค่ชื่อสั้นลง
+var seen Set[string] = map[string]struct{}{} // same type, just a shorter name
 ```
 
 ## Self-referential constraint (Go 1.26)
@@ -140,8 +140,8 @@ func main() {
 func (r *Rand) N[Int intType](n Int) Int
 
 r := rand.New(rand.NewPCG(1, 2))
-d := r.N(10 * time.Second)   // อนุมาน Int เป็น time.Duration
-i := r.N[int64](100)          // หรือระบุเอง
+d := r.N(10 * time.Second)   // Int inferred as time.Duration
+i := r.N[int64](100)          // or explicit
 ```
 
 type ของคุณเองก็ทำได้เหมือนกัน:
@@ -186,14 +186,19 @@ func main() {
 
 ## การอนุมาน function type แบบทั่วไปขึ้น (Go 1.27)
 
-การ assign generic function ให้ตัวแปร — หรือ convert — เป็น function type ที่ตรงกัน ตอนนี้อนุมาน type argument ได้ในทุกบริบทแบบนั้น ไม่ใช่แค่ตอน call:
+เดิมการอนุมาน type argument ของ generic function จำกัดอยู่แค่ตอน call เท่านั้น ตอนนี้มีอีกสองบริบทที่อนุมานได้เช่นกัน แต่มาจากคนละ release:
+
+- **assign ให้ตัวแปรที่เป็น function type ตรงกัน** — ทำงานได้ตั้งแต่ **Go 1.21** แล้ว
+- **convert แบบชัดเจนเป็น function type ที่ตรงกัน** — นี่คือส่วนที่เพิ่มใน **Go 1.27**
 
 ```go
 func Max[T cmp.Ordered](a, b T) T { /* ... */ }
 
-var maxInt func(int, int) int = Max   // อนุมาน T เป็น int (Go 1.27)
-sortBy := (func(string, string) string)(Max)
+var maxInt func(int, int) int = Max          // T inferred as int (Go 1.21+)
+sortBy := (func(string, string) string)(Max) // T inferred as string (Go 1.27)
 ```
+
+รูปแบบ assignment compile ผ่านบน toolchain Go 1.26.5 ของคอร์สนี้ (เมื่อ `go.mod` ระบุ `go 1.21` ขึ้นไป) แต่รูปแบบ conversion ไม่ผ่าน: บน 1.26.5 compiler ฟ้อง `cannot use generic function Max without instantiation` ยืนยันแล้วว่าทำงานได้จริงบน Go 1.27 ผ่าน [go.dev playground](https://go.dev/doc/go1.27) — โค้ดด้านบนรันได้เฉพาะที่นั่น
 
 export const genericsCode = `package main
 
@@ -254,18 +259,14 @@ func main() {
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **generics ทำให้ binary ใหญ่ขึ้นมาก** — Go ใช้ GC-shape stenciling — code ที่มี pointer shape ใช้ instance เดียวกัน ไม่ขยายแบบ C++ templates
-- **generic function เร็วกว่า interface เสมอ** — generics avoid boxing แต่ overhead ของ instantiation per type อาจมีผลในบางกรณี
+- **generics ทำให้ binary ใหญ่ขึ้นมาก** — Go ใช้ GC-shape stenciling: type ที่มี pointer/interface shape เดียวกันแชร์ instantiation เดียวกันและใช้ dictionary ส่ง type info ตอน runtime ไม่ขยายแบบ C++ templates
+- **generic function เร็วกว่า interface เสมอ** — เพราะ pointer/interface shape แชร์ instantiation ผ่าน dictionary กรณีนี้ generics อาจ**ช้ากว่า** interface ด้วยซ้ำ; ส่วน value type (`int`, struct) ได้ code เฉพาะของตัวเองต่อ type จึงเร็วและ avoid boxing ได้จริง
 - **generics เหมือน C++ templates** — Go generics ตรวจสอบ constraint ตอน definition ไม่ใช่ instantiation — error messages ดีกว่ามาก
 - **ควรใช้ generics แทน interface เสมอ** — interface เหมาะกว่าสำหรับ runtime polymorphism, generics เหมาะกว่าสำหรับ compile-time type-safe algorithms
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **golang.org/x/exp/slices**: generic `slices.Sort[S ~[]E, E cmp.Ordered](s S)` — type-safe sort ที่ทำงานกับทุก ordered type โดยไม่ต้อง cast
->
-> **Kubernetes**: generic controller framework ใน Kubernetes 1.26+ ใช้ generics เพื่อลด code duplication ระหว่าง controller type ต่างๆ
->
-> **database/sql**: library wrapper หลายตัว (เช่น `sqlc`) ใช้ generics สำหรับ type-safe query result scanning
+> **slices**: generic `slices.Sort[S ~[]E, E cmp.Ordered](s S)` — type-safe sort ที่ทำงานกับทุก ordered type โดยไม่ต้อง cast
 
 <Callout title="Generics เพิ่ม type safety โดยไม่ต้องใช้ interface{} + assertions">
 ก่อน generics container หรือ algorithm แบบ generic ต้องใช้ `interface{}` parameter และ runtime type assertion — error แสดงเฉพาะที่ runtime เท่านั้น ด้วย type parameters compiler ตรวจสอบความถูกต้องของ type ที่ compile time ใช้ generics เมื่อพบว่าตัวเองเขียน algorithm เดิมสำหรับหลาย type หรือเมื่อต้องการ container ที่รักษา element type ไว้

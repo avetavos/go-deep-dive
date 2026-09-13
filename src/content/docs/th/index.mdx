@@ -30,11 +30,10 @@ template: splash
 
 | สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |---------|---------|------|
-| goroutine | lightweight concurrency (2-8 KB stack) | scheduler overhead |
+| goroutine | lightweight concurrency (เริ่มที่ ~2 KB stack, โตอัตโนมัติ) | scheduler overhead |
 | GC | ไม่ต้อง manage memory เอง | GC pause latency |
 | static binary | deploy ง่าย ไม่มี dependency | binary size ใหญ่กว่า interpreted lang |
 | interface | implicit satisfaction, decoupled design | dynamic dispatch cost |
-| no generics (pre-1.18) | simplicity | code duplication |
 
 > 💡 ตัวอย่างจากของจริง
 >

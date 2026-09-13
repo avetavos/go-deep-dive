@@ -27,12 +27,12 @@ This creates a `go.mod` file — the module's manifest:
 ```go
 module github.com/yourname/myapp
 
-go 1.26.0
+go 1.27.0
 ```
 
 The module path (`github.com/yourname/myapp`) is both the import path prefix for your own packages and the identifier other modules use when they depend on yours. It does not have to be a real URL during development, but it must be unique if you publish to the Go module proxy.
 
-Note the version: Go 1.27's `go mod init` deliberately writes `go 1.26.0`, one minor release below the toolchain, so a brand-new module also builds on the previous Go. When you need a 1.27-only API, raise the line:
+Note the version: `go mod init` records the exact version of the toolchain that ran it — not a minor release below it. Confirmed locally: running it under Go 1.26.5 writes `go 1.26.5`; on Go 1.27.0 it writes `go 1.27.0`. To pin a specific minimum floor yourself, use:
 
 ```bash
 go get go@1.27          # rewrites the go line to 1.27.x

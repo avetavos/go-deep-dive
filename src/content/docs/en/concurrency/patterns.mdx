@@ -42,6 +42,7 @@ export const patternsCode = `package main
 
 import (
 \t"fmt"
+\t"sort"
 \t"sync"
 )
 
@@ -69,10 +70,10 @@ func square(in <-chan int) <-chan int {
 
 // --- Worker pool ---
 
-func workerPool(jobs <-chan int, results []int, wg *sync.WaitGroup) {
+func worker(jobs <-chan int, results chan<- int, wg *sync.WaitGroup) {
+\tdefer wg.Done() // one Done per worker, not per job
 \tfor j := range jobs {
-\t\tresults[j-1] = j * 2
-\t\twg.Done()
+\t\tresults <- j * 2
 \t}
 }
 
@@ -84,30 +85,47 @@ func main() {
 \t\tfmt.Println(v)
 \t}
 
-\t// Worker pool: 3 workers, 5 jobs, each job doubles its index
+\t// Worker pool: 3 workers, 5 jobs, each job doubles its value.
+\t// wg counts *workers*: Add(numWorkers) once, one Done() per worker
+\t// when its "for j := range jobs" loop exits (jobs is closed).
 \tconst numJobs = 5
+\tconst numWorkers = 3
 \tjobs := make(chan int, numJobs)
-\tresults := make([]int, numJobs)
+\tresults := make(chan int, numJobs)
 \tvar wg sync.WaitGroup
 
-\tfor w := 0; w < 3; w++ {
-\t\tgo workerPool(jobs, results, &wg)
+\twg.Add(numWorkers)
+\tfor w := 0; w < numWorkers; w++ {
+\t\tgo worker(jobs, results, &wg)
 \t}
 \tfor j := 1; j <= numJobs; j++ {
-\t\twg.Add(1)
 \t\tjobs <- j
 \t}
 \tclose(jobs)
-\twg.Wait()
 
-\tfor _, r := range results {
+\t// A dedicated goroutine closes results once every worker has
+\t// returned — closing from main directly would race with the
+\t// workers that are still sending.
+\tgo func() {
+\t\twg.Wait()
+\t\tclose(results)
+\t}()
+
+\t// Workers finish in a nondeterministic order, so sort before
+\t// printing to get a stable, comparable output.
+\tvar out []int
+\tfor r := range results {
+\t\tout = append(out, r)
+\t}
+\tsort.Ints(out)
+\tfor _, r := range out {
 \t\tfmt.Println(r)
 \t}
 }`;
 
 <Playground code={patternsCode} />
 
-On Go 1.25+ the `wg.Add(1)` / `go` / `defer wg.Done()` triple in `workerPool` collapses to `wg.Go(func() { ... })`; the playground keeps the classic form because its runner predates that method.
+The `wg` here counts *workers*, not jobs: `Add(numWorkers)` runs once before the workers start, and each worker calls `Done()` exactly once — when its `for j := range jobs` loop exits because `jobs` was closed. That is what makes a separate `go func() { wg.Wait(); close(results) }()` necessary: something has to wait for every worker to finish and then close `results`, and it cannot be `main` itself, because `main` is busy draining `results` with `for r := range results` at the same time. On Go 1.25+ each worker's `wg.Add`/`go`/`defer wg.Done()` triple could instead be written as `wg.Go(func() { ... })`; the playground keeps the classic `Add`/`Done` form because its in-browser runner predates that method. Because three workers race to write into `results`, the values arrive in whatever order the scheduler happens to finish them — the code sorts before printing so the output is deterministic despite that.
 
 
 <Callout title="Gotcha: goroutine leaks when nobody drains a channel">

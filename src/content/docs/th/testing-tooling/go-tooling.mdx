@@ -25,7 +25,7 @@ go run ./cmd/server        # รัน cmd sub-package เฉพาะ
 
 ## go build — สร้าง binary
 
-`go build` compile package และเขียน binary ลง disk โดยไม่มี flag `-o` binary จะตั้งชื่อตาม module ใน directory ปัจจุบัน
+`go build` compile package และเขียน binary ลง disk โดยไม่มี flag `-o` binary จะตั้งชื่อตาม element สุดท้ายของ package path (`./cmd/server` → `server`); ที่ module root ก็คือ element สุดท้ายของ module (`go build .` ใน `github.com/yourname/myapp` เขียน `myapp`)
 
 ```bash
 go build .                         # build package ปัจจุบัน output: ./myapp
@@ -86,11 +86,11 @@ go fix -diff ./...      # ดูตัวอย่างการเขียน
 
 ## อะไรอีกที่เปลี่ยนใน toolchain (Go 1.25–1.27)
 
-- `go mod init` เขียนบรรทัด `go` ต่ำกว่า toolchain หนึ่ง minor version (`go 1.26.0` จาก Go 1.27) เพื่อให้ module ใหม่ build บนรุ่นก่อนหน้าได้ด้วย ยกขึ้นด้วย `go get go@1.27` เมื่อต้องใช้ feature ของ 1.27
+- `go mod init` เขียนบรรทัด `go` เป็นเวอร์ชันจริงของ toolchain ที่รันมัน — ไม่ใช่ต่ำกว่าหนึ่ง minor version ยืนยันในเครื่องแล้ว: Go 1.26.5 เขียน `go 1.26.5`; รันด้วย Go 1.27.0 จะเขียน `go 1.27.0` ยกหรือตรึงบรรทัดนี้เองด้วย `go get go@1.27` เมื่อต้องการ floor เฉพาะ
 - `go doc example.com/pkg@v1.2.3` (Go 1.27) แสดง doc ของ module version ที่ระบุ และ `go doc -ex` แสดงรายการ example ที่รันได้
 - `go doc -http` (Go 1.25) เสิร์ฟ documentation ในเบราว์เซอร์ ไม่ต้องใช้ `pkgsite` สำหรับงานในเครื่องอีกแล้ว
 - `go tool pprof -http` (Go 1.26) เปิดมาที่หน้า flame graph; `go tool trace -http=:6060` (Go 1.27) bind เฉพาะ localhost เว้นแต่ระบุ address เต็ม
-- `go build -asan` (Go 1.25) รายงาน memory leak ตอนจบโปรแกรม; `go version -m -json` พิมพ์ build info เป็น JSON
+- `go version -m -json` (Go 1.24) พิมพ์ build info เป็น JSON; `go build -asan` (Go 1.25) รายงาน memory leak ตอนจบโปรแกรม
 
 ## go doc — เรียกดู documentation
 
@@ -110,7 +110,7 @@ go doc golang.org/x/text@v0.28.0  # module version ที่ระบุ (Go 1.2
 ## รวมทุกอย่าง — CI pipeline ทั่วไป
 
 ```bash
-go fmt ./... && \
+test -z "$(gofmt -l .)" && \
 go vet ./... && \
 go test -race -coverprofile=coverage.out -covermode=atomic ./... && \
 go build ./...
@@ -129,18 +129,10 @@ pipeline สี่คำสั่งนี้ตรวจจับ formatting dr
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **`go fmt` เป็นแค่ style เท่านั้น** — gofmt เป็น de facto standard — PR ที่ไม่ผ่าน gofmt ถูก reject ใน project หลักทุกที่
+- **`go fmt` เป็นแค่ style เท่านั้น** — gofmt เป็น de facto standard — project ส่วนใหญ่บังคับ gofmt ใน CI
 - **`go vet` ตรวจสอบครบทุก bug** — `go vet` ตรวจ subset ของ common mistakes — ใช้ staticcheck เพิ่มสำหรับ production codebase
 - **`go generate` ทำงานอัตโนมัติตอน build** — `go generate` ต้องรันเอง ไม่ได้รันตอน `go build` — ต้อง explicit ใน Makefile หรือ CI
 - **GOPATH ยังจำเป็น** — Go modules (`go.mod`) แทน GOPATH อย่างสมบูรณ์ตั้งแต่ Go 1.16
-
-> 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** CI pipeline รัน `go vet` + staticcheck + race detector ทุก PR — ตรวจจับ bug ก่อน merge เป็น standard
->
-> **Go standard library** enforce gofmt ใน code review — ไม่มีข้อยกเว้น
->
-> **Docker** ใช้ `go tool pprof` เพื่อ profile container daemon memory usage และ optimize hot path
 
 <Callout title="gofmt จบการถกเถียงเรื่อง formatting — มี canonical style เพียงแบบเดียว">
 ต่างจากภาษาส่วนใหญ่ Go มาพร้อม formatter canonical เพียงตัวเดียวและ editor หลักทุกตัวเชื่อมต่อกับ formatter นั้นโดยค่าเริ่มต้น ไม่มีการโต้เถียงเรื่อง tabs กับ spaces ไม่มีการถกเถียงเรื่องความยาวบรรทัด ไม่มี style guide ที่ต้องดูแล เมื่อ gofmt บอกว่า code ควรมีลักษณะแบบใด นั่นคือจุดสิ้นสุดของการสนทนา นี่ไม่ใช่ข้อจำกัด — แต่คือของขวัญ: code review มุ่งเน้นที่ logic ไม่ใช่ aesthetics

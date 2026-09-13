@@ -30,10 +30,12 @@ The idiomatic Go convention is to return `(T, error)` as the last two return val
 result, err := riskyOperation()
 if err != nil {
     // do not use result — it is meaningless
-    return fmt.Errorf("riskyOperation: %v", err)
+    return fmt.Errorf("riskyOperation: %w", err)
 }
 // err is nil: result is valid
 ```
+
+`%w` keeps the chain intact so the caller can still inspect the original error with `errors.Is`/`errors.As` — covered in the next lesson.
 
 Returning the error to the caller is the norm. Swallowing errors silently — ignoring `err` with `_` — should be deliberate and rare, reserved for cases where failure is genuinely irrelevant (e.g., closing a read-only file after all reads succeeded).
 

@@ -199,15 +199,8 @@ func main() {
 
 ## ความเข้าใจผิดที่พบบ่อย
 
-- **"`defer` ช้า"** — `defer` มี overhead น้อยมาก (nanosecond range) ใช้ได้สบายใน production code สำหรับ cleanup
 - **"`range` copy ทั้ง slice"** — range copy เฉพาะ value ของแต่ละ element เท่านั้น ไม่ copy ทั้ง slice และ slice header ก็ถูก evaluate แค่ครั้งเดียวตอนเริ่ม loop
 - **"Go `for` loop ต้องใช้ semicolon เหมือน C"** — `for i := 0; i < n; i++` ใช้ semicolon แต่ `for range` และ condition-only loop ไม่ต้องใช้
-
-> 💡 ตัวอย่างจากของจริง
->
-> **Prometheus** ใช้ `for range` ใน metric collection loop — iterate ผ่าน target หลายพัน target อย่างมีประสิทธิภาพ
->
-> **Docker** ใช้ `defer` ในการปิด file handle และ release lock เพื่อป้องกัน resource leak ใน container lifecycle management
 
 <Callout title="`for` คือ Loop Keyword เดียวของ Go">
 Go ไม่มี `while`, `do-while`, หรือ `loop` ทุกการวนซ้ำใช้ `for` สามรูปแบบ ได้แก่ C-style (init; condition; post), condition-only (เทียบเท่า while), และ infinite loop (`for` เปล่า) ครอบคลุมทุก iteration pattern ที่คุณต้องการ
