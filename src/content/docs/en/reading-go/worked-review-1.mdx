@@ -1,0 +1,278 @@
+---
+title: 'Worked review 1: HTTP JSON API handler'
+description: 'A task-list HTTP API with an in-memory store, in the style AI writes it — find the bugs, then see them fixed one by one.'
+sidebar:
+  order: 5
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+This is a small task-list HTTP API: `POST /tasks` creates a task, `GET /tasks/{id}` fetches one. It is written in the confident, plausible style an AI assistant produces on the first try — it compiles, `go vet` says nothing, and it runs. Read it before running it. It has **5 real bugs**.
+
+## The program
+
+<Playground code={wr1Code} />
+
+export const wr1Code = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+\t"io"
+\t"net/http"
+\t"net/http/httptest"
+\t"strconv"
+\t"strings"
+)
+
+type Task struct {
+\tID   int    \`json:"id"\`
+\tText string \`json:"text"\`
+}
+
+type Store struct {
+\ttasks  map[int]Task
+\tnextID int
+}
+
+func NewStore() *Store {
+\treturn &Store{tasks: map[int]Task{}, nextID: 1}
+}
+
+func (s Store) Add(text string) Task {
+\tt := Task{ID: s.nextID, Text: text}
+\ts.tasks[t.ID] = t
+\ts.nextID++
+\treturn t
+}
+
+func (s *Store) Get(id int) (Task, bool) {
+\tt, ok := s.tasks[id]
+\treturn t, ok
+}
+
+func newMux(store *Store) *http.ServeMux {
+\tmux := http.NewServeMux()
+\tmux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request) {
+\t\tvar body struct {
+\t\t\tText string \`json:"text"\`
+\t\t}
+\t\tjson.NewDecoder(r.Body).Decode(&body)
+\t\tt := store.Add(body.Text)
+\t\tjson.NewEncoder(w).Encode(t)
+\t\tw.WriteHeader(http.StatusCreated)
+\t})
+\tmux.HandleFunc("GET /tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
+\t\tid, _ := strconv.Atoi(r.PathValue("id"))
+\t\tt, ok := store.Get(id)
+\t\tif !ok {
+\t\t\tw.WriteHeader(http.StatusNotFound)
+\t\t}
+\t\tjson.NewEncoder(w).Encode(t)
+\t})
+\treturn mux
+}
+
+func main() {
+\tstore := NewStore()
+\tts := httptest.NewServer(newMux(store))
+\tdefer ts.Close()
+
+\tfor _, text := range []string{"buy milk", "write report"} {
+\t\tpayload := strings.NewReader(fmt.Sprintf(\`{"text":%q}\`, text))
+\t\tresp, _ := http.Post(ts.URL+"/tasks", "application/json", payload)
+\t\tbody, _ := io.ReadAll(resp.Body)
+\t\tfmt.Printf("POST /tasks status=%d body=%s\\n", resp.StatusCode, body)
+\t}
+
+\tresp, _ := http.Post(ts.URL+"/tasks", "application/json", strings.NewReader("not json"))
+\tbody, _ := io.ReadAll(resp.Body)
+\tfmt.Printf("POST /tasks (bad json) status=%d body=%s\\n", resp.StatusCode, body)
+
+\tresp, _ = http.Get(ts.URL + "/tasks/abc")
+\tbody, _ = io.ReadAll(resp.Body)
+\tfmt.Printf("GET /tasks/abc status=%d body=%s\\n", resp.StatusCode, body)
+
+\tresp, _ = http.Get(ts.URL + "/tasks/999")
+\tbody, _ = io.ReadAll(resp.Body)
+\tfmt.Printf("GET /tasks/999 status=%d body=%s\\n", resp.StatusCode, body)
+}`;
+
+## Find the bugs
+
+Run it. Every response comes back with `status=200`, one task's `id` never changes, and a 404 has a body attached to it. None of that is intentional. Before opening the answer below, try to name at least three of the five bugs and which line causes each.
+
+<details>
+<summary>Reveal the 5 bugs</summary>
+
+1. **`func (s Store) Add(...)` has a value receiver.** `Add` mutates `s.nextID` and writes into `s.tasks` — but `s` is a full copy of `Store` on every call. The map write survives (a map value is a shared reference), but `s.nextID++` only increments the copy; the real `Store.nextID` never moves past 1. Every task created gets `"id":1`, silently colliding in the map. Real output: both `buy milk` and `write report` come back as `{"id":1,...}` — the second call overwrote the first in `store.tasks`.
+2. **`json.NewDecoder(r.Body).Decode(&body)`'s error is ignored.** POSTing `"not json"` doesn't fail — `body.Text` just stays `""`, and the handler happily creates a task with empty text and returns 200.
+3. **`w.WriteHeader(http.StatusCreated)` is called *after* `json.NewEncoder(w).Encode(t)`.** `Encode` calls `Write` internally, and the first `Write` on a `ResponseWriter` implicitly sends a `200` status if `WriteHeader` hasn't been called yet. By the time `WriteHeader(201)` runs, the response is already sent — `go run` logs `http: superfluous response.WriteHeader call` and the client sees `200`, never `201`.
+4. **The 404 branch does not `return`.** `if !ok { w.WriteHeader(http.StatusNotFound) }` sends the 404 header, then execution falls through to `json.NewEncoder(w).Encode(t)` anyway — encoding the zero-value `Task{}`. `GET /tasks/999` comes back `404` with a body of `{"id":0,"text":""}`, which looks like a malformed but existing task rather than "not found."
+5. **`strconv.Atoi(r.PathValue("id"))`'s error is ignored.** `GET /tasks/abc` doesn't return `400 Bad Request` — `id` silently becomes `0`, and the handler proceeds to look up task `0` as if that were a normal, valid request.
+
+</details>
+
+## The corrected program
+
+<Playground code={wr1FixedCode} />
+
+export const wr1FixedCode = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+\t"io"
+\t"net/http"
+\t"net/http/httptest"
+\t"strconv"
+\t"strings"
+\t"sync"
+)
+
+type Task struct {
+\tID   int    \`json:"id"\`
+\tText string \`json:"text"\`
+}
+
+type Store struct {
+\tmu     sync.Mutex // fixed: guards tasks/nextID against concurrent handlers
+\ttasks  map[int]Task
+\tnextID int
+}
+
+func NewStore() *Store {
+\treturn &Store{tasks: map[int]Task{}, nextID: 1}
+}
+
+func (s *Store) Add(text string) Task { // fixed: pointer receiver — nextID actually persists
+\ts.mu.Lock()
+\tdefer s.mu.Unlock()
+\tt := Task{ID: s.nextID, Text: text}
+\ts.tasks[t.ID] = t
+\ts.nextID++
+\treturn t
+}
+
+func (s *Store) Get(id int) (Task, bool) {
+\ts.mu.Lock()
+\tdefer s.mu.Unlock()
+\tt, ok := s.tasks[id]
+\treturn t, ok
+}
+
+func newMux(store *Store) *http.ServeMux {
+\tmux := http.NewServeMux()
+\tmux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request) {
+\t\tvar body struct {
+\t\t\tText string \`json:"text"\`
+\t\t}
+\t\tif err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+\t\t\thttp.Error(w, "invalid JSON body", http.StatusBadRequest)
+\t\t\treturn
+\t\t}
+\t\tt := store.Add(body.Text)
+\t\tw.WriteHeader(http.StatusCreated) // fixed: header before the first Write
+\t\t_ = json.NewEncoder(w).Encode(t)
+\t})
+\tmux.HandleFunc("GET /tasks/{id}", func(w http.ResponseWriter, r *http.Request) {
+\t\tid, err := strconv.Atoi(r.PathValue("id"))
+\t\tif err != nil {
+\t\t\thttp.Error(w, "invalid id", http.StatusBadRequest)
+\t\t\treturn
+\t\t}
+\t\tt, ok := store.Get(id)
+\t\tif !ok {
+\t\t\tw.WriteHeader(http.StatusNotFound)
+\t\t\treturn // fixed: stop here, do not also write a zero-value body
+\t\t}
+\t\t_ = json.NewEncoder(w).Encode(t)
+\t})
+\treturn mux
+}
+
+func main() {
+\tstore := NewStore()
+\tts := httptest.NewServer(newMux(store))
+\tdefer ts.Close()
+
+\tfor _, text := range []string{"buy milk", "write report"} {
+\t\tpayload := strings.NewReader(fmt.Sprintf(\`{"text":%q}\`, text))
+\t\tresp, _ := http.Post(ts.URL+"/tasks", "application/json", payload)
+\t\tbody, _ := io.ReadAll(resp.Body)
+\t\tfmt.Printf("POST /tasks status=%d body=%s\\n", resp.StatusCode, body)
+\t}
+
+\tresp, _ := http.Post(ts.URL+"/tasks", "application/json", strings.NewReader("not json"))
+\tbody, _ := io.ReadAll(resp.Body)
+\tfmt.Printf("POST /tasks (bad json) status=%d body=%s\\n", resp.StatusCode, body)
+
+\tresp, _ = http.Get(ts.URL + "/tasks/abc")
+\tbody, _ = io.ReadAll(resp.Body)
+\tfmt.Printf("GET /tasks/abc status=%d body=%s\\n", resp.StatusCode, body)
+
+\tresp, _ = http.Get(ts.URL + "/tasks/999")
+\tbody, _ = io.ReadAll(resp.Body)
+\tfmt.Printf("GET /tasks/999 status=%d body=%s\\n", resp.StatusCode, body)
+}`;
+
+Run the corrected version: IDs increment (`1`, then `2`), a malformed body now gets `400 invalid JSON body`, `/tasks/abc` gets `400 invalid id` instead of a false `404`, and `/tasks/999` gets a real `404` with an empty body. `go vet` and `golangci-lint run` both report zero issues on this version — the added `sync.Mutex` also closes the concurrency-safety gap a pointer-receiver `Store` would otherwise still have under real concurrent traffic (this demo's requests run sequentially, so the original wouldn't have shown a race here, but production traffic would).
+
+<Callout title="Value receivers on a type with mutable state are the recurring theme">
+Bug 1 alone explains why `Store.Add` needs a pointer receiver: a value receiver silently drops every mutation except the ones that go through a reference type like a map. See **[Methods](/go/en/methods-interfaces/methods/)** and pattern 13 in the **[AI Bug Catalog](/go/en/reading-go/ai-bug-catalog/)**.
+</Callout>
+
+export const quizWorkedReview1 = [
+  {
+    q: "In the buggy version, both POST requests return `{\"id\":1,...}`. What is the direct cause?",
+    options: [
+      "The Store's map has a maximum size of 1",
+      "Add has a value receiver, so `s.nextID++` increments a copy of nextID that is discarded when Add returns",
+      "The httptest server caches the first response",
+      "JSON encoding always resets numeric fields to 1"
+    ],
+    answer: 1,
+    explain: "Add(text string) Task with a value receiver copies the whole Store on every call. The map write persists (maps are reference types), but the nextID field is a plain int — incrementing the copy has no effect on the original Store's nextID."
+  },
+  {
+    q: "Why does the buggy handler's client always see `status=200` instead of `201`, even though the code calls `w.WriteHeader(http.StatusCreated)`?",
+    options: [
+      "http.StatusCreated is actually the same value as 200",
+      "WriteHeader is called after Encode has already triggered an implicit 200 on the first Write",
+      "httptest.NewServer overrides all status codes to 200",
+      "The client library ignores status codes above 200"
+    ],
+    answer: 1,
+    explain: "The first call to ResponseWriter.Write (which json.Encoder.Encode makes internally) sends an implicit 200 status if WriteHeader hasn't run yet. Calling WriteHeader afterward is a no-op that only logs 'superfluous response.WriteHeader call.'"
+  },
+  {
+    q: "`GET /tasks/999` (a task that does not exist) returns 404 with body `{\"id\":0,\"text\":\"\"}` in the buggy version. What single missing keyword causes the body to be sent at all?",
+    options: [
+      "return — without it, execution falls through to the Encode call after WriteHeader(404)",
+      "break — the handler needs a labeled break",
+      "continue — the loop needs to skip an iteration",
+      "defer — the encode call should have been deferred"
+    ],
+    answer: 0,
+    explain: "if !ok { w.WriteHeader(http.StatusNotFound) } has no return statement, so the handler proceeds to the unconditional json.NewEncoder(w).Encode(t) below it regardless of whether the task was found."
+  },
+  {
+    q: "The fixed version adds a sync.Mutex to Store even though this demo's sequential requests never actually raced. Why add it anyway?",
+    options: [
+      "It is required by the Go compiler for any struct with a map field",
+      "A real HTTP server handles requests concurrently; without a mutex, concurrent POST/GET calls would race on the shared map and nextID field even after the receiver bug is fixed",
+      "It has no real benefit — it was added only for symmetry with the AI Bug Catalog",
+      "sync.Mutex makes JSON encoding faster"
+    ],
+    answer: 1,
+    explain: "net/http calls each handler in its own goroutine per request. This demo happens to issue requests one at a time, but real traffic would not — the mutex is required for correctness under actual concurrent load, not for this specific demo's output."
+  }
+];
+
+<Quiz client:visible id="reading-go/worked-review-1" questions={quizWorkedReview1} />
+
+<ProgressTracker client:visible id="reading-go/worked-review-1" />

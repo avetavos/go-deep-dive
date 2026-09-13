@@ -1,0 +1,113 @@
+---
+title: Review checklist
+description: 'checklist ใช้จริง 6 หมวด สำหรับ review โค้ด Go — แต่ละบรรทัด link ไปบทที่อธิบายกฎเบื้องหลัง'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+นี่คือ checklist ที่ไล่ดูด้วยตา บน diff ไหนก็ได้ ของคุณเองหรือของ AI หลังจากเครื่องมือใน **[Verification Tools](/go/th/reading-go/verification-tools/)** รันผ่านและสะอาดแล้ว หน้านี้ตั้งใจให้พอดี 1 หน้าเวลาพิมพ์ — checklist ที่ไม่มีใครเปิดดูจริงตอน review ก็ไร้ค่า ทุกบรรทัด link ไปบทที่อธิบายว่า *ทำไม* เพื่อให้หน้านี้ยังคงเป็นแค่ list ไม่ใช่การสอนซ้ำ
+
+## Errors
+
+- ทุก `error` return ถูกเช็กก่อนใช้ค่าที่อยู่ข้างๆ มันหรือเปล่า?
+- มี `error` ไหนถูกจัดการสองรอบ — ทั้ง log **และ** return ขึ้นไปด้วยหรือเปล่า? ดู **[Error Values](/go/th/errors-generics/error-values/)**
+- มี `:=` ใน `if`/`for` ที่บังเอิญ shadow `err` ด้านนอกไหม? ดู **[Variables & Types](/go/th/basics/variables-types/)**
+- concrete error type ถูก assign ให้ตัวแปรชนิด `error` แล้ว return ไปตรงๆ โดยไม่ตรวจสอบไหม? ดู **[A nil pointer inside an interface is not nil](/go/th/methods-interfaces/interfaces/)**
+- ทุก `errors.As` call ส่ง pointer (`&target`) ไม่ใช่ target เฉยๆ หรือเปล่า? ดู **[Wrapping Errors](/go/th/errors-generics/wrapping/)**
+- `recover()` ถูกเรียกตรงภายใน deferred function เอง — ไม่ใช่ผ่าน helper อีกชั้นหนึ่งใช่ไหม? ดู **[Panic and Recover](/go/th/errors-generics/panic-recover/)**
+- มี package นอก `main` ตัวไหนเรียก `log.Fatal` หรือ `os.Exit` ทำให้ `defer` ของ caller ถูกข้ามไปไหม? ดู **[Panic and Recover](/go/th/errors-generics/panic-recover/)**
+
+## Concurrency
+
+- ทุก goroutine มี exit condition ที่มองเห็นได้ไหม — channel ที่ปิดแล้ว, `ctx` ที่ cancel แล้ว, หรือค่าที่มันรออยู่?  ดู **[Goroutines](/go/th/concurrency/goroutines/)**
+- `wg.Add` ถูกเรียกก่อน goroutine เริ่ม จาก goroutine เดียวกับที่จะเรียก `wg.Wait` หรือเปล่า? ดู **[Goroutines](/go/th/concurrency/goroutines/)**
+- ทุก goroutine ที่ panic ได้ recover จากภายในตัวมันเองหรือเปล่า? ดู **[Panic and Recover](/go/th/errors-generics/panic-recover/)**
+- มี type ที่มี `sync.Mutex` (หรือคล้ายกัน) ตัวไหนถูกใช้หรือส่งต่อแบบ value ไหม? ดู **[The sync package](/go/th/concurrency/sync-primitives/)**
+- ถ้า loop launch goroutine หรือ defer closure, `go` directive ใน `go.mod` รับประกัน per-iteration variable จริงหรือเปล่า (1.22+) หรือ loop variable ถูก capture ไว้อย่างชัดเจนแล้ว? ดู **[Functions](/go/th/basics/functions/)**
+- `break` เปล่าๆ ใน `select` ใน `for` ไปถึง loop ที่มันดูเหมือนจะเล็งไปจริงหรือเปล่า? ดู **[Control Flow](/go/th/basics/control-flow/)**
+- background work ใช้ `context.Context` ของ request ซ้ำทั้งที่ควรตัดด้วย `context.WithoutCancel` หรือถูกเก็บไว้ใน struct field หรือเปล่า? ดู **[Context](/go/th/concurrency/context/)**
+
+## Resources
+
+- ทุก `defer` ที่ close/unlock/release อะไรบางอย่าง ผูก scope กับการ acquire ครั้งเดียว ไม่ใช่สะสมข้าม loop ใช่ไหม? ดู **[io and bufio](/go/th/stdlib/io-bufio/)**
+- resource (`resp.Body`, ไฟล์, lock) ถูกใช้หลังจากเช็ก error ตอน acquire แล้วเท่านั้นใช่ไหม? ดู **[The client side](/go/th/stdlib/net-http/)**
+- ทุก `http.Client` ที่ใช้นอกเหนือจาก script เร็วๆ ตั้ง `Timeout` หรือเปล่า? ดู **[The client side](/go/th/stdlib/net-http/)**
+
+## API contract
+
+- `resp.StatusCode` ถูกเช็กก่อนเชื่อ response body ว่าเป็นข้อมูลจริงไหม? ดู **[The client side](/go/th/stdlib/net-http/)**
+- `omitempty` อยู่บน `time.Time` หรือ struct field ที่คาดหวังให้มัน omit zero value ไหม? ดู **[encoding/json](/go/th/stdlib/encoding-json/)**
+- ทุก field ที่ JSON contract ต้องการถูก export (และ tag) จริงไหม? ดู **[encoding/json](/go/th/stdlib/encoding-json/)**
+- nil slice ถูก return ในจุดที่ contract ต้องการ `[]` หรือกลับกันไหม? ดู **[encoding/json](/go/th/stdlib/encoding-json/)**
+
+## Types
+
+- `append` บน sub-slice เสี่ยงทับ backing array ของ parent slice ไหม? ดู **[Slices](/go/th/types-data/slices/)**
+- map ถูกเขียนก่อนที่จะ initialize ด้วย `make` หรือ literal หรือเปล่า? ดู **[Maps](/go/th/types-data/maps/)**
+- มี call site ไหนยังสมมติว่า `maps.Keys`/`maps.Values` คืน slice แทนที่จะเป็น `iter.Seq` ไหม? ดู **[Iterators](/go/th/errors-generics/iterators/)**
+
+## Tooling & style
+
+- `time.Sleep`/duration literal ทุกตัวระบุ unit ชัดเจนไหม (`5 * time.Second` ไม่ใช่ `5` เปล่าๆ)? ดู **[time](/go/th/stdlib/time/)**
+- interface ใหม่มี implementation จริงมากกว่าหนึ่งตัวไหม — หรือ `any`/concrete type จะง่ายกว่า? `interface{}` ถูกใช้ในจุดที่ `any` อ่านง่ายกว่าไหม? receiver ตั้งชื่อตาม type ไม่ใช่ `this`/`self` ใช่ไหม? ดู **[Interfaces](/go/th/methods-interfaces/interfaces/)** และ **[Methods](/go/th/methods-interfaces/methods/)**
+
+<Callout title="checklist ช่วยลดขอบเขตการค้นหา ไม่ได้แทนที่มัน">
+ทุกบรรทัดด้านบน map ไปยังหนึ่งใน 24 pattern ใน **[AI Bug Catalog](/go/th/reading-go/ai-bug-catalog/)** — ครึ่งหนึ่งไม่มีเครื่องมือไหนในคอร์สนี้จับได้อัตโนมัติเลย รัน list นี้กับทุก diff ไม่ว่า linter จะรายงานสะอาดแค่ไหนก็ตาม
+</Callout>
+
+export const quizReviewChecklist = [
+  {
+    q: "Which group does 'does every http.Client set Timeout' belong to, and why that group rather than 'API contract'?",
+    options: [
+      "API contract — it is about what a caller can expect from a response",
+      "Resources — a Client with no Timeout can hold a connection (a resource) open indefinitely",
+      "Types — http.Client is a struct type",
+      "Tooling & style — it is a matter of code style, not correctness"
+    ],
+    answer: 1,
+    explain: "checklist นี้จัดกลุ่มตามสิ่งที่ล้มเหลว ไม่ใช่ตาม package ที่เกี่ยวข้อง: Timeout ที่ไม่จำกัดคือปัญหา resource-lifetime (connection ถูกถือค้างไว้ตลอดกาล) คนละเรื่องกับว่า status code หรือรูปร่างของ body เคารพ contract หรือเปล่า"
+  },
+  {
+    q: "Why does the checklist tell you to check 'is recover() called directly inside the deferred function' rather than just 'does the code call recover() somewhere'?",
+    options: [
+      "recover() only stops a panic when called directly by a deferred function — one level of indirection through a helper makes it silently ineffective",
+      "recover() is deprecated in modern Go",
+      "recover() must be called before defer, not after",
+      "There is no difference — both phrasings check the same thing"
+    ],
+    answer: 0,
+    explain: "recover() ที่ถูกเรียกผ่าน function call เพิ่มอีกชั้น (defer wrapper(); func wrapper() { recover() }) ไม่หยุด panic — spec ของภาษากำหนดว่า recover ต้องถูกเรียกตรงจาก deferred function เอง"
+  },
+  {
+    q: "The checklist says to check the go.mod `go` directive for loop-variable capture bugs. Why does the directive matter here?",
+    options: [
+      "It doesn't — this bug is identical on every Go version",
+      "Go 1.22 changed for-loop variables to be scoped per iteration, so the same capturing code is a bug pre-1.22 and correct at 1.22+",
+      "The go directive only affects which stdlib version is available",
+      "Older go directives disable goroutines entirely"
+    ],
+    answer: 1,
+    explain: "`go func(){ use(v) }()` ข้างใน range loop เป็น bug หรือไม่ขึ้นกับว่า go.mod ประกาศ go 1.22 ขึ้นไปหรือเปล่าล้วนๆ — source text เดียวกันมี semantics ต่างกันตาม version"
+  },
+  {
+    q: "Why is 'does a new interface have more than one real implementation' on this checklist at all, given no linter can check it?",
+    options: [
+      "It shouldn't be — checklists should only contain things a tool can verify",
+      "A checklist is exactly for judgment calls no tool makes; that is the gap human review exists to fill",
+      "golangci-lint can check this if you enable enough linters",
+      "Interfaces with one implementation are always a compile error"
+    ],
+    answer: 1,
+    explain: "ประเด็นหลักของโมดูลนี้คือประมาณครึ่งหนึ่งของ pattern ที่มันครอบคลุมไม่มี automated check เลย — checklist มีไว้เพื่อบรรจุการตัดสินใจที่ tooling ทำไม่ได้ ไม่ใช่แค่ส่วนที่มันทำได้"
+  }
+];
+
+<Quiz client:visible id="reading-go/review-checklist" questions={quizReviewChecklist} />
+
+<ProgressTracker client:visible id="reading-go/review-checklist" />

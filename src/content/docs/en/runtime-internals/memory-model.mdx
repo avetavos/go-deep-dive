@@ -1,0 +1,351 @@
+---
+title: The Memory Model
+description: 'Happens-before and synchronizes-with, the exact edges Go gives you, why an unsynchronized flag is broken, and what the race detector does and does not catch.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Happens-before, and why "it ran first" is not enough
+
+The [Sync Primitives](/go/en/concurrency/sync-primitives/) lesson already showed that a plain `bool` used to signal between goroutines has "no such guarantee" of visibility. This lesson explains exactly what that guarantee is, what earns it, and what does not.
+
+Go's memory model — the formal document is [go.dev/ref/mem](https://go.dev/ref/mem) — defines a relation called **happens-before** between any two events in your program (a read, a write, a function call). If event A happens-before event B, every goroutine is guaranteed to see A's effects by the time B runs. Ordinary sequential code within a single goroutine happens-before itself in source order — that part matches your intuition. The part that does not match intuition: **two operations in different goroutines have no happens-before relationship at all unless something in your code establishes one.**
+
+Wall-clock order is irrelevant. "Goroutine A's write happened at 10:00:00.001 and goroutine B's read happened at 10:00:00.002" tells you nothing about whether B is guaranteed to see A's write. Only an explicit synchronization edge does.
+
+## The edges Go actually gives you
+
+The memory model lists a specific, closed set of operations that create a happens-before edge across goroutines. Nothing else does. Verified against the current text of [go.dev/ref/mem](https://go.dev/ref/mem):
+
+| Mechanism | The exact guarantee |
+|---|---|
+| **Goroutine creation** | "The `go` statement that starts a new goroutine is synchronized before the start of the goroutine's execution." Everything visible to the goroutine that calls `go f()` is visible inside `f`. |
+| **Goroutine exit** | Deliberately **not** an edge: "The exit of a goroutine is not guaranteed to be synchronized before any event in the program." A goroutine finishing tells the rest of the program nothing on its own — you still need a `WaitGroup`, channel, or lock to observe its effects. |
+| **Channel send/receive** | "A send on a channel is synchronized before the completion of the corresponding receive from that channel." This is the one your code relies on constantly — closing a channel counts as a send-like event for every receiver. |
+| **Mutex / RWMutex** | "For any `sync.Mutex` or `sync.RWMutex` variable `l` and `n < m`, call `n` of `l.Unlock()` is synchronized before call `m` of `l.Lock()` returns." Every `Lock` sees every earlier `Unlock`'s effects — the ordering the [Sync Primitives](/go/en/concurrency/sync-primitives/) lesson's lock-scope advice depends on. |
+| **`sync.Once`** | "The completion of a single call of `f()` from `once.Do(f)` is synchronized before the return of any call of `once.Do(f)`." Every caller, whether it ran `f` or blocked waiting, sees `f`'s effects once `Do` returns. |
+| **`sync/atomic`** | Atomic operations on a given memory location behave, for the purposes of the memory model, like sequentially consistent operations on that location — an atomic store is visible to a subsequent atomic load of the same variable. This is the one channel/mutex/once do not cover: an ordinary `int` or `bool` gets none of this; `atomic.Int64`/`atomic.Bool` do. |
+| **Package `init`** | "If a package `p` imports package `q`, the completion of `q`'s `init` functions happens before the start of any of `p`'s." And "the completion of all `init` functions is synchronized before the start of the function `main.main`." This is why an `init()` that calls `sql.Register` (see [Packages & Imports](/go/en/basics/packages-imports/)) is guaranteed to run before your code can reach it in `main`. |
+
+That table is the entire mechanism. If your program's cross-goroutine communication is not built from one of these seven rows, it has no happens-before guarantee, no matter how obviously correct it looks in source order.
+
+## Demonstrating three of the edges together
+
+export const happensBeforeCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+)
+
+func main() {
+\t// 1. Channel send/receive as a happens-before edge.
+\tdata := 0
+\tch := make(chan struct{})
+\tgo func() {
+\t\tdata = 42        // write before the send
+\t\tch <- struct{}{} // send is synchronized before the matching receive completes
+\t}()
+\t<-ch // receive
+\tfmt.Println("data after channel handoff:", data) // guaranteed to see 42
+
+\t// 2. sync.Once as a happens-before edge.
+\tvar once sync.Once
+\tvar cfg string
+\tvar wg sync.WaitGroup
+\tfor i := 0; i < 3; i++ {
+\t\twg.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg.Done()
+\t\t\tonce.Do(func() { cfg = "loaded" })
+\t\t}()
+\t}
+\twg.Wait()
+\tfmt.Println("cfg after Once:", cfg)
+
+\t// 3. Mutex Unlock is synchronized before the next Lock returns.
+\tvar mu sync.Mutex
+\tcounter := 0
+\tvar wg2 sync.WaitGroup
+\tfor i := 0; i < 100; i++ {
+\t\twg2.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg2.Done()
+\t\t\tmu.Lock()
+\t\t\tcounter++
+\t\t\tmu.Unlock()
+\t\t}()
+\t}
+\twg2.Wait()
+\tfmt.Println("counter after 100 locked increments:", counter)
+}`;
+
+<Playground code={happensBeforeCode} />
+
+All three prints are *guaranteed*, not just likely — `data`, `cfg`, and `counter` are each read only after an edge from the table above ties the read to every write that could have happened first.
+
+## Why an unsynchronized `done bool` flag is broken
+
+Here is the same shape of bug the [Sync Primitives](/go/en/concurrency/sync-primitives/) lesson showed with a busy-spin loop, in the form it usually takes in real code: a result struct with a plain `bool` used to say "the value is ready."
+
+export const brokenFlagCode = `package main
+
+import (
+\t"fmt"
+\t"time"
+)
+
+type job struct {
+\tresult int
+\tdone   bool // plain bool -- no synchronization
+}
+
+func process(j *job) {
+\tj.result = 21 * 2
+\tj.done = true // plain write -- no happens-before edge to any reader
+}
+
+func main() {
+\tj := &job{}
+\tgo process(j)
+
+\tfor !j.done { // plain read -- no happens-before edge to the write above
+\t\ttime.Sleep(time.Microsecond)
+\t}
+\tfmt.Println("result:", j.result)
+}`;
+
+<Playground code={brokenFlagCode} />
+
+This prints `result: 42` essentially every time you run it here, and that is exactly the trap: **nothing in the memory model guarantees that.** `j.done` and `j.result` are ordinary memory with no synchronization edge connecting `process`'s writes to `main`'s reads. The memory model gives the compiler and CPU permission to reorder or cache those accesses in ways that would break this program — Go's compiler does not currently perform the specific reordering that would make this loop spin forever, which is precisely why it "works" in casual testing, on this architecture, with this compiler version, today. None of that is a guarantee for tomorrow's compiler, a different `GOARCH`, or a busier machine where the scheduler behaves differently.
+
+Compiling and running the identical program with `go run -race` on Go 1.27, darwin/arm64:
+
+```text
+==================
+WARNING: DATA RACE
+Write at 0x00c000012188 by goroutine 7:
+  main.process()
+      /tmp/racedemo/main.go:15 +0x4c
+  main.main.gowrap1()
+      /tmp/racedemo/main.go:20 +0x18
+
+Previous read at 0x00c000012188 by main goroutine:
+  main.main()
+      /tmp/racedemo/main.go:22 +0xc0
+
+Goroutine 7 (running) created at:
+  main.main()
+      /tmp/racedemo/main.go:20 +0xa0
+==================
+==================
+WARNING: DATA RACE
+Read at 0x00c000012180 by main goroutine:
+  main.main()
+      /tmp/racedemo/main.go:25 +0xfc
+
+Previous write at 0x00c000012180 by goroutine 7:
+  main.process()
+      /tmp/racedemo/main.go:14 +0x38
+  main.main.gowrap1()
+      /tmp/racedemo/main.go:20 +0x18
+
+Goroutine 7 (finished) created at:
+  main.main()
+      /tmp/racedemo/main.go:20 +0xa0
+==================
+result: 42
+Found 2 data race(s)
+exit status 66
+```
+
+Two races, not one: `done` races (the field the loop condition reads), and `result` races too — even though the loop "usually" only reads `result` after observing `done == true`, that ordering is itself unsynchronized, so the race detector correctly reports both fields as raced. Note this in the Playground above: it runs the un-instrumented program (the in-browser and go.dev runners cannot pass `-race`), so it will print `result: 42` and look completely fine — which is the entire point of this lesson. **Never trust that a concurrent program is correct because it printed the right answer once. Only `-race`, or a proof from the table above, tells you anything.**
+
+## A data race is an error — but not quite C's "undefined behavior"
+
+It is common to hear "a data race is undefined behavior," borrowed from C and C++. Go's own memory model spec draws a real distinction here. Its formal definition of a data race: *"a write to a memory location happening concurrently with another read or write to that same location, unless all the accesses involved are atomic data accesses as provided by the `sync/atomic` package."* That much matches C.
+
+What differs is the consequence. The spec says explicitly that Go's implementation constraints "make Go more like Java or JavaScript, in that most races have a limited number of outcomes, and less like C and C++, where the meaning of any program with a race is entirely undefined, and the compiler may do anything at all." In practice this means a racing read in Go will return *some* value that was genuinely written to that location at some point — not fabricate an arbitrary bit pattern, not corrupt unrelated memory, not let the compiler assume the race cannot happen and delete a surrounding `if`. For a multi-word value (a string, a slice, an interface) a race can still tear — you can observe half of an old value and half of a new one, which is corruption in its own right — but the failure mode is bounded, not "anything at all."
+
+None of this makes a data race acceptable. It is still specified as an error, the race detector still treats it as one, and the whole point of `go vet`'s `copylocks` check and this course's repeated emphasis on synchronization is to never write one on purpose. The distinction matters only for how you reason about a race you find in the wild: it explains observed symptoms (a torn read, a stale value) without needing to imagine C-style memory corruption.
+
+## What `-race` catches — and what it structurally cannot
+
+`go run -race` and `go test -race` instrument every memory access and synchronization event and report, at runtime, any pair of racing accesses it actually observes. Two limits matter for reading code, both taken directly from the [official race detector documentation](https://go.dev/doc/articles/race_detector):
+
+- **"The race detector only finds races that happen at runtime, so it can't find races in code paths that are not executed."** A race hiding behind an `if err != nil` branch your test suite never triggers produces zero warnings. Passing `-race` in CI is evidence of *this run's* absence of races, never proof the program cannot race.
+- **Overhead is real, not academic**: memory usage typically grows 5–10x and execution time 2–20x under instrumentation. This is why `-race` runs in CI and staging under realistic load, never in production continuously — and why a race that only manifests under production-scale concurrency can still slip past a test suite that never generates enough goroutines to trigger the actual interleaving.
+
+## Mental Model
+
+```text
+Without a synchronization edge:              With one (channel / mutex / once / atomic / init):
+
+Goroutine A        Goroutine B               Goroutine A        Goroutine B
+  write x             read x                   write x            [edge]
+     ?  no guaranteed order  ?                     │  synchronized before
+     └──────X───────┘                              └──────────────► read x
+  (compiler/CPU free to reorder,            (A's write, and everything before it,
+   cache, or delay visibility)               is guaranteed visible to B)
+```
+
+export const memModelDiagram = `flowchart LR
+  subgraph GoA["Goroutine A"]
+    W["write data"]
+    S["ch <- v  /  mu.Unlock()  /  once.Do done  /  atomic.Store"]
+    W --> S
+  end
+  subgraph GoB["Goroutine B"]
+    R2["<-ch  /  mu.Lock() returns  /  once.Do returns  /  atomic.Load"]
+    R3["read data -- guaranteed to see W"]
+    R2 --> R3
+  end
+  S -.."synchronized before" (happens-before edge)..-> R2`;
+
+<Mermaid code={memModelDiagram} title="A happens-before edge is what lets a read in one goroutine trust a write in another" />
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Reasoning by happens-before | You can prove a program race-free by inspection | It is a real discipline to learn — "looks sequential" is not evidence |
+| Channels / mutex / once / atomic | Each gives a specific, well-defined edge | Choosing the wrong one (e.g. a plain bool "because it's simpler") compiles fine and is silently broken |
+| `-race` in CI | Catches most real races before production | 2–20x slower, 5–10x more memory, and provably incomplete |
+
+## Common Misconceptions
+
+- **"It printed the right answer, so it's not racing."** A racing program can print the correct answer every time you happen to run it and still have no guarantee of doing so. Only a happens-before edge or a clean `-race` run (against realistic coverage) is evidence.
+- **"A data race just means the output is 'sometimes wrong'."** A race is a property of the *access pattern* (an unsynchronized concurrent read/write pair), not of the observed output. A program can race and still, every single time, print the value you expected — that does not make the access pattern safe.
+- **"Go's races are undefined behavior exactly like C."** As shown above, Go's own spec explicitly narrows this: outcomes are bounded (a real prior value, possibly torn for multi-word types), and the compiler cannot use "this can't race" to justify arbitrary transformations the way a C compiler can.
+- **"`sync/atomic` and a plain `int` behave the same once you `Load`/`Store` at the right places."** Only the typed `sync/atomic` operations count as atomic for the memory model's definition of a data race. A plain `int` accessed concurrently is racing even if every access "happens" to read or write a whole word.
+
+## Reading AI-generated code
+
+AI-generated Go leans on plain fields for cross-goroutine signaling constantly — it compiles, and a quick manual test "confirms" it works. Check for these before trusting a review:
+
+- Is a `bool`, `int`, pointer, or any other plain field read in one goroutine after being written in another, with nothing from the edges table connecting the two accesses?
+- Does a "ready" or "done" flag do the job a channel close, a `sync.WaitGroup`, or an `atomic.Bool` should be doing?
+- Is a value read *before* the loop/select that is supposed to guarantee it is ready — for example, reading a struct field outside the `case v := <-ch:` that received it?
+- Does a comment near a shared variable claim "this is safe because writes are quick" or "this always finishes before that runs" — a wall-clock argument standing in for a synchronization edge?
+- Is `sync/atomic`'s *typed* API (`atomic.Int64`, `atomic.Bool`, `atomic.Pointer[T]`) used, or is a plain variable manually incremented from multiple goroutines "because it's just a counter"?
+
+<SpotTheBug code={`type Result struct {
+	Value int
+	Ready bool
+}
+
+func compute(r *Result) {
+	r.Value = expensiveCalc()
+	r.Ready = true
+}
+
+func main() {
+	r := &Result{}
+	go compute(r)
+	for !r.Ready {
+	}
+	fmt.Println(r.Value)
+}`}>
+This is the `done bool` bug in its most common AI-generated shape: a result struct with a plain `Ready` flag, and a **busy-spin loop with no synchronization at all** — not even the `time.Sleep` the lesson's own demo has. `go vet` says nothing; the program compiles and, on most machines, prints the right value most of the time. `go run -race` reports a data race on both `Ready` and `Value`, for exactly the reason this lesson demonstrates: neither field has a happens-before edge connecting `compute`'s writes to `main`'s reads. The busy-spin loop is also its own bug independent of the race: it burns 100% of a CPU core the entire time it waits, something a channel receive or `sync.WaitGroup.Wait()` never does (both park the goroutine).
+
+The fix replaces the flag with a real edge — a channel close is the idiomatic choice for "signal exactly once, to any number of waiters":
+
+```go
+func compute(r *Result, done chan<- struct{}) {
+	r.Value = expensiveCalc()
+	close(done) // close is a send-like event -- every receive sees compute's writes
+}
+
+func main() {
+	r := &Result{}
+	done := make(chan struct{})
+	go compute(r, done)
+	<-done
+	fmt.Println(r.Value)
+}
+```
+</SpotTheBug>
+
+> 💡 Real-world example
+>
+> The Go runtime's own channel implementation has to manually feed the race detector's synchronization tracking. `runtime/chan.go`'s `racenotify` function (Go 1.26.5 source) contains this comment on the zero-sized-element case (`chan struct{}`, exactly what the fix above uses): *"This simplification prevents us from following the memory model's happens-before rules (rules that are implemented in `racereleaseacquire`). Instead, we accumulate happens-before information in the synchronization object associated with `c.buf`."* Even the people implementing channels have to reason about happens-before edges as a concrete, trackable resource — it is not just prose in a spec.
+
+export const quizMemoryModel = [
+  {
+    q: "What does a \"happens-before\" edge guarantee?",
+    options: [
+      "That one goroutine's operation runs at an earlier wall-clock time than another's",
+      "That every effect of the earlier operation is guaranteed visible to the later one",
+      "That the compiler will not reorder any instructions anywhere in the program",
+      "That both operations run on the same OS thread"
+    ],
+    answer: 1,
+    explain: "Happens-before is about guaranteed visibility of effects across goroutines, not timing. Two operations can be happens-before ordered even if, coincidentally, the 'later' one starts executing first in wall-clock terms on some run."
+  },
+  {
+    q: "Which of these does NOT create a happens-before edge between goroutines, according to the Go memory model?",
+    options: [
+      "A channel send completing before the matching receive returns",
+      "An sync.Once.Do(f) call completing before another Do(f) call on the same Once returns",
+      "A goroutine exiting (finishing its function and terminating)",
+      "An l.Unlock() call completing before a later l.Lock() call on the same Mutex returns"
+    ],
+    answer: 2,
+    explain: "The memory model explicitly states goroutine exit is NOT synchronized before anything -- the other three (channel comm, Once, Mutex) are exactly the documented edges."
+  },
+  {
+    q: "Why does the `for !j.done {}` busy-spin example print the correct value on most runs, even though it has no happens-before edge?",
+    options: [
+      "Because Go guarantees plain bool reads and writes are synchronized",
+      "Because time.Sleep silently adds a happens-before edge",
+      "Because it happens to work with the current compiler and hardware -- the memory model gives no guarantee it always will, and go run -race reports it as a real data race",
+      "Because the race detector fixes the race automatically when it detects one"
+    ],
+    answer: 2,
+    explain: "The program 'working' is an accident of the current implementation, not a guarantee -- exactly why the lesson insists that only a documented happens-before edge or a clean, well-covered -race run is evidence, never an observed correct output."
+  },
+  {
+    q: "According to Go's own memory model spec, how does a Go data race differ from a C/C++ data race?",
+    options: [
+      "They are identical -- both are entirely undefined behavior",
+      "Go races have no consequences at all and can be ignored",
+      "Go's implementation constraints bound the outcomes (e.g. reading some previously-written value, or a torn multi-word read) rather than allowing the compiler to assume the race cannot happen and transform the program arbitrarily",
+      "Go races only occur with the race detector enabled"
+    ],
+    answer: 2,
+    explain: "The spec text explicitly says Go is 'more like Java or JavaScript... and less like C and C++, where the meaning of any program with a race is entirely undefined.' It is still an error, just not open-ended UB."
+  },
+  {
+    q: "```go\nfunc main() {\n    var ok bool\n    if condTestedButNeverTrueInCI {\n        go racyWrite()\n        racyRead()\n    }\n    _ = ok\n}\n```\nIf `condTestedButNeverTrueInCI` is always false in every CI run, what does `go test -race` report about `racyWrite`/`racyRead`?",
+    options: [
+      "It reports the race anyway, since -race performs static analysis of all code paths",
+      "It reports nothing -- the race detector only flags races in code that actually executes during the instrumented run",
+      "It reports a compile error",
+      "It reports the race only on the first CI run, then caches the result"
+    ],
+    answer: 1,
+    explain: "The official race detector docs state this directly: it can't find races in code paths that are not executed. A branch that never runs during a -race build contributes nothing to the report, however racy it would be if it ever ran."
+  },
+  {
+    q: "Which pair of operations gives you a documented happens-before edge for a value written by one goroutine and read by another?",
+    options: [
+      "Writing a plain int, then reading the same plain int after a time.Sleep in the reader",
+      "Writing to an atomic.Int64 with Store, then reading it with Load in another goroutine",
+      "Writing a plain bool inside a goroutine, then checking it in a for loop with no other synchronization",
+      "Writing to a slice, then reading the same slice from a goroutine started earlier"
+    ],
+    answer: 1,
+    explain: "sync/atomic's typed operations (Store/Load, and the rest of the Int64/Bool/Pointer[T] family) are the memory model's documented edge for exactly this shape of problem; the other three options describe the unsynchronized-access bug this lesson is about."
+  }
+];
+
+<Quiz client:visible id="runtime-internals/memory-model" questions={quizMemoryModel} />
+
+<ProgressTracker client:visible id="runtime-internals/memory-model" />

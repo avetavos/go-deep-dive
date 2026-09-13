@@ -1,0 +1,1023 @@
+---
+title: แคตตาล็อก bug ของโค้ด AI
+description: '24 bug ที่โค้ด Go จาก AI สร้างขึ้นซ้ำๆ — โค้ดที่ผิด, อาการจริง, วิธีแก้, และเครื่องมือ (ถ้ามี) ที่จับได้'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+ทุก pattern ด้านล่างเขียนขึ้นให้เหมือนโค้ด Go ที่ AI assistant ผลิตออกมาจริงๆ แล้วนำไป compile, รัน, และในกรณีที่เกี่ยวข้องก็รันผ่าน `-race` หรือ `go vet` จริง panic, compiler error, และ output ของเครื่องมือที่ยกมาคือของจริงที่ copy มาจากการรันเหล่านั้น ไม่ได้เขียนขึ้นจากความจำ กดปุ่ม **เฉลย** เพื่อคิดก่อนอ่านคำตอบ และทุกข้อจบด้วย **จับได้โดย** ระบุเครื่องมือตัวเดียว (`go vet`, `staticcheck`, `golangci-lint`, `-race`) ที่จับ bug นั้นได้จริง — หรือบอกตรงๆ ว่าไม่มีตัวไหนจับได้เลย
+
+24 pattern นี้จัดกลุ่มแบบเดียวกับ **[Review Checklist](/go/th/reading-go/review-checklist/)** ที่ตามมาหลังบทนี้ คือ errors, concurrency, resources, API contract, types, และ tooling/style
+
+<Playground code={typedNilCode} />
+
+export const typedNilCode = `package main
+
+import "fmt"
+
+type MyError struct{ msg string }
+
+func (e *MyError) Error() string { return e.msg }
+
+func doWork(fail bool) *MyError {
+\tif fail {
+\t\treturn &MyError{msg: "boom"}
+\t}
+\treturn nil
+}
+
+func run(fail bool) error {
+\tvar err *MyError = doWork(fail) // typed nil
+\treturn err                      // wrapped into a non-nil interface
+}
+
+func main() {
+\terr := run(false)
+\tif err != nil {
+\t\tfmt.Println("got error:", err)
+\t} else {
+\t\tfmt.Println("no error")
+\t}
+}`;
+
+pattern แรกนี้คุ้มค่าที่จะลองรันเองก่อนอ่านต่อ — playground ด้านบนพิมพ์ `got error: <nil>` ไม่ใช่ `no error` ทุกอย่างด้านล่างเป็นกฎเดียวกัน: โค้ดจริง, output จริง, ไม่มีข้อยกเว้น
+
+## Errors
+
+### 1. typed nil ที่ห่อใน `error` ไม่ใช่ nil
+
+`doWork` คืน nil `*MyError` ส่วน `run` ประกาศ return type เป็น interface `error` ค่า nil pointer นั้นจึงถูก box เข้าไปใน interface value สองคำ: `(type=*MyError, data=nil)` ค่านั้นไม่เท่ากับ interface zero value — `err != nil` เป็น true ทั้งที่ pointer ข้างในเป็น nil
+
+**อาการ:** playground ด้านบนพิมพ์ `got error: <nil>` แทนที่จะเป็น `no error`
+
+**แก้ไข:** return interface type โดยตรงจากจุดที่รู้แล้วว่ามี error หรือไม่ ให้ path "ไม่มี error" คืนค่า literal `nil` จริงๆ ไม่ใช่ nil concrete pointer ที่ห่อเข้า `error`:
+
+```go
+func run(fail bool) error {
+	if err := doWork(fail); err != nil {
+		return err
+	}
+	return nil // a real nil error, not a boxed nil pointer
+}
+```
+
+**จับได้โดย:** `staticcheck` (ผ่าน `golangci-lint`) จับกรณีที่พิสูจน์ได้ทาง static ว่า return ไม่มีทาง nil:
+
+```text
+SA4023: this comparison is always true (staticcheck)
+```
+
+ข้อความนี้ขึ้นเฉพาะตอนที่ staticcheck พิสูจน์ได้เท่านั้น — ถ้า `doWork` ผ่าน indirection มากขึ้นอีกหน่อยก็หลุดรอดทุกเครื่องมือในลิสต์นี้ได้ ให้ยึดกฎนี้เป็นสิ่งที่ต้องเช็กด้วยตาเอง ไม่ใช่พึ่ง linter ดู **[A nil pointer inside an interface is not nil](/go/th/methods-interfaces/interfaces/)**
+
+<SpotTheBug code={`func validate(input string) *ValidationError {
+	if input == "" {
+		return &ValidationError{"empty input"}
+	}
+	return nil
+}
+
+func process(input string) error {
+	var err *ValidationError = validate(input)
+	return err
+}`}>
+
+bug เดิม แค่เปลี่ยนชื่อ `process(อะไรก็ได้ที่ไม่ว่าง)` คืน `error` ที่ไม่ใช่ nil ทั้งที่ `validate` คืน nil pointer — `err != nil` เป็น true ในทุก caller วิธีแก้: `if err := validate(input); err != nil { return err }; return nil`
+
+</SpotTheBug>
+
+### 2. `:=` ใน `if` shadow ตัว `err` ด้านนอก
+
+```go
+func mightFail() (int, error) {
+	return 0, errors.New("fail")
+}
+
+func process() error {
+	var err error
+	if v, err := mightFail(); err != nil { // := shadows outer err
+		fmt.Println("inner saw error, v =", v)
+	}
+	return err // outer err was never assigned — always nil
+}
+```
+
+**อาการ:** รันแล้ว `process()` พิมพ์ `<nil>` ทั้งที่ `mightFail` fail เสมอ — output จริงที่ verify แล้ว:
+
+```text
+inner saw error, v = 0
+process() returned: <nil>
+```
+
+**แก้ไข:** assign ให้ `err` ด้านนอกแทนการประกาศใหม่ — ตัด `:=` สำหรับ `err` ออกโดยประกาศ `v` ก่อน หรือจัดโครงสร้างใหม่ให้มี `err` แค่ตัวเดียวใน scope:
+
+```go
+func process() error {
+	var err error
+	var v int
+	if v, err = mightFail(); err != nil {
+		fmt.Println("inner saw error, v =", v)
+	}
+	return err
+}
+```
+
+**จับได้โดย:** ไม่มีอะไรจับได้โดย default `go vet` ไม่ได้รัน analyzer `shadow` และมันก็ไม่ได้อยู่ใน preset `standard` ของ `golangci-lint` เช่นกัน แต่ถ้าเปิดใช้เองก็จับได้:
+
+```text
+shadow: declaration of "err" shadows declaration at line 13 (govet)
+```
+
+เปิดด้วย `linters.settings.govet.enable: [shadow]` ใน config ของ `golangci-lint` — มันไม่เปิด default เพราะมันจับ shadow ที่ไม่เป็นอันตรายและตั้งใจไว้เยอะมากด้วย ดู **[Variables & Types](/go/th/basics/variables-types/)**
+
+### 20. `errors.As` ที่ขาด `&` panic แทนที่จะ fail เงียบๆ
+
+```go
+func validate() error {
+	return &ValidationError{Field: "email"}
+}
+
+func main() {
+	err := validate()
+	var ve *ValidationError // nil *ValidationError
+	if errors.As(err, ve) { // missing & — target must be a pointer to ve's type
+		fmt.Println("bad field:", ve.Field)
+	}
+}
+```
+
+**อาการ — panic จริง:**
+
+```text
+panic: errors: target must be a non-nil pointer
+```
+
+**แก้ไข:** ส่ง `&ve` ไม่ใช่ `ve` — target argument ต้องเป็น pointer ไปยัง variable ที่จะรับผลลัพธ์:
+
+```go
+var ve *ValidationError
+if errors.As(err, &ve) {
+	fmt.Println("bad field:", ve.Field)
+}
+```
+
+**จับได้โดย:** analyzer `errorsas` ของ `go vet` ตั้งแต่ก่อนรันโปรแกรมด้วยซ้ำ:
+
+```text
+errorsas: second argument to errors.As must be a non-nil pointer to either a type that implements error, or to any interface type (govet)
+```
+
+ดู **[Wrapping Errors](/go/th/errors-generics/wrapping/)**
+
+### 21. `recover()` ทำงานได้แค่ตอนถูกเรียกตรงจาก `defer` เท่านั้น
+
+```go
+func handlePanic() {
+	if r := recover(); r != nil { // recover() not called directly by a deferred function
+		fmt.Println("recovered:", r)
+	}
+}
+
+func wrapper() {
+	handlePanic() // wrapper is deferred, but it calls handlePanic — a plain call
+}
+
+func risky() {
+	defer wrapper()
+	panic("boom")
+}
+```
+
+`defer wrapper()` ทำให้ `wrapper` เป็น deferred function — แต่ `wrapper` เรียก `handlePanic()` แบบ function call ธรรมดา `recover()` ที่อยู่ใน `handlePanic` จึงไม่ใช่ "ถูกเรียกตรงจาก deferred function" ตามที่ spec ของภาษากำหนด มันคืน `nil` และไม่ทำอะไรเลย
+
+**อาการ — output จริง, process crash:**
+
+```text
+panic: boom
+
+goroutine 1 [running]:
+main.risky()
+```
+
+**แก้ไข:** เรียก `recover()` ตรงภายใน function ที่เป็น argument ของ `defer` เอง อย่าส่งผ่าน helper:
+
+```go
+func risky() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("recovered:", r)
+		}
+	}()
+	panic("boom")
+}
+```
+
+**จับได้โดย:** ไม่มี `go vet`, `staticcheck`, และ preset `standard` ของ `golangci-lint` เงียบหมดกับไฟล์นี้ ดู **[Panic and Recover](/go/th/errors-generics/panic-recover/)**
+
+### 24. `log.Fatal` ใน library code ข้าม `defer` ของ caller ทุกตัว
+
+```go
+func loadConfig(path string) map[string]string {
+	if path == "" {
+		log.Fatal("config path is empty") // library code should never call log.Fatal
+	}
+	return map[string]string{"path": path}
+}
+
+func main() {
+	defer fmt.Println("cleanup: closing database connection") // must always run
+	cfg := loadConfig("")
+	fmt.Println(cfg)
+}
+```
+
+`log.Fatal` เรียก `os.Exit(1)` หลัง log — และ `os.Exit` จบ process ทันที ไม่รัน deferred function ใดๆ เลยบน stack ทั้งหมด ไม่ว่าจะอยู่ goroutine ไหน
+
+**อาการ — output จริง:**
+
+```text
+2026/09/13 16:49:05 config path is empty
+exit status 1
+```
+
+`"cleanup: closing database connection"` ไม่ถูกพิมพ์เลย — `defer` cleanup ใน `main` ไม่ได้รันโดยไม่มีสัญญาณเตือนใดๆ
+
+**แก้ไข:** package ที่ไม่ใช่ `main` ควร return `error` แล้วให้ caller ตัดสินใจเองว่า failure นี้ควรจบโปรแกรมหรือไม่:
+
+```go
+func loadConfig(path string) (map[string]string, error) {
+	if path == "" {
+		return nil, errors.New("config path is empty")
+	}
+	return map[string]string{"path": path}, nil
+}
+```
+
+**จับได้โดย:** ไม่มี โดย default linter อย่าง `forbidigo` config ให้ห้ามเรียก `log.Fatal`/`os.Exit` นอก `main` ได้ แต่ต้อง opt-in ด้วย pattern ที่ระบุเอง ไม่มี preset default ตัวไหนจับให้ ดู **[Panic and Recover](/go/th/errors-generics/panic-recover/)**
+
+## Concurrency
+
+### 10. goroutine ที่ไม่มีทางออกรั่วตลอดไป
+
+```go
+func leaky() {
+	ch := make(chan int) // unbuffered, nobody ever sends
+	go func() {
+		<-ch // blocks forever — this goroutine can never exit
+	}()
+}
+
+func main() {
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		leaky()
+	}
+	time.Sleep(100 * time.Millisecond)
+	after := runtime.NumGoroutine()
+	fmt.Println("goroutines before:", before, "after launching 5 leaky ones:", after)
+}
+```
+
+**อาการ — output จริง:**
+
+```text
+goroutines before: 1 after launching 5 leaky ones: 6
+```
+
+โปรแกรมไม่ crash ด้วยซ้ำ แถมดูไม่ผิดเลย — มันจบแบบสะอาด ทั้งที่รั่ว 5 goroutine ที่จะไม่มีวันถูกเก็บกวาดตราบใดที่ process ยังรันอยู่
+
+**แก้ไข:** ให้ goroutine มีทางออก — `context.Context`, `done` channel, หรือค่าบน `ch`:
+
+```go
+func notLeaky(ctx context.Context) {
+	ch := make(chan int)
+	go func() {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return
+		}
+	}()
+}
+```
+
+**จับได้โดย:** ไม่มี ทั้งตอน compile และตอน lint — leak เป็นคุณสมบัติของโปรแกรมที่กำลังรัน ไม่ใช่ของตัว source code วินิจฉัยตอน runtime ด้วย `runtime.NumGoroutine()` ใน test หรือ goroutine profile (`/debug/pprof/goroutine` ของ `net/http/pprof`) package `go.uber.org/goleak` จาก third-party assert ได้ว่า "ไม่มี goroutine รั่วหลังจบ test" แต่ไม่ได้อยู่ในลิสต์เครื่องมือของคอร์สนี้ ดู **[Goroutines](/go/th/concurrency/goroutines/)**
+
+### 11. `wg.Add` ถูกเรียกจากภายใน goroutine ที่มันกำลังนับ
+
+```go
+var wg sync.WaitGroup
+results := make([]int, 0, 5)
+var mu sync.Mutex
+
+for i := 0; i < 5; i++ {
+	go func(n int) {
+		wg.Add(1) // Add happens inside the goroutine — Wait() below can race ahead of it
+		defer wg.Done()
+		mu.Lock()
+		results = append(results, n)
+		mu.Unlock()
+	}(i)
+}
+
+wg.Wait() // may return before every Add(1) has even run
+fmt.Println("collected:", len(results), "of 5")
+```
+
+`wg.Wait()` สามารถเห็น counter เป็นศูนย์ได้ — เพราะยังไม่มี goroutine ไหนใน 5 ตัวไปถึง `Add(1)` เลย — แล้ว return ทันที ก่อนที่ตัวไหนจะได้รันด้วยซ้ำ
+
+**อาการ — output จริง (reproduce ได้ 3/3 ครั้ง):**
+
+```text
+collected: 0 of 5
+```
+
+**แก้ไข:** เรียก `Add` ใน loop ก่อน launch goroutine — counter ต้องสะท้อนงานที่ค้างอยู่ทั้งหมดก่อนที่จะเรียก `Wait` ได้:
+
+```go
+for i := 0; i < 5; i++ {
+	wg.Add(1)
+	go func(n int) {
+		defer wg.Done()
+		mu.Lock()
+		results = append(results, n)
+		mu.Unlock()
+	}(i)
+}
+wg.Wait()
+```
+
+**จับได้โดย:** analyzer `waitgroup` ของ `go vet` (Go 1.26+) จับตรงๆ:
+
+```text
+waitgroup: WaitGroup.Add called from inside new goroutine (govet)
+```
+
+`staticcheck` ก็จับแยกเป็น `SA2000` เอง และ `go run -race` รายงาน data race บน internal counter ของ WaitGroup ด้วย สามเครื่องมือเห็นตรงกัน — นี่คือหนึ่งใน pattern ไม่กี่ตัวในนี้ที่ไม่มีข้ออ้างให้ปล่อยผ่านได้เลย ดู **[Goroutines](/go/th/concurrency/goroutines/)**
+
+### 12. panic ใน goroutine ไม่มีที่ไหน recover ได้
+
+```go
+func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("main recovered:", r) // this never runs
+		}
+	}()
+
+	fmt.Println("starting background task")
+	go func() {
+		panic("background task exploded")
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	fmt.Println("done") // never reached
+}
+```
+
+`recover()` หยุด panic ได้เฉพาะการ unwind ของ goroutine ที่มันถูก defer ไว้เท่านั้น `recover` ใน `main` เอื้อมไปไม่ถึง stack ของ goroutine อื่น
+
+**อาการ — output จริง, process ทั้งตัวตาย:**
+
+```text
+starting background task
+panic: background task exploded
+
+goroutine 34 [running]:
+main.main.func2()
+```
+
+**แก้ไข:** ทุก goroutine ที่ panic ได้ต้องมี recovery ของตัวเอง อยู่บนสุดของ goroutine นั้น:
+
+```go
+go func() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("background task recovered:", r)
+		}
+	}()
+	panic("background task exploded")
+}()
+```
+
+**จับได้โดย:** ไม่มี `go vet` และ preset `standard` ของ `golangci-lint` ไม่จับ `go func(){ ... }()` เปล่าๆ ที่ไม่มี recover ดู **[Goroutines](/go/th/concurrency/goroutines/)** และ **[Panic and Recover](/go/th/errors-generics/panic-recover/)**
+
+### 13. value receiver copy mutex ที่มัน lock อยู่แบบเงียบๆ
+
+```go
+type Counter struct {
+	mu  sync.Mutex
+	val int
+}
+
+func (c Counter) Inc() { // value receiver copies the mutex on every call
+	c.mu.Lock()
+	c.val++
+	c.mu.Unlock()
+}
+
+func main() {
+	c := Counter{}
+	c.Inc()
+	fmt.Println(c.val) // stays 0: Inc mutated its own copy
+}
+```
+
+**อาการ — output จริง:**
+
+```text
+0
+```
+
+`Inc` lock, increment, และ unlock `Counter` ที่เป็น copy ใหม่ทุกครั้งที่เรียก — `c.val` ตัวจริงไม่เคยถูกแตะเลย และ mutex ที่ copy มาก็ไม่ได้ป้องกันอะไรที่แชร์กันจริง
+
+**แก้ไข:** ใช้ pointer receiver เสมอ สำหรับ type ที่มี `sync.Mutex` (หรืออะไรก็ตามที่ห้าม copy):
+
+```go
+func (c *Counter) Inc() {
+	c.mu.Lock()
+	c.val++
+	c.mu.Unlock()
+}
+```
+
+**จับได้โดย:** analyzer `copylocks` ของ `go vet` จับตรงๆ ไม่ต้อง config:
+
+```text
+copylocks: Inc passes lock by value: main.Counter contains sync.Mutex (govet)
+```
+
+นี่เปิดอยู่ใน default configuration ของ vet/lint ทุกตัวใน toolchain ของคอร์สนี้ — ไม่มีข้ออ้างที่ซื่อสัตย์ให้ bug แบบนี้หลุดไปถึงขั้น code review ดู **[The sync package](/go/th/concurrency/sync-primitives/)**
+
+### 14. capture loop variable ใน goroutine — แก้แล้วตั้งแต่ Go 1.22 เท่านั้น
+
+```go
+var wg sync.WaitGroup
+results := make([]int, 3)
+for i, v := range []int{10, 20, 30} {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		results[i] = v // captures the loop variables i and v directly
+	}()
+}
+wg.Wait()
+fmt.Println(results)
+```
+
+นี่จะเป็น bug หรือไม่ขึ้นกับ directive `go` ใน `go.mod` ล้วนๆ verify แล้วบนไฟล์เดียวกันเป๊ะ เปลี่ยนแค่บรรทัดนั้น:
+
+```text
+go.mod บอก "go 1.21":  results == [0 0 30]   (reproduce ได้ 3/3 ครั้งบนเครื่องนี้)
+go.mod บอก "go 1.27":  results == [10 20 30]
+```
+
+ภายใต้ semantics ของ Go 1.21 ตัว `i` และ `v` เป็น variable ตัวเดียวที่แชร์กันทุก iteration ของ loop — พอถึงตอน goroutine รัน loop มักจะเดินหน้าไปหรือจบไปแล้ว ส่วนใหญ่จึงเห็นค่าตัวสุดท้ายที่เหมือนกัน นี่คือ data race จริงบน `i` และ `v` ไม่ใช่แค่ค่าเก่า — ค่าผิดที่พิมพ์ออกมาไม่ได้รับประกันว่าจะซ้ำเดิมบนเครื่องหรือ Go version อื่น แม้ว่าการรันครั้งนี้จะ reproduce ได้สม่ำเสมอก็ตาม
+
+**แก้ไข ถ้าจำเป็นต้องรองรับ semantics ก่อน 1.22 หรือควบคุมบรรทัด `go.mod` ไม่ได้:** shadow variable ใน body ของ loop ก่อน capture: `i, v := i, v` ภายใต้ directive `go 1.22` ขึ้นไป (ค่า default ของคอร์สนี้ เพราะ `go.mod` บอก `go 1.27`) bug นี้เกิดไม่ได้เลย — Go เปลี่ยน scope ของ loop variable เป็นแบบต่อ iteration แล้ว
+
+**จับได้โดย:** analyzer `loopclosure` ของ `go vet` — แต่จับเฉพาะตอนที่มันยังเกิดได้จริง output จริงบนไฟล์เดียวกัน:
+
+```text
+go.mod "go 1.21": loop variable i captured by func literal
+                   loop variable v captured by func literal
+go.mod "go 1.27": (เงียบ — vet รู้ว่า semantics เปลี่ยนแล้วไม่มีอะไรต้องเตือน)
+```
+
+ถ้าคุณอ่านโค้ด Go โดยไม่รู้ directive `go.mod` ของมัน คุณจะบอกจาก loop เพียงอย่างเดียวไม่ได้ว่า bug นี้ยังมีผลอยู่หรือเปล่า — ต้องเช็ก directive ก่อนเสมอ ดู **[Functions](/go/th/basics/functions/)**
+
+### 17. `break` ใน `select` ใน `for` breaks แค่ `select` เท่านั้น
+
+```go
+for {
+	select {
+	case <-ch:
+		fmt.Println("received")
+	case <-done:
+		break // only breaks out of select, NOT the for loop
+	}
+}
+```
+
+`break` เปล่าๆ เล็งไปที่ `for`, `switch`, หรือ `select` ที่อยู่ในสุด — และ `select` ก็นับด้วย มันออกจาก `select` statement แล้ว `for` ที่ครอบอยู่ก็ loop ต่อทันที
+
+**อาการ:** verify แล้วด้วยเวอร์ชันที่นับ iteration หลัง `done` ถูกปิดไปแล้ว — loop เข้า `select` ซ้ำๆ แล้วชน `case <-done` ซ้ำแล้วซ้ำเล่าแทนที่จะออก วนไปเรื่อยๆ จนกว่าอะไรอื่นจะหยุดมัน (ใน reproduction ที่ verify ไว้ ต้องมี iteration counter แยกต่างหากบังคับให้ออกหลังผ่านไป 4 รอบ แค่เพื่อจบ demo)
+
+**แก้ไข:** ใช้ label ตั้งชื่อ `for` loop แล้ว break label นั้นตรงๆ:
+
+```go
+loop:
+	for {
+		select {
+		case <-ch:
+			fmt.Println("received")
+		case <-done:
+			break loop
+		}
+	}
+```
+
+**จับได้โดย:** `SA4011` ของ `staticcheck` จับตรงๆ:
+
+```text
+SA4011: ineffective break statement. Did you mean to break out of the outer loop? (staticcheck)
+```
+
+ดู **[Control Flow](/go/th/basics/control-flow/)**
+
+### 22. `context.Background()` ใน background job เสีย cancellation ไปโดยตั้งใจ — แต่การลืม `WithoutCancel` ก็เสียเหมือนกัน
+
+```go
+func handleSignup(reqCtx context.Context, wg *sync.WaitGroup) {
+	wg.Add(1)
+	// BUG: reuses the request-scoped context for background work that must
+	// outlive the request.
+	go sendWelcomeEmail(reqCtx, "[buggy: reqCtx]", wg)
+}
+```
+
+การใช้ `context.Context` ของ request ที่เข้ามาซ้ำ สำหรับงานที่ควรทำงานต่อแม้ request จะจบไปแล้ว หมายความว่างานนั้นตายทันทีที่ client หลุดการเชื่อมต่อหรือ handler return — ตรงข้ามกับคำว่า "background" เลย
+
+**อาการ — output จริง** จำลองการ cancel context ของ request ที่ 20ms ระหว่างการส่งอีเมล background ที่ใช้เวลา 150ms:
+
+```text
+[buggy: reqCtx] aborted early: context canceled
+[fixed: WithoutCancel] email sent
+```
+
+**แก้ไข:** `context.WithoutCancel(reqCtx)` เก็บ *value* ที่ผูกกับ request ไว้ แต่ตัดการเชื่อมกับ cancellation และ deadline ของ request ออก:
+
+```go
+go sendWelcomeEmail(context.WithoutCancel(reqCtx), "[fixed]", wg)
+```
+
+ความผิดพลาดแบบตรงข้ามคือการเริ่มงาน background ที่ไม่เกี่ยวข้องกับ request เลยจาก `context.Background()` แล้วเก็บ context เปล่านั้นไว้ใน struct field เพื่อใช้ซ้ำภายหลัง — ทั้งสองแบบซ่อนคำถามการออกแบบเดียวกัน ("context นี้ควรมี lifetime ตามอะไร?") ไว้หลังโค้ดที่ compile ผ่านได้เฉยๆ ไม่ว่าจะเขียนแบบไหน
+
+**จับได้โดย:** ไม่มี ไม่มี `go vet`, `staticcheck`, หรือ `golangci-lint` ตัวไหนเช็ก context lifetime mismatch หรือการเก็บ `context.Context` ไว้ใน struct โดย default เลย ดู **[Context](/go/th/concurrency/context/)**
+
+## Resources
+
+### 3. `defer` ใน loop ไม่รันจนกว่า function จะ return
+
+```go
+func processAll(paths []string) error {
+	total := 0
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			return fmt.Errorf("open %s (file #%d): %w", p, total, err)
+		}
+		defer f.Close() // accumulates: does not run until processAll returns
+		total++
+	}
+	fmt.Println("opened", total, "files, all still open")
+	return nil
+}
+```
+
+`defer` กำหนดให้ `f.Close()` รันตอนที่ `processAll` return — ไม่ใช่ตอนที่ loop iteration นั้นจบ ทุกไฟล์ที่เปิดจะค้างเปิดอยู่จนกว่า function ทั้งหมดจะเสร็จ
+
+**อาการ — output จริง** เปิด 300 ไฟล์ภายใต้ limit 200 file descriptor (`ulimit -n 200`):
+
+```text
+processAll failed: open .../f196.txt (file #196): open .../f196.txt: too many open files
+```
+
+ภายใต้ descriptor limit ปกติที่กว้างขวาง โค้ดเดียวกันนี้ "ทำงานได้" — นี่แหละคือเหตุผลที่มันหลุดไปถึง production ได้: มันผ่านทุก test เร็วๆ และล้มเหลวเฉพาะตอนโหลดหนักหรือมีไฟล์เยอะเท่านั้น
+
+**แก้ไข:** ปิดแต่ละไฟล์ตอนจบ iteration ของมันเอง ไม่ใช่ตอนจบ function — วิธีง่ายที่สุดคือย้าย body ของ loop ไปเป็น function แยก เพื่อให้ `defer` ผูก scope กับไฟล์เดียว:
+
+```go
+func processOne(p string) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close() // scoped to this one file
+	// ... use f ...
+	return nil
+}
+```
+
+**จับได้โดย:** ไม่มี `go vet` และ preset `standard` ของ `golangci-lint` เงียบกับการสะสมนี้เอง (`errcheck` อาจแยกเช็ก error ของ `Close` ที่ไม่ถูกตรวจสอบ ซึ่งเป็นข้อค้นพบคนละเรื่องกัน) ดู **[io and bufio](/go/th/stdlib/io-bufio/)**
+
+### 4. `defer resp.Body.Close()` ก่อนเช็ก `err` dereference nil pointer
+
+```go
+func fetch(url string) error {
+	resp, err := http.Get(url)
+	defer resp.Body.Close() // resp may be nil when err != nil
+	if err != nil {
+		return err
+	}
+	fmt.Println(resp.StatusCode)
+	return nil
+}
+```
+
+เมื่อ `http.Get` fail มันคืน `*http.Response` เป็น nil คู่กับ error — แต่ `defer resp.Body.Close()` evaluate `resp.Body` ทันที ก่อนที่ deferred call จะรันด้วยซ้ำ และ `resp` เป็น nil
+
+**อาการ — panic จริง** เรียกไปยัง address ที่ไม่มีอะไรฟังอยู่:
+
+```text
+panic: runtime error: invalid memory address or nil pointer dereference
+[signal SIGSEGV: segmentation violation code=0x2 addr=0x40 pc=...]
+```
+
+**แก้ไข:** เช็ก error ก่อน แล้วค่อย defer การปิดเมื่อรู้แล้วว่า `resp` ไม่ใช่ nil:
+
+```go
+resp, err := http.Get(url)
+if err != nil {
+	return err
+}
+defer resp.Body.Close()
+```
+
+**จับได้โดย:** `go vet` จับตรงๆ ไม่ต้อง config เลย:
+
+```text
+main.go:10:8: using resp before checking for errors
+```
+
+ดู **[The client side](/go/th/stdlib/net-http/)**
+
+### 6. `&http.Client{}` ที่ไม่มี `Timeout` ค้างได้ตลอดกาล
+
+```go
+noTimeout := &http.Client{}
+noTimeout.Get(url) // no Timeout field set
+```
+
+`http.Client` ที่เป็น zero value ไม่มี request timeout เลย — ถ้า server accept connection แล้วไม่ตอบกลับ call จะ block ตราบเท่าที่ process ยังรันอยู่
+
+**อาการ — output จริง** กับ server ที่ accept TCP connection แล้วไม่เขียนอะไรกลับมาเลย:
+
+```text
+no-timeout client: still blocked after 2s, as expected
+with-timeout client error: Get "http://127.0.0.1:PORT/": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+```
+
+**แก้ไข:** ตั้ง `Timeout` เสมอบน `http.Client` ทุกตัวที่สร้างขึ้นเอง — หรือสร้าง request ด้วย `http.NewRequestWithContext` พร้อม context deadline เพื่อควบคุมละเอียดขึ้น:
+
+```go
+client := &http.Client{Timeout: 10 * time.Second}
+```
+
+**จับได้โดย:** ไม่มี automated tool ใดๆ นี่เป็นคุณสมบัติของ runtime behavior เมื่อเจอ server ที่ช้าหรือมีปัญหา ไม่ใช่สิ่งที่เห็นได้จาก source code เพียงอย่างเดียว ดู **[The client side](/go/th/stdlib/net-http/)**
+
+## API contract
+
+### 5. ไม่เช็ก `resp.StatusCode` = ถือว่าหน้า error เป็นข้อมูลจริง
+
+```go
+func fetchBody(url string) (string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	// no resp.StatusCode check — a 500 error page is treated as valid data
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+```
+
+`http.Get` จะคืน `err` ที่ไม่ใช่ nil เฉพาะตอน transport ล้มเหลว (DNS, connection refused, timeout) เท่านั้น — response `404` หรือ `500` ถือเป็น HTTP round trip ที่สำเร็จสมบูรณ์ในสายตาของ `err`
+
+**อาการ — output จริง** กับ test server ที่คืน HTTP 500 พร้อม body error:
+
+```text
+err=<nil> body="internal error, try later"
+```
+
+caller ไม่มีทางแยกความแตกต่างจาก response ที่สำเร็จจริงๆ ได้เลย ถ้าไม่เช็ก `resp.StatusCode` เอง
+
+**แก้ไข:** เช็ก status code ตรงๆ ก่อนเชื่อ body:
+
+```go
+if resp.StatusCode != http.StatusOK {
+	return "", fmt.Errorf("unexpected status: %s", resp.Status)
+}
+```
+
+**จับได้โดย:** ไม่มี ดู **[The client side](/go/th/stdlib/net-http/)**
+
+### 7. `omitempty` ไม่ omit `time.Time` ที่เป็น zero value
+
+```go
+type Event struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+e := Event{Name: "signup"} // CreatedAt left zero-value by mistake
+b, _ := json.Marshal(e)
+```
+
+**อาการ — output จริง:**
+
+```text
+{"name":"signup","created_at":"0001-01-01T00:00:00Z"}
+```
+
+`omitempty` omit เฉพาะค่า "ว่าง" ตามนิยามของ Go — `false`, `0`, nil pointer/interface, และ string/slice/map/array ที่ว่างเปล่า struct ที่เป็น zero value (ซึ่ง zero value ของ `time.Time` ก็คือแบบนั้น) ไม่เคยถูกนับเป็น "ว่าง" ตามนิยามนี้ จึงถูก encode เสมอ
+
+**แก้ไข:** ใช้ `*time.Time` แล้วปล่อยเป็น nil เมื่อไม่มีค่า หรือ (Go 1.24+) ใช้ `omitzero` แทน ซึ่งเคารพ method `IsZero()` ของ type เอง:
+
+```go
+CreatedAt time.Time `json:"created_at,omitzero"`
+```
+
+**จับได้โดย:** ไม่มี ดู **[encoding/json](/go/th/stdlib/encoding-json/)**
+
+### 8. `encoding/json` ทิ้ง unexported field แบบเงียบๆ
+
+```go
+type user struct {
+	Name  string
+	email string // unexported: encoding/json cannot see it
+}
+
+u := user{Name: "Ada", email: "ada@example.com"}
+b, _ := json.Marshal(u)
+```
+
+**อาการ — output จริง:**
+
+```text
+{"Name":"Ada"}
+```
+
+ไม่มี error ไม่มีคำเตือน — `email` มองไม่เห็นสำหรับ package `reflect` เหมือนกับที่มันมองไม่เห็นนอก package ที่ประกาศมันไว้ และ `encoding/json` ก็ไม่มีอะไรให้ encode
+
+**แก้ไข:** export field (แล้ว tag มัน) ถ้ามันควรอยู่ใน JSON contract:
+
+```go
+type user struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+```
+
+**จับได้โดย:** ไม่มี automated tool ไหนจับ field ที่ถูกทิ้งแบบเงียบๆ ได้ — เพราะไม่มี error ให้รายงาน ดู **[encoding/json](/go/th/stdlib/encoding-json/)**
+
+### 9. nil slice marshal เป็น `null` ไม่ใช่ `[]`
+
+```go
+type Resp struct {
+	Items []string `json:"items"`
+}
+
+var r Resp // Items left as nil slice
+b, _ := json.Marshal(r)
+```
+
+**อาการ — output จริง:**
+
+```text
+{"items":null}
+```
+
+nil slice กับ empty slice เป็นค่าคนละแบบใน Go และ `encoding/json` ก็เคารพความต่างนั้น — client หลาย API มองว่า items field ที่เป็น `null` คือกรณี error ไม่ใช่ "มีศูนย์รายการ"
+
+**แก้ไข:** initialize slice ให้เป็นค่าว่างแทนที่จะปล่อยเป็น nil เมื่อ contract ต้องการ `[]`:
+
+```go
+type Resp struct {
+	Items []string `json:"items"`
+}
+
+r := Resp{Items: []string{}}
+```
+
+**จับได้โดย:** ไม่มี — ทั้งสองแบบเป็น JSON encoding ที่ถูกต้องสมบูรณ์ของค่า Go ที่ถูกต้องสมบูรณ์เหมือนกัน มีแค่ API contract ของคุณเท่านั้นที่บอกได้ว่าต้องใช้แบบไหน ดู **[encoding/json](/go/th/stdlib/encoding-json/)**
+
+## Types
+
+### 15. `append` บน sub-slice ทับ array ที่มันถูก slice มา
+
+```go
+base := []int{1, 2, 3, 4, 5}
+a := base[1:3] // len=2 cap=4, shares base's backing array
+a = append(a, 99) // fits in cap — overwrites base[3] in place
+```
+
+**อาการ — output จริง:**
+
+```text
+before append, base: [1 2 3 4 5]
+after append,  base: [1 2 3 99 5]
+a: [2 3 99]
+```
+
+`a` มีที่ว่างให้โตภายใน backing array เดิมของ `base` (`cap(a) == 4`, `len(a) == 2`) `append` จึงใช้ array เดิมซ้ำแทนที่จะจองใหม่ — ทับ `base[3]` แบบเงียบๆ
+
+**แก้ไข:** ใช้ full slice expression เพื่อจำกัด capacity ของ `a` ให้เท่ากับ length ของมันเอง บังคับให้ `append` ที่เกินนั้นต้องจองใหม่: `a := base[1:3:3]`
+
+**จับได้โดย:** ไม่มี — ทั้งเวอร์ชันเดิมและเวอร์ชันที่แก้แล้ว compile และรันได้โดยไม่มี diagnostic ใดๆ นี่เป็นกับดักทาง semantic ล้วนๆ ในเรื่องที่ slice แชร์ memory กัน ดู **[Slices](/go/th/types-data/slices/)**
+
+### 16. เขียนลง nil map panic
+
+```go
+var m map[string]int // nil map
+m["x"] = 1           // panics
+```
+
+nil map อ่านได้อย่างอิสระ (lookup บน nil map คืน zero value, `ok == false`) แต่เขียนลงไป panic — read กับ write ไม่สมมาตรกัน
+
+**อาการ — panic จริง:**
+
+```text
+panic: assignment to entry in nil map
+```
+
+**แก้ไข:** initialize map ด้วย `make` (หรือ composite literal) ก่อนเขียนลงไป:
+
+```go
+m := make(map[string]int)
+m["x"] = 1
+```
+
+**จับได้โดย:** `SA5000` ของ `staticcheck` เมื่อมันพิสูจน์ได้ว่า map เป็น nil เสมอตรงจุดที่เขียน:
+
+```text
+SA5000: assignment to nil map (staticcheck)
+```
+
+`go vet` เพียงตัวเดียวจับ bug นี้ไม่ได้ — การพิสูจน์มาจาก analysis ที่ละเอียดกว่าของ `staticcheck` เท่านั้น และเฉพาะกรณีที่ง่ายพอให้มันพิสูจน์ได้ ดู **[Maps](/go/th/types-data/maps/)**
+
+### 19. `maps.Keys` คืน iterator ไม่ใช่ slice
+
+```go
+m := map[string]int{"b": 2, "a": 1, "c": 3}
+sort.Strings(maps.Keys(m)) // maps.Keys returns iter.Seq[string], not []string
+```
+
+ตั้งแต่ Go 1.23 `maps.Keys` คืน `iter.Seq[K]` — range-over-func iterator — ไม่ใช่ `[]K` นี่ไม่ใช่ runtime bug เลยด้วยซ้ำ มัน compile ไม่ผ่าน
+
+**อาการ — compiler error จริง:**
+
+```text
+./main.go:11:15: cannot use maps.Keys(m) (value of func type iter.Seq[string]) as []string value in argument to sort.Strings
+```
+
+**แก้ไข:** สร้าง slice ที่ sort แล้วด้วย `slices.Sorted` ซึ่งสร้างมาเพื่อกรณีนี้โดยเฉพาะ:
+
+```go
+keys := slices.Sorted(maps.Keys(m))
+```
+
+**จับได้โดย:** compiler เอง — `go build`/`go vet` รายงาน type error เดียวกัน bug นี้ไปไม่ถึง binary ได้เลย มันอยู่ใน catalog นี้เพราะ AI model ที่ train บนโค้ดก่อน 1.23 (ที่ `golangx.org/x/exp/maps.Keys` คืน `[]K` จริง) ผลิต call shape แบบเก่าออกมาด้วยความมั่นใจ ดู **[Iterators](/go/th/errors-generics/iterators/)**
+
+## Tooling & style
+
+### 18. `time.Sleep(5)` sleep 5 nanosecond ไม่ใช่ 5 วินาที
+
+```go
+time.Sleep(5) // 5 nanoseconds, not 5 seconds — missing * time.Second
+```
+
+`time.Sleep` รับ `time.Duration` ซึ่งเป็นแค่ `int64` นับ nanosecond — untyped constant `5` แปลงเป็น `time.Duration(5)` คือ 5 nanosecond โดย compiler ไม่บ่นอะไรเลย
+
+**อาการ — output จริง:**
+
+```text
+slept for: 34.75µs
+```
+
+(เวลาที่วัดได้มากกว่า 5ns เล็กน้อย เพราะการ schedule goroutine มี overhead ของตัวเอง — ตัว sleep แทบไม่ได้มีส่วนเลย)
+
+ความผิดพลาดที่เกี่ยวข้องแต่คนละแบบ — คูณ `int` ธรรมดาด้วย `time.Second` — compile ไม่ผ่านเลย:
+
+```go
+n := attempt * 2
+return n * time.Second // n is a plain int, not time.Duration
+```
+
+```text
+./main.go:10:9: invalid operation: n * time.Second (mismatched types int and time.Duration)
+```
+
+**แก้ไข:** สะกด unit ให้ชัดเจนเสมอ และแปลง type ตรงๆ เมื่อคูณกับ variable:
+
+```go
+time.Sleep(5 * time.Second)
+return time.Duration(n) * time.Second
+```
+
+**จับได้โดย:** `SA1004` ของ `staticcheck` สำหรับกรณี literal เปล่าๆ:
+
+```text
+SA1004: sleeping for 5 nanoseconds is probably a bug; be explicit if it isn't (staticcheck)
+```
+
+ส่วนกรณี `n * time.Second` ที่ type ไม่ตรงกันถูกจับเร็วกว่าและตรงกว่ามาก — โดย compiler เองก่อนที่ linter ตัวไหนจะได้รันด้วยซ้ำ ดู **[time](/go/th/stdlib/time/)**
+
+### 23. interface ที่มี implementation เดียว, `interface{}`, และ receiver ชื่อ `this`
+
+```go
+type UserStoreInterface interface {
+	Get(id int) (interface{}, error) // interface{} instead of any
+}
+
+type userStore struct{ data map[int]string }
+
+func (this *userStore) Get(id int) (interface{}, error) { // receiver named "this"
+	v, ok := this.data[id]
+	if !ok {
+		return nil, fmt.Errorf("user %d not found", id)
+	}
+	return v, nil
+}
+```
+
+สาม smell แยกกันใน snippet เดียว: interface ที่มี implementation แค่ตัวเดียว (ไม่มี polymorphism เกิดขึ้นจริงเลย — เป็นแค่ indirection ล้วนๆ), การสะกดแบบก่อน 1.18 `interface{}` ในจุดที่ `any` เป็น idiom สมัยใหม่แล้ว, และ receiver ที่ตั้งชื่อเหมือน `this` ของ Java/JavaScript แทนที่จะเป็นตัวย่อสั้นๆ แบบ Go จากชื่อ type
+
+**จับได้โดย:** สองในสาม บางส่วน:
+
+```text
+ST1006: receiver name should be a reflection of its identity; don't use generic names such as "this" or "self" (staticcheck)
+any: interface{} can be replaced by any (modernize)
+```
+
+`ST1006` ของ `staticcheck` (อยู่ใน preset `standard` ของ `golangci-lint` โดย default) จับชื่อ receiver ได้เสมอ ส่วนการเปลี่ยน `interface{}` → `any` จับได้ด้วย analyzer `modernize` — แต่ `modernize` **ไม่ได้**อยู่ใน preset `standard` ของ `golangci-lint` ต้องเปิดเอง (`linters.enable: [modernize]`) ตัว interface ที่มี implementation เดียวเองไม่มีเครื่องมือไหนจับได้เลย ไม่มีเครื่องมือไหนนับว่ามีกี่ type ที่ implement interface หนึ่งๆ ทั่วทั้ง codebase ดังนั้น abstraction ที่ไม่จำเป็นอย่าง `UserStoreInterface` จึงไม่มีวัน trigger คำเตือนไม่ว่าจะ config ยังไง การลบมันทิ้ง — แล้วให้ `userStore` satisfy สิ่งที่ *caller* ต้องการจริงๆ — คือการตัดสินใจที่โมดูลนี้มีไว้เพื่อสอนให้คุณทำได้ ดู **[Interfaces](/go/th/methods-interfaces/interfaces/)** และ **[Methods](/go/th/methods-interfaces/methods/)**
+
+## Mental Model
+
+```text
+24 pattern เรียงตามว่าใครจับได้จริง:
+
+Compiler / go build  → 19 (maps.Keys shape), 18b (int * time.Duration)
+go vet (ไม่ต้อง config) → 4, 11 (waitgroup), 13 (copylocks), 20 (errorsas)
+go vet (opt-in)      → 2 (shadow), 14 (loopclosure, เฉพาะ go.mod ก่อน 1.22)
+staticcheck           → 1 (SA4023), 11 (SA2000), 16 (SA5000), 17 (SA4011),
+                        18a (SA1004), 23 (ST1006)
+modernize (opt-in)    → 23 (interface{} → any)
+-race                 → 11 (WaitGroup data race)
+ไม่มีอะไรจับได้         → 3, 5, 6, 7, 8, 9, 10, 12, 15, 21, 22, 24 — ครึ่งหนึ่งของ catalog
+```
+
+<Callout title="ครึ่งหนึ่งของ catalog นี้ไม่มี automated safety net">
+สิบสองใน ยี่สิบสี่ pattern ด้านบนไม่มีเครื่องมือไหนที่คอร์สนี้ครอบคลุมจับได้เลย ไม่ว่าจะ config แบบไหน นี่แหละคือเหตุผลจริงๆ ของโมดูลนี้: tooling ช่วยลดขอบเขตที่ต้องอ่านด้วยตาเท่านั้น มันไม่เคยแทนที่การอ่านได้ รันทุกเครื่องมือใน **[Verification Tools](/go/th/reading-go/verification-tools/)** กับทุก diff — แล้วก็ยังต้องอ่าน diff นั้นอยู่ดี
+</Callout>
+
+export const quizAiBugCatalog = [
+  {
+    q: "```go\nfunc f() *MyErr { return nil }\nfunc g() error { var e *MyErr = f(); return e }\n```\n`g() != nil` ได้ผลลัพธ์อะไร และเพราะอะไร?",
+    options: [
+      "false — nil ก็คือ nil ไม่ว่า type ไหน",
+      "true — nil *MyErr ที่ถูก box เข้า error interface คือ interface value ที่ไม่ใช่ nil",
+      "compile ไม่ผ่าน",
+      "panic ตอน runtime"
+    ],
+    answer: 1,
+    explain: "interface value ไม่ใช่ nil ถ้ามันมี concrete type แม้ pointer ข้างในจะเป็น nil ก็ตาม g() คืน error(*MyErr)(nil) ซึ่งไม่เท่ากับ interface zero value"
+  },
+  {
+    q: "แก้อะไรจุดเดียวถึงจะทำให้ `wg.Wait()` รอ goroutine ทั้ง 5 ตัวใน pattern ของ WaitGroup ใน catalog นี้ได้แน่นอน?",
+    options: [
+      "เรียก wg.Add(5) ครั้งเดียวก่อน loop แทนที่จะ Add(1) ข้างใน goroutine แต่ละตัว",
+      "แทนที่ WaitGroup ด้วย time.Sleep ที่นานขึ้น",
+      "ย้าย wg.Wait() ไปไว้ก่อน loop",
+      "ไม่ต้องแก้อะไรเลย — WaitGroup จัดการเรื่องนี้ให้อัตโนมัติอยู่แล้ว"
+    ],
+    answer: 0,
+    explain: "Add ต้องรันใน goroutine ที่จะเรียก Wait ก่อนที่ goroutine ที่ถูกนับจะเริ่ม — ไม่ว่าจะเป็น Add(len) ครั้งเดียวก่อน loop หรือ Add(1) ใน body ของ loop เอง (ไม่ใช่ข้างใน goroutine ที่ถูก launch)"
+  },
+  {
+    q: "ทำไม `go vet` ถึง flag pattern copylocks (method แบบ value receiver บน struct ที่มี sync.Mutex) แต่ไม่ flag bug append-on-sub-slice aliasing?",
+    options: [
+      "copylocks เป็น check ที่เก่ากว่ากฎเรื่อง slice aliasing มาก",
+      "การ copy mutex เป็นคุณสมบัติเชิงโครงสร้างที่ static analysis ของ vet ตรวจจากตัว type ได้เสมอ ส่วน append จะ alias array ของ parent หรือไม่ขึ้นกับ capacity ตอน runtime ซึ่งไม่สามารถรู้ได้จาก source เสมอไป",
+      "go vet ไม่เช็กอะไรที่เกี่ยวกับ struct เลย",
+      "bug เรื่อง slice aliasing ไม่ใช่ bug จริงๆ"
+    ],
+    answer: 1,
+    explain: "analyzer copylocks ของ vet แค่ต้องเห็นว่า type หนึ่งมี Mutex (หรือคล้ายกัน) แล้วถูกใช้แบบ value — เป็นข้อเท็จจริงระดับ type ล้วนๆ ส่วน append จะใช้ backing array ซ้ำหรือไม่ขึ้นกับค่า len/cap ตอน runtime ซึ่ง static analyzer ไม่สามารถรู้ได้เสมอไป"
+  },
+  {
+    q: "reviewer เห็น `resp, err := http.Get(url)` ตามด้วย `defer resp.Body.Close()` ทันที แล้วค่อย `if err != nil { return err }` มีอะไรผิด โดยไม่เกี่ยวว่า `url` เข้าถึงได้ระหว่าง test หรือไม่?",
+    options: [
+      "ไม่มีอะไรผิด — ถูกต้องแล้วตราบใดที่ url valid",
+      "defer evaluate resp.Body ทันที ถ้า http.Get คืน err ที่ไม่ใช่ nil, resp จะเป็น nil และตรงนี้ panic",
+      "ไม่ควรใช้ defer กับ network call เลย",
+      "ควรเรียก resp.Body.Close() สองครั้งเพื่อความปลอดภัย"
+    ],
+    answer: 1,
+    explain: "bug นี้ไม่ขึ้นกับ control flow เลย ไม่เกี่ยวกับว่า network เข้าถึงได้หรือไม่: เมื่อไหร่ที่ err ไม่ใช่ nil, contract ของ http.Get รับประกันว่า resp เป็น nil และการ evaluate resp.Body ก่อนเช็ก err คือ dereference nil pointer ทันทีตอนที่ defer statement evaluate argument ของมัน"
+  }
+];
+
+<Quiz client:visible id="reading-go/ai-bug-catalog" questions={quizAiBugCatalog} />
+
+<ProgressTracker client:visible id="reading-go/ai-bug-catalog" />

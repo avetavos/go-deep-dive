@@ -1,0 +1,599 @@
+---
+title: net/http
+description: 'Handler, การ routing ของ ServeMux, timeout ของ http.Server และ http.Client, middleware, graceful shutdown และ httptest — package ใน stdlib ที่โค้ด Go ที่ AI เขียนส่วนใหญ่ประกอบขึ้นมาจากมัน'
+sidebar:
+  order: 6
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Signature ของ handler: ResponseWriter และ *Request
+
+HTTP handler ทุกตัวใน Go มีรูปร่างเดียวกัน:
+
+```go
+func(w http.ResponseWriter, r *http.Request)
+```
+
+`w` มาก่อนตาม convention ที่สอดคล้องกับส่วนอื่นของ standard library — `fmt.Fprintln(w, ...)`, `io.Copy(dst, src)`, `json.NewEncoder(w)` ล้วนวางสิ่งที่ถูกเขียนไปไว้ก่อนสิ่งที่ถูกอ่านหรือตัวข้อมูลเอง ไม่มีกฎของ compiler บังคับลำดับนี้ มันเป็น convention ด้าน readability ที่ `net/http` วางไว้ และทุก framework ที่สร้างต่อบนมันก็ทำตาม
+
+parameter ทั้งสองตัวมี type ต่างกันในแบบที่สำคัญ:
+
+- **`http.ResponseWriter` เป็น interface** (`Header() Header`, `Write([]byte) (int, error)`, `WriteHeader(int)`) concrete type ที่อยู่เบื้องหลังต่างกันไปตาม context: `net.Conn`-backed writer จริงใน production, `*httptest.ResponseRecorder` ใน test บาง concrete type implement interface เสริมเพิ่ม — `http.Flusher`, `http.Hijacker` — ที่ handler ทำ type assertion เอาได้เมื่อต้องการ (สอนไว้ใน Type Assertions)
+- **`*Request` เป็น pointer ไปยัง struct ที่เป็น concrete type** `Request` พก body (`io.ReadCloser`), context และ field อื่นๆ ที่ handler ไม่ควร copy โดยไม่ตั้งใจ — การ copy `Request` โดยค่าจะ duplicate struct ที่ตั้งใจแทนหนึ่ง request ที่เข้ามา พร้อมเสี่ยง share (หรือแย่กว่านั้นคือแยก fork เงียบๆ) body reader ที่อยู่ข้างใต้ มีแค่ `*Request` เดียวต่อการเรียกหนึ่งครั้ง และ pointer ทำให้มันเป็นแบบนั้นต่อไป
+
+## HandleFunc, NewServeMux และ default mux
+
+`http.HandleFunc(pattern, handler)` เป็น function ระดับ package มันลงทะเบียน handler บน `http.DefaultServeMux` ซึ่งเป็นตัวแปร `*ServeMux` global ตัวเดียวที่ทุกการเรียก `http.HandleFunc` ในโปรแกรม — โค้ดของคุณ และ `init()` ของ package ที่ import มา — ใช้ร่วมกัน
+
+```go
+import _ "net/http/pprof" // registers /debug/pprof/* on DefaultServeMux as a side effect
+
+func main() {
+	http.HandleFunc("/hello", helloHandler) // now sharing a mux with pprof
+	http.ListenAndServe(":8080", nil)       // nil Handler means "use DefaultServeMux"
+}
+```
+
+การ import `net/http/pprof` เพื่อ side effect ล้วนๆ (blank import ด้วย `_` แบบเดียวกับที่สอนใน Packages & Imports) จะลงทะเบียน profiling endpoint ไว้ที่ `/debug/pprof/` บน mux global ตัวเดียวกันนั้น ถ้า binary ที่ production ของคุณ import pprof ที่ไหนสักแห่งใน dependency tree แล้วยังเรียก `http.ListenAndServe(addr, nil)` ด้วย profiling endpoint เหล่านั้น — ซึ่ง dump goroutine stack กับ heap content ได้ — จะเข้าถึงได้จาก public port นี่คือ incident category ที่เกิดจริงซ้ำๆ ไม่ใช่เรื่องสมมติ
+
+`http.NewServeMux()` สร้าง mux ส่วนตัวแทน ขอบเขตอยู่แค่ที่คุณส่งมันเป็น `Handler` ให้ใช้แบบนี้ในโปรแกรมที่มี route มากกว่าไม่กี่ตัว และใช้เสมอใน library code — library ที่เรียก `http.HandleFunc` จะไปปนเปื้อนทุกโปรแกรมที่ import มันเข้าไป
+
+## Routing ตั้งแต่ Go 1.22
+
+ตั้งแต่ Go 1.22 pattern ของ `ServeMux` ใส่ HTTP method และ path segment แบบ wildcard ได้:
+
+```go
+mux := http.NewServeMux()
+mux.HandleFunc("GET /items/{id}", itemHandler)   // method + wildcard segment
+mux.HandleFunc("POST /items", createHandler)     // method, no wildcard
+mux.HandleFunc("GET /items/special", specialHandler) // more specific literal
+```
+
+ภายใน handler ที่ match แล้ว `r.PathValue("id")` คืน segment `{id}` ที่ดักได้จาก URL wildcard แบบ trailing `...` (`/files/{path...}`) จะดักส่วนที่เหลือของ path ทั้งหมดแทนที่จะเป็นแค่ segment เดียว
+
+**Precedence: ตัวที่เจาะจงกว่าชนะ** เมื่อ pattern ที่ลงทะเบียนไว้สองตัวสามารถ match request เดียวกันได้ทั้งคู่ `ServeMux` จะเลือกตัวที่เจาะจงกว่า — literal segment ชนะ wildcard ที่ตำแหน่งเดียวกัน ลงทะเบียน `GET /items/{id}` กับ `GET /items/special` แล้วยิง request แต่ละ path ตามลำดับ ยืนยันแล้วจริงในเครื่อง:
+
+```text
+/items/special -> 200 literal special
+/items/42      -> 200 wildcard id= 42
+/items/        -> 200 subtree catch-all, path= /items/
+/items/a/b     -> 200 subtree catch-all, path= /items/a/b
+```
+
+`/items/special` match กับ pattern แบบ literal ไม่ใช่แบบ wildcard แม้ทั้งคู่จะ match ได้ทางเทคนิค; `/items/` (ที่ลงทะเบียนเป็น pattern ของตัวเองพร้อม trailing slash) ทำหน้าที่เป็น subtree catch-all สำหรับทุกอย่างข้างใต้มันที่ไม่มี pattern ที่เจาะจงกว่าอ้างสิทธิ์
+
+**Trailing slash redirect** ถ้าคุณลงทะเบียนแค่ `GET /items/` (pattern แบบ subtree) แล้ว client ขอ `/items` (ไม่มี trailing slash) `ServeMux` จะตอบกลับด้วย redirect เพิ่ม slash ให้อัตโนมัติ — ยืนยันแล้วจริงในเครื่อง:
+
+```text
+GET /items -> 307 /items/
+```
+
+**Pattern ที่กำกวมเป็น panic ตอนลงทะเบียน ไม่ใช่การตัดสินใจ routing ตอน runtime** pattern สองตัวที่ match request ชุดเดียวกันเป๊ะๆ — เช่น `/items/{id}` กับ `/items/{name}` — ลงทะเบียนพร้อมกันทั้งคู่ไม่ได้:
+
+```text
+panic: pattern "/items/{name}" (registered at ...) conflicts with pattern "/items/{id}" (registered at ...):
+/items/{name} matches the same requests as /items/{id}
+```
+
+(ตัด noise ของ file:line ออก ตัวข้อความไม่ได้แก้ไขจากการรันจริงในเครื่อง) สิ่งนี้ล้มเหลวทันทีตอนโปรแกรมเริ่ม ไม่ใช่ตอน request แรกที่ชนกัน นี่คืออีกเหตุผลที่ควรเลือก `http.NewServeMux()` บวก startup smoke test แทน `DefaultServeMux` ที่แอบแฝงอยู่
+
+## http.Server และ timeout ของมัน
+
+`http.ListenAndServe(addr, handler)` เป็น convenience wrapper รอบ `http.Server` ที่ทุก field ถูกปล่อยไว้ที่ zero value:
+
+```go
+http.ListenAndServe(":8080", mux) // ReadTimeout, WriteTimeout, IdleTimeout: all zero
+```
+
+ตามเอกสารของ `http.Server` `ReadTimeout`, `WriteTimeout` หรือ `IdleTimeout` ที่เป็น zero หมายถึง **ไม่มี timeout เลย** — client ที่ช้าหรือมุ่งร้ายสามารถถือ connection ค้างไว้ได้ไม่จำกัดเวลา `ReadHeaderTimeout` มีกฎ zero-means-none เดียวกันแต่จะ fallback ไปใช้ `ReadTimeout` เมื่อตัวมันเป็น zero และ `ReadTimeout` ถูกตั้งไว้ โค้ด production ควรสร้าง `Server` แบบเจาะจงเอง:
+
+```go
+srv := &http.Server{
+	Addr:              ":8080",
+	Handler:           mux,
+	ReadHeaderTimeout: 5 * time.Second, // caps time to read just the headers
+	ReadTimeout:       10 * time.Second,
+	WriteTimeout:      10 * time.Second,
+	IdleTimeout:       120 * time.Second, // keep-alive connection
+}
+srv.ListenAndServe()
+```
+
+`ReadHeaderTimeout` เพียงอย่างเดียวหยุดการโจมตีแบบ slow-client ที่พบบ่อยที่สุด (ส่ง header ทีละ byte หยดๆ) โดยไม่จำกัดว่า request body ที่อัปโหลดช้าแบบถูกต้องจะใช้เวลาได้นานแค่ไหน — นั่นคือหน้าที่ของ `ReadTimeout` (ทั้ง request รวม body) และ deadline ต่อ handler ผ่าน `r.Context()`
+
+## การเขียน response
+
+กฎสามข้อควบคุมทุกอย่างที่ handler เขียนไปยัง `w`:
+
+1. **ตั้ง header ก่อนเรียก `WriteHeader` หรือ `Write`** `w.Header().Set(...)` แก้ map ที่ถูกอ่านแค่ครั้งเดียว — ตอนที่ status line ถูกส่งออกไป header ใดที่ตั้งหลังจุดนั้นจะถูกละเลยเงียบๆ
+2. **`WriteHeader(code)` ส่ง status line และ header** เรียกมันมากกว่าหนึ่งครั้ง หรือเรียกหลัง `Write` ที่ส่ง `200 OK` โดยปริยายไปแล้ว จะไม่เปลี่ยนสิ่งที่ client เห็น — มันแค่พิมพ์ warning ลง log ของ server (`http: superfluous response.WriteHeader call from ...`)
+3. **`http.Error(w, msg, code)` คือวิธีมาตรฐานในการทำให้ request ล้มเหลว** มันตั้ง `Content-Type: text/plain; charset=utf-8`, ลบ `Content-Length` ที่ตั้งไว้ก่อนหน้า, เขียน status code, และเขียน `msg` ตามด้วย newline — ครบทั้งสามขั้นตอนตามลำดับที่ถูกต้อง จึงแทบไม่ต้องทำเองด้วยมือ
+
+```go
+if !ok {
+	http.Error(w, "item not found", http.StatusNotFound)
+	return
+}
+w.Header().Set("Content-Type", "application/json") // header before WriteHeader
+json.NewEncoder(w).Encode(it)                       // Encode's first Write implies WriteHeader(200)
+```
+
+`json.NewEncoder(w).Encode(v)` คือ pattern การตอบกลับแบบ JSON ที่ idiomatic: มันเขียนตรงไปยัง `w` โดยไม่มี `[]byte` คั่นกลาง และ byte แรกที่มันเขียนจะ trigger `200 OK` โดยปริยายถ้าคุณยังไม่ได้เรียก `WriteHeader` เอง
+
+## การอ่าน request body
+
+`json.NewDecoder(r.Body).Decode(&v)` คือภาพสะท้อนของด้านขาเข้า — มัน decode ตรงจาก stream แทนที่จะ buffer body ทั้งหมดเข้าหน่วยความจำด้วย `io.ReadAll` ก่อน มีรายละเอียดด้านความปลอดภัยสองอย่างที่สำคัญสำหรับ body ใดๆ ที่ client ควบคุมได้:
+
+- **`http.MaxBytesReader(w, r.Body, n)` จำกัดจำนวน byte ที่ body มีได้** ห่อ `r.Body` ด้วยมันก่อน decode; body ที่เกิน limit จะทำให้ `Decode` คืน error ที่มีข้อความเป๊ะๆ ว่า `http: request body too large` (ยืนยันแล้วจริงในเครื่อง) แทนที่จะปล่อยให้ attacker stream หลาย gigabyte เข้ามาใน process ของคุณ
+- **คุณไม่ต้องปิด `r.Body` เอง** ตามเอกสารของ `net/http`: *"For server requests, the Request Body is always non-nil... The Server will close the request body. The ServeHTTP Handler does not need to."* นี่คือจุดเดียวในทั้ง package ที่กฎปกติ "เปิดเอง ปิดเอง" ใช้ไม่ได้
+
+```go
+r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // reject bodies over 1 MiB
+var in item
+if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	http.Error(w, err.Error(), http.StatusBadRequest)
+	return
+}
+```
+
+## ฝั่ง client
+
+`http.Get`, `http.Post` และเพื่อนๆ ระดับ package ใช้ `http.DefaultClient` ซึ่ง zero value ของมันมี `Timeout: 0` — **ไม่มี timeout** ตามเอกสารของ `http.Client` ("A Timeout of zero means no timeout") server ที่ค้างหรือ network partition ฝั่งตรงข้ามสามารถ block การเรียกนั้นได้ตลอดไป ควรสร้าง client พร้อม timeout เสมอ:
+
+```go
+client := &http.Client{Timeout: 5 * time.Second}
+```
+
+ยังมีข้อผิดพลาดอีกสามอย่างที่พบบ่อยจนทั้ง `go vet` และเอกสารของ standard library เตือนไว้ตรงๆ:
+
+- **`defer resp.Body.Close()` ต้องมา *หลัง* การเช็ก error เสมอ ห้ามมาก่อน** เอกสารของ `Client.Do` บอกตรงๆ ว่า *"On error, any Response can be ignored"* — หมายความว่า `resp` เป็น `nil` ได้เมื่อ `err != nil` การ defer `resp.Body.Close()` ก่อนเช็ก `err` คือการเรียก `.Body.Close()` ผ่าน pointer ที่เป็น nil analyzer `httpresponse` ของ `go vet` จับกรณีนี้ได้ตอน build:
+
+  ```text
+  main.go:12:8: using resp before checking for errors
+  ```
+
+  ถ้าข้าม vet แล้วรันโค้ดเดียวกันอยู่ดี จะ panic ตรงตามที่คาดไว้:
+
+  ```text
+  panic: runtime error: invalid memory address or nil pointer dereference
+  ```
+
+  วิธีแก้มีรูปแบบเดียวกันเสมอ:
+
+  ```go
+  resp, err := client.Get(url)
+  if err != nil {
+  	return err
+  }
+  defer resp.Body.Close() // resp is guaranteed non-nil here
+  ```
+
+- **`Do` ไม่เช็ก status code ให้คุณ** ตามเอกสาร: *"A non-2xx status code doesn't cause an error."* response `404` หรือ `500` คือการเรียก `Do` ที่สำเร็จสมบูรณ์แบบด้วย `err == nil` — คุณต้องเช็ก `resp.StatusCode` เองก่อนจะเชื่อ body
+- **`io.ReadAll(resp.Body)` ไม่มีขีดจำกัดขนาด** server ที่มุ่งร้ายหรือทำงานผิดปกติสามารถ stream response ที่ไม่จำกัดขนาดจนหน่วยความจำหมด ห่อ body ด้วย `io.LimitReader(resp.Body, n)` ก่อนเมื่อขนาดของ response ยังไม่น่าเชื่อถือ
+
+`http.NewRequestWithContext(ctx, method, url, body)` คือ constructor ที่ควรใช้เมื่อ request ควรยกเลิกได้ — มันผูก lifetime ของ request เข้ากับ `context.Context` แทนที่จะพึ่งแค่ `Timeout` รวมของ client ทำให้ deadline ต่อการเรียกหรือการยกเลิกของ caller เองส่งต่อผ่านไปได้
+
+## Middleware
+
+Middleware ใน `net/http` ไม่ใช่อะไรมากไปกว่า function ที่รับ `Handler` แล้วคืน `Handler` ใหม่ที่ห่อมันไว้:
+
+```go
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("--> %s %s\n", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r) // call through, then (optionally) act again after
+	})
+}
+```
+
+เพราะรูปร่าง `func(http.Handler) http.Handler` รับและคืน interface เดียวกันเสมอ middleware จึงประกอบกันได้ด้วยการเรียก function ธรรมดา: `loggingMiddleware(authMiddleware(mux))` รัน logging ก่อน แล้วค่อย auth แล้วค่อย mux — wrapper ชั้นนอกสุดรันก่อนตอนขาเข้า และรันหลังสุดตอนขาออก
+
+Playground ด้านล่างเชื่อม handler, mux ที่ใช้ route แบบ 1.22, middleware chain และ client เข้าด้วยกัน — server กับ client รันใน process เดียวกันผ่าน `httptest.NewServer` จึงไม่ต้องใช้ network ภายนอกเลย:
+
+export const netHttpMainCode = `package main
+
+import (
+\t"bytes"
+\t"context"
+\t"encoding/json"
+\t"fmt"
+\t"io"
+\t"net/http"
+\t"net/http/httptest"
+\t"time"
+)
+
+type item struct {
+\tID   string \`json:"id"\`
+\tName string \`json:"name"\`
+}
+
+var items = map[string]item{"1": {ID: "1", Name: "widget"}}
+
+// itemHandler reads the {id} path value that ServeMux extracted for us.
+func itemHandler(w http.ResponseWriter, r *http.Request) {
+\tid := r.PathValue("id")
+\tit, ok := items[id]
+\tif !ok {
+\t\thttp.Error(w, "item not found", http.StatusNotFound) // sets status + Content-Type + body
+\t\treturn
+\t}
+\tw.Header().Set("Content-Type", "application/json") // header before WriteHeader
+\tjson.NewEncoder(w).Encode(it)                       // Encode calls WriteHeader(200) implicitly
+}
+
+// createHandler decodes a JSON body with a size cap.
+func createHandler(w http.ResponseWriter, r *http.Request) {
+\tr.Body = http.MaxBytesReader(w, r.Body, 1<<20) // reject bodies over 1 MiB
+\tvar in item
+\tif err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+\t\thttp.Error(w, err.Error(), http.StatusBadRequest)
+\t\treturn
+\t}
+\titems[in.ID] = in
+\tw.WriteHeader(http.StatusCreated) // must come before any Write
+\tjson.NewEncoder(w).Encode(in)
+}
+
+// loggingMiddleware wraps a Handler and returns a Handler -- the chaining shape.
+func loggingMiddleware(next http.Handler) http.Handler {
+\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+\t\tfmt.Printf("--> %s %s\\n", r.Method, r.URL.Path)
+\t\tnext.ServeHTTP(w, r)
+\t})
+}
+
+func main() {
+\tmux := http.NewServeMux()
+\tmux.HandleFunc("GET /items/{id}", itemHandler)
+\tmux.HandleFunc("POST /items", createHandler)
+
+\t// httptest.NewServer starts a real listener on localhost so the client
+\t// below talks real HTTP, but everything stays inside this one process.
+\tts := httptest.NewServer(loggingMiddleware(mux))
+\tdefer ts.Close()
+
+\tclient := &http.Client{Timeout: 5 * time.Second} // never use the default client without one
+
+\tresp, err := client.Get(ts.URL + "/items/1")
+\tif err != nil {
+\t\tfmt.Println("GET error:", err)
+\t\treturn
+\t}
+\tdefer resp.Body.Close() // deferred AFTER the error check, not before
+\tbody, _ := io.ReadAll(resp.Body)
+\tfmt.Println("GET /items/1:", resp.StatusCode, string(body))
+
+\tresp2, err := client.Get(ts.URL + "/items/999")
+\tif err != nil {
+\t\tfmt.Println("GET error:", err)
+\t\treturn
+\t}
+\tdefer resp2.Body.Close()
+\t// Do never treats a 4xx/5xx as an error -- you must check StatusCode yourself.
+\tif resp2.StatusCode != http.StatusOK {
+\t\tbody2, _ := io.ReadAll(resp2.Body)
+\t\tfmt.Println("GET /items/999:", resp2.StatusCode, string(body2))
+\t}
+
+\tctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+\tdefer cancel()
+\tpayload, _ := json.Marshal(item{ID: "2", Name: "gadget"})
+\treq, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/items", bytes.NewReader(payload))
+\tif err != nil {
+\t\tfmt.Println("build request:", err)
+\t\treturn
+\t}
+\tresp3, err := client.Do(req)
+\tif err != nil {
+\t\tfmt.Println("POST error:", err)
+\t\treturn
+\t}
+\tdefer resp3.Body.Close()
+\tbody3, _ := io.ReadAll(resp3.Body)
+\tfmt.Println("POST /items:", resp3.StatusCode, string(body3))
+}`;
+
+<Playground code={netHttpMainCode} />
+
+output จริงจากโปรแกรมนี้บน Go 1.27.0:
+
+```text
+--> GET /items/1
+GET /items/1: 200 {"id":"1","name":"widget"}
+
+--> GET /items/999
+GET /items/999: 404 item not found
+
+--> POST /items
+POST /items: 201 {"id":"2","name":"gadget"}
+
+```
+
+บรรทัดว่างหลังแต่ละ request ไม่ใช่ความผิดพลาด: ทั้ง `http.Error` และ `json.NewEncoder.Encode` เขียน newline ต่อท้ายของตัวเอง และ `fmt.Println` เพิ่มอีกตัวทับเข้าไปอีกที
+
+## การยกเลิกด้วย context และ graceful shutdown
+
+`*Request` ที่เข้ามาทุกตัวพก `context.Context` ที่เข้าถึงได้ผ่าน `r.Context()` ตามเอกสาร context นั้น "is canceled when the client's connection closes, the request is canceled (with HTTP/2), or when the ServeHTTP method returns" handler ที่เริ่มงานที่ใช้เวลานานควรส่ง `r.Context()` ลงไปและเช็ก `ctx.Err()` (หรือ select บน `ctx.Done()`) เป็นระยะ — ไม่งั้น handler จะทำงานต่อไปและใช้ resource ต่อไปนานหลังจาก client เลิกรอและจากไปแล้ว
+
+การปิด server ทั้งตัวอย่างสะอาดต้องใช้แนวคิดเดียวกันที่ระดับ process: หยุดรับ connection ใหม่ แต่ปล่อยให้ handler ที่กำลังทำงานอยู่ทำจนจบ `signal.NotifyContext` แปลง OS signal เป็น `context.Context` และ `srv.Shutdown(ctx)` คือตัวทำ graceful stop จริงๆ:
+
+```go
+srv := &http.Server{Handler: mux}
+
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+
+go func() {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+}()
+
+<-ctx.Done() // blocks until SIGINT/SIGTERM
+stop()
+
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := srv.Shutdown(shutdownCtx); err != nil {
+	log.Println("forced shutdown:", err)
+}
+```
+
+`srv.Shutdown` ปิด listener ทันที แล้วรอ (จนถึง deadline) ให้ handler ที่กำลังทำงานทุกตัวคืนค่าเองจนจบ `ListenAndServe` จะ unblock ด้วย `http.ErrServerClosed` พอดี — ผลลัพธ์ที่คาดไว้และไม่ใช่ error ของการ shutdown ที่ตั้งใจ ไม่ใช่ความล้มเหลวที่ต้อง log ตัวคู่แฝดแบบ deterministic ของสิ่งนี้ — ใช้ port ที่ OS สุ่มให้กับ timer แทน OS signal จริง — ยืนยันแล้วจริงในเครื่อง:
+
+```text
+server shut down cleanly
+Serve returned ErrServerClosed: true
+```
+
+snippet นี้ต้องการ TCP listener จริงและ OS signal จริง ดังนั้น — เหมือนกับตัวอย่าง graceful shutdown ของโมดูล concurrency — มันไม่รันในหน้านี้บน Playground ที่ทำงานในเบราว์เซอร์
+
+## การ test ด้วย httptest
+
+`httptest.NewRecorder()` implement `http.ResponseWriter` ทั้งหมดในหน่วยความจำ ดังนั้น handler จึงถูกทดสอบได้โดยตรงโดยไม่ต้องมี listener, goroutine หรือ network ใดๆ เลย:
+
+export const netHttpTestCode = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+\t"net/http"
+\t"net/http/httptest"
+)
+
+type item struct {
+\tID   string \`json:"id"\`
+\tName string \`json:"name"\`
+}
+
+var items = map[string]item{"1": {ID: "1", Name: "widget"}}
+
+func itemHandler(w http.ResponseWriter, r *http.Request) {
+\tid := r.PathValue("id")
+\tit, ok := items[id]
+\tif !ok {
+\t\thttp.Error(w, "item not found", http.StatusNotFound)
+\t\treturn
+\t}
+\tw.Header().Set("Content-Type", "application/json")
+\tjson.NewEncoder(w).Encode(it)
+}
+
+func main() {
+\tmux := http.NewServeMux()
+\tmux.HandleFunc("GET /items/{id}", itemHandler)
+
+\t// httptest.NewRequest + httptest.NewRecorder test the handler directly --
+\t// no listener, no goroutine, no network at all.
+\treq := httptest.NewRequest(http.MethodGet, "/items/1", nil)
+\trec := httptest.NewRecorder()
+\tmux.ServeHTTP(rec, req)
+
+\tfmt.Println("status:", rec.Code)
+\tfmt.Println("content-type:", rec.Header().Get("Content-Type"))
+\tfmt.Println("body:", rec.Body.String())
+
+\t// A request for a missing id exercises the error path the same way.
+\treq2 := httptest.NewRequest(http.MethodGet, "/items/999", nil)
+\trec2 := httptest.NewRecorder()
+\tmux.ServeHTTP(rec2, req2)
+\tfmt.Println("missing status:", rec2.Code, "body:", rec2.Body.String())
+}`;
+
+<Playground code={netHttpTestCode} />
+
+output จริงจากโปรแกรมนี้บน Go 1.27.0:
+
+```text
+status: 200
+content-type: application/json
+body: {"id":"1","name":"widget"}
+
+missing status: 404 body: item not found
+
+```
+
+`httptest.NewServer` คือครึ่งที่เหลือของชุดเครื่องมือ — มันเปิด listener จริง (ที่ใช้โดย playground หลักด้านบน) สำหรับ test ที่ต้องการ HTTP round-trip จริงๆ เช่นการทดสอบ client library หรือเช็กว่า header รอดผ่าน socket จริงหรือไม่ ใช้ `NewRecorder` สำหรับ handler เดี่ยวๆ ที่แยกทดสอบ และใช้ `NewServer` เมื่อ client ที่กำลังทดสอบไม่สามารถชี้ไปที่อะไรอื่นนอกจาก URL จริงได้
+
+## วงจรชีวิตของ request
+
+export const netHttpLifecycleDiagram = `flowchart TD
+  C["Client"] -- "TCP connect + HTTP request" --> S["http.Server (ReadHeaderTimeout, ReadTimeout)"]
+  S -- "ServeHTTP(w, r)" --> MW["Middleware chain"]
+  MW -- "next.ServeHTTP(w, r)" --> H["Handler: r.PathValue, json.NewDecoder(r.Body)"]
+  H -- "Header().Set, then WriteHeader, then Write" --> R["status line + headers + body"]
+  R --> C
+  Ctx["r.Context()"] -. "cancelled if the client disconnects" .-> H`;
+
+<Mermaid code={netHttpLifecycleDiagram} title="เส้นทางของ request หนึ่งตัว จาก TCP connection ไปจนถึง response" />
+
+## Mental Model
+
+```text
+http.Server{Addr, Handler, ReadTimeout, WriteTimeout, ...}
+  |
+  v
+DefaultServeMux (global, shared by every http.HandleFunc call)
+  or
+  *ServeMux (private, created with http.NewServeMux())
+  |
+  v
+middleware(middleware(handler))   -- outermost runs first in, last out
+  |
+  v
+func(w http.ResponseWriter, r *http.Request)
+  r.PathValue("id")        <- from the matched route pattern
+  r.Context()              <- cancelled if the client disconnects
+  json.NewDecoder(r.Body)  <- server closes r.Body for you
+  |
+  v
+w.Header().Set(...)  ->  w.WriteHeader(code)  ->  w.Write(body)
+  (must happen in this order -- headers are frozen at WriteHeader)
+```
+
+## ข้อแลกเปลี่ยน
+
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
+|---------|---------|------|
+| `http.DefaultServeMux` ผ่าน `http.HandleFunc` | setup เป็นศูนย์ หนึ่งบรรทัดต่อ route | global mutable state ที่แชร์กับทุก package ที่ import มา |
+| `http.NewServeMux()` | routing แยกเดี่ยว ปลอดภัยใน library code | มีตัวแปรเพิ่มอีกหนึ่งตัวที่ต้องส่งผ่านโปรแกรม |
+| Routing แบบ method + wildcard ของ 1.22 | ไม่ต้องใช้ third-party router สำหรับ API ส่วนใหญ่ | pattern ที่กำกวม panic ตอน startup; ไม่มีข้อจำกัดแบบ regex บน segment |
+| `http.Server` พร้อม timeout ที่ตั้งเอง | ป้องกันการโจมตีแบบ slow-client และ resource-exhaustion | ต้องคิดถึง field มากกว่า `ListenAndServe(addr, nil)` |
+| `httptest.NewRecorder` | test handler เร็ว ในหน่วยความจำ | ไม่ได้ทดสอบพฤติกรรม TCP จริง (chunking, connection reuse) |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`ListenAndServe(addr, nil)` เป็นค่า default ที่ปลอดภัย** — ทุก field ของ timeout บน `http.Server` ข้างใต้เป็น zero หมายความว่าไม่มีตัวไหนถูกบังคับใช้เลย; client ที่ช้าหรือมุ่งร้ายสามารถถือ connection ค้างไว้ได้ตลอดกาล
+- **`resp.Body.Close()` defer ได้ทันทีหลัง `Do`/`Get` อย่างปลอดภัย** — `resp` เป็น `nil` ได้เมื่อ `err != nil`; การ defer การปิดก่อนเช็ก `err` จะ panic ด้วย nil pointer dereference และ analyzer `httpresponse` ของ `go vet` จับ pattern นี้ได้เป๊ะๆ
+- **การเรียก `Do` ที่สำเร็จหมายถึง request สำเร็จ** — `Do` คืน error เฉพาะความล้มเหลวด้าน network/policy เท่านั้น; `404` หรือ `500` คือ `err == nil` พร้อม status code ที่คุณต้องเช็กเอง
+- **การเรียก `WriteHeader` สองครั้ง หรือหลัง `Write` จะเปลี่ยนสิ่งที่ client เห็น** — ไม่จริง byte แรกที่เขียน (หรือการเรียก `WriteHeader` ครั้งแรก) freeze status กับ header ไว้; อะไรก็ตามหลังจากนั้นแค่สร้าง log บรรทัด `superfluous response.WriteHeader call`
+- **ต้องปิด `r.Body` ใน handler แบบสมมาตรกับการปิด `resp.Body` ฝั่ง client** — server ทำสิ่งนี้ให้คุณแล้ว มีแค่ฝั่ง client เท่านั้นที่ต้อง `Close` เอง
+
+> 💡 ตัวอย่างจากของจริง
+>
+> **`net/http/pprof`**: การ import เพื่อ side effect ของมันลงทะเบียน `/debug/pprof/*` บน `http.DefaultServeMux` — กลไกเดียวกันกับที่อธิบายด้านบนว่าทำไม global mux ถึงอันตรายในโปรแกรมที่เรียก `http.ListenAndServe(addr, nil)` ด้วย
+>
+> **`http.ErrServerClosed`**: ถูกคืนโดย `Serve`/`ListenAndServe` หลังเรียก `Server.Shutdown` และถือเป็นผลลัพธ์ที่คาดไว้ ไม่ใช่ error ของการ graceful shutdown แทนที่จะ log เป็นความล้มเหลว
+
+<Callout title="สร้าง Server และ Client แบบเจาะจงเอง">
+`http.ListenAndServe(addr, nil)` และ `http.Get(url)` เปล่าๆ ทั้งคู่ใช้ struct zero-value ที่ timeout ทุกตัวปิดอยู่ เก็บไว้ใช้กับ script ทิ้งขว้างและ prototype ในเครื่องเท่านั้น อะไรก็ตามที่คุยกับ network จริง — ทั้งขาเข้าและขาออก — ควรสร้าง `http.Server` พร้อม field timeout ที่ตั้งไว้ และ `http.Client` พร้อม `Timeout`
+</Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด `net/http` เป็นโค้ด Go ที่ AI assistant เขียนบ่อยที่สุดแบบหนึ่ง และก็เป็นแบบที่ผิดพลาดซ้ำๆ ตรงจุดข้างบนพอดี เช็กสิ่งเหล่านี้ก่อนเชื่อว่า review ผ่าน:
+
+- `http.Client` ทุกตัวที่ใช้เรียก network จริงมี `Timeout` ตั้งไว้หรือไม่ หรือเป็น default client แบบ zero-value?
+- `defer resp.Body.Close()` วางไว้ *หลัง* การเช็ก `if err != nil` เสมอหรือไม่ ห้ามมาก่อน?
+- `resp.StatusCode` ถูกเช็กหลัง `Do`/`Get` หรือไม่ หรือโค้ดสมมติว่า error เป็น nil แปลว่าสำเร็จ?
+- handler เรียก `w.Header().Set(...)` ก่อน `Write` หรือ `WriteHeader` ครั้งแรกเสมอหรือไม่ ไม่ใช่หลัง?
+- โปรแกรมเรียก `http.HandleFunc` / `http.ListenAndServe(addr, nil)` พร้อมกับ import package (อย่าง `net/http/pprof`) ที่ลงทะเบียน route บน global mux เดียวกันหรือไม่?
+- goroutine ที่ spawn ขึ้นภายใน handler ส่ง `r.Context()` ต่อไปด้วยหรือไม่ หรือมันทำงานต่อ (และใช้ resource ต่อ) หลังจาก client หลุดการเชื่อมต่อไปแล้ว?
+
+<SpotTheBug code={`func createHandler(w http.ResponseWriter, r *http.Request) {
+	var in Item
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	body, _ := json.Marshal(in)
+	w.Write(body)
+	w.WriteHeader(http.StatusCreated)
+}`}>
+
+`w.Write(body)` ส่ง response body ทันที และเนื่องจากยังไม่มีการตั้ง status ไว้ Go จะส่ง `200 OK` โดยปริยายเป็นส่วนหนึ่งของการเขียนครั้งแรกนั้น `w.WriteHeader(http.StatusCreated)` บรรทัดถัดไปสายเกินไปแล้ว — status line ถูกส่งออกไปแล้ว ยืนยันแล้วจริงในเครื่อง: client เห็น status `200` ไม่ใช่ `201` เลย และ server log ว่า
+
+```text
+http: superfluous response.WriteHeader call from main.createHandler (main.go:23)
+```
+
+แก้ได้โดยเรียก `WriteHeader` ก่อนการ `Write` ครั้งแรก (หรือก่อนการเขียนภายในครั้งแรกของ encoder):
+
+```go
+w.WriteHeader(http.StatusCreated)
+w.Write(body)
+```
+
+หรือใช้ encoder ตรงๆ ก็คือ `w.WriteHeader(http.StatusCreated)` ตามด้วย `json.NewEncoder(w).Encode(in)`
+
+</SpotTheBug>
+
+export const quizNetHttp = [
+  {
+    q: "ทำไม *http.Request ถึงเป็น pointer ในขณะที่ http.ResponseWriter เป็น interface?",
+    options: [
+      "Request เป็น concrete struct ที่แทนหนึ่ง request ที่เข้ามาเป๊ะๆ (การ copy มันเสี่ยง duplicate body reader ของมัน); ResponseWriter ต่างกันไปตาม context (connection จริง เทียบกับ test recorder) จึงต้องการ concrete implementation ที่ต่างกัน",
+      "Interface เร็วกว่า pointer เสมอใน Go ดังนั้น ResponseWriter ใช้ interface เพื่อ performance",
+      "Request ต้องเป็น pointer เพราะ struct ส่งเป็น function argument ใน Go ไม่ได้",
+      "ไม่มีความต่างจริงๆ — สลับกันใช้แทนกันได้โดยไม่เปลี่ยนพฤติกรรม"
+    ],
+    answer: 0,
+    explain: "Request เป็น concrete type เดียวที่ใช้ทุกที่ ดังนั้น pointer จึงเลี่ยงการ copy body/context ของมัน; ResponseWriter ต้องเป็น interface เพราะ implementation จริงของมันต่างกันระหว่าง connection จริงใน production กับ httptest.ResponseRecorder ใน test"
+  },
+  {
+    q: "```go\nimport _ \"net/http/pprof\"\n\nfunc main() {\n\thttp.HandleFunc(\"/hello\", helloHandler)\n\thttp.ListenAndServe(\":8080\", nil)\n}\n```\nโค้ดนี้เปิดเผยอะไร และเพราะอะไร?",
+    options: [
+      "ไม่มีอะไรเพิ่ม — blank import มีผลแค่กับ tooling ในเครื่อง ไม่ใช่ server ที่กำลังรัน",
+      "endpoint profiling /debug/pprof/* เพราะ pprof ลงทะเบียนมันบน http.DefaultServeMux ระหว่าง init() ซึ่ง ListenAndServe(addr, nil) ก็ serve mux ตัวเดียวกันนั้นด้วย",
+      "compile error เพราะ http.HandleFunc กับ net/http/pprof ใช้ในโปรแกรมเดียวกันไม่ได้",
+      "มีแค่ /hello ที่ถูก serve; route ของ pprof ต้องการเรียก ListenAndServe แยกต่างหาก"
+    ],
+    answer: 1,
+    explain: "net/http/pprof ลงทะเบียน handler ของมันบน http.DefaultServeMux ที่ใช้ร่วมกันเป็น side effect ของการ import; ListenAndServe(addr, nil) serve mux global ตัวเดียวกันนั้น ดังนั้นทั้ง /hello และทุก route /debug/pprof/* จึงเข้าถึงได้จากสาธารณะ"
+  },
+  {
+    q: "```go\nmux := http.NewServeMux()\nmux.HandleFunc(\"GET /items/{id}\", h1)\nmux.HandleFunc(\"GET /items/special\", h2)\n```\nhandler ตัวไหนรัน GET request สำหรับ `/items/special`?",
+    options: [
+      "h1 เพราะ pattern แบบ wildcard ถูก match ก่อน",
+      "h2 เพราะ pattern แบบ literal ที่เจาะจงกว่าชนะ wildcard ที่ตำแหน่งเดียวกัน",
+      "ไม่มีตัวไหนเลย — การลงทะเบียนทั้งสอง pattern เป็น panic ตอน startup",
+      "รันทั้งคู่ ตามลำดับที่ลงทะเบียน"
+    ],
+    answer: 1,
+    explain: "ยืนยันแล้วจริงในเครื่อง: การขอ /items/special คืน response ของ h2 (\"literal special\") ในขณะที่ /items/42 ตกไปที่ handler wildcard ของ h1 — ServeMux เลือก pattern ที่เจาะจงกว่าเสมอ"
+  },
+  {
+    q: "```go\nclient := &http.Client{}\nresp, err := client.Get(\"https://example.com/slow\")\n```\nclient ตัวนี้ผิดตรงไหน และอะไรเกิดขึ้นได้บ้างจากมัน?",
+    options: [
+      "ไม่มีอะไรผิด — http.Client{} ตั้งค่า timeout เริ่มต้นที่สมเหตุสมผลไว้แล้ว",
+      "มันไม่ได้ตั้ง Timeout ไว้ (zero value หมายถึงไม่มี timeout) ดังนั้น server ที่ช้าหรือไม่ตอบสนองสามารถ block การเรียกนี้ไว้ตลอดไป",
+      "client.Get ล้มเหลวกับ HTTPS URL เสมอถ้าไม่มี Transport ที่ตั้งเอง",
+      "client รั่ว goroutine ทุกครั้งที่เรียก ไม่ว่า server จะทำงานยังไง"
+    ],
+    answer: 1,
+    explain: "zero value ของ http.Client มี Timeout: 0 ซึ่งตามเอกสารหมายถึงไม่มี timeout เลย — ควรตั้ง Timeout แบบเจาะจงเสมอสำหรับ client ใดก็ตามที่คุยกับ network จริง"
+  },
+  {
+    q: "```go\nresp, err := client.Get(url)\ndefer resp.Body.Close()\nif err != nil {\n\treturn err\n}\n```\nเกิดอะไรขึ้นเมื่อ request นี้เชื่อมต่อไม่สำเร็จ?",
+    options: [
+      "function คืน error ตามปกติ และ Close() เป็น no-op ที่ไม่มีอันตรายบน Body ที่เป็น nil",
+      "resp เป็น nil เมื่อ err != nil ดังนั้น defer resp.Body.Close() จะ panic ด้วย nil pointer dereference ก่อนที่ error จะถูกคืนด้วยซ้ำ",
+      "Go จัดลำดับ defer ใหม่ให้อัตโนมัติเพื่อรันหลังการเช็ก nil",
+      "โค้ดนี้ compile ไม่ผ่านเพราะ defer ปรากฏก่อนการเช็ก error ไม่ได้"
+    ],
+    answer: 1,
+    explain: "เอกสารของ Client.Do ระบุว่า Response ใดก็ได้เป็น nil ได้เมื่อ err != nil; การ defer Body.Close() ก่อนเช็กจะ dereference pointer ที่เป็น nil — ยืนยันแล้วจริงในเครื่อง สิ่งนี้ panic ด้วย \"invalid memory address or nil pointer dereference\" และ analyzer httpresponse ของ go vet จับมันได้เป็น \"using resp before checking for errors\""
+  },
+  {
+    q: "```go\nresp, err := client.Get(url)\nif err != nil {\n\treturn err\n}\ndefer resp.Body.Close()\ndata, _ := io.ReadAll(resp.Body)\nprocessJSON(data)\n```\nโค้ดนี้ลืมเช็กอะไร และทำไมมันถึงสำคัญ?",
+    options: [
+      "ไม่มีอะไรลืม — err == nil รับประกันแล้วว่า response สำเร็จและเป็น JSON ที่ถูกต้อง",
+      "resp.StatusCode — Do ไม่ถือว่า response แบบ 4xx/5xx เป็น error ดังนั้น processJSON อาจรัน body ของหน้า error แทนข้อมูลจริง",
+      "มันลืมเช็ก len(data) ก่อนเรียก processJSON",
+      "มันลืมตั้ง header Content-Type ซึ่งจำเป็นฝั่ง client"
+    ],
+    answer: 1,
+    explain: "status code แบบ non-2xx ไม่ทำให้ Do คืน error — เอกสารบอกไว้ตรงๆ การข้ามการเช็ก resp.StatusCode หมายความว่าหน้า error 404 หรือ 500 จะถูกป้อนตรงเข้า processJSON ราวกับว่าเป็นข้อมูลที่ถูกต้อง"
+  }
+];
+
+<Quiz client:visible id="stdlib/net-http" questions={quizNetHttp} />
+
+<ProgressTracker client:visible id="stdlib/net-http" />

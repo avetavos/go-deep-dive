@@ -1,0 +1,183 @@
+---
+title: วิธีอ่านโค้ด Go ที่คุณไม่ได้เขียนเอง
+description: 'ลำดับการอ่านโค้ด Go ที่ไม่คุ้นเคย — เริ่มจาก type และ signature ตามด้วย error path, goroutine lifetime, และ resource ownership'
+sidebar:
+  order: 1
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+ทุกโมดูลก่อนหน้านี้สอนให้คุณ*เขียน* Go โมดูลนี้สอนอีกครึ่งหนึ่งของงานที่คอร์สสัญญาไว้ตั้งแต่ต้น นั่นคือการอ่านโค้ด Go ที่คนอื่น — หรือ AI — เขียนไว้ แล้วตัดสินได้ว่าถูกหรือผิด AI assistant จะส่งโค้ดที่ compile ผ่าน รันได้ และหน้าตาเหมือนตัวอย่าง idiomatic ที่คุณเรียนมาทุกประการ แต่การ compile ผ่านกับรันได้ ไม่ใช่สิ่งเดียวกับ "ถูกต้อง" สี่หัวข้อด้านล่างคือลำดับที่ reviewer Go ที่มีประสบการณ์ใช้อ่านโค้ดจริง และทุกบทถัดไปในโมดูลนี้จะเจาะลึกแต่ละส่วน
+
+## อ่าน type และ signature ก่อนเสมอ
+
+ก่อนอ่าน body ของ function แม้แต่บรรทัดเดียว ให้อ่าน signature ก่อน ใน Go signature ไม่ใช่แค่การตกแต่ง — มันคือ contract ที่ compiler บังคับใช้จริง และมันตอบคำถามส่วนใหญ่ที่คุณต้องไล่ตาม body ไปหาคำตอบได้อยู่แล้ว:
+
+- **parameter ตัวแรกเป็น `context.Context` ไหม?** ถ้าใช่ แปลว่า call นี้ cancel ได้ และอาจกำลังรันพร้อมกับสิ่งที่ตั้ง timeout ให้มันได้
+- **receiver เป็น pointer (`*T`) หรือ value (`T`)?** pointer receiver แก้ไขค่าที่คุณส่งเข้าไปได้ ส่วน value receiver ทำไม่ได้ — มันทำงานบน copy
+- **มี `error` เป็นค่า return ตัวสุดท้ายไหม?** ถ้ามี แปลว่า function นี้มีจุดที่ fail ได้ และธรรมเนียมของ Go จะวาง signal ความล้มเหลวไว้ในที่ที่คุณ destructure ทิ้งไปเฉยๆ ไม่ได้
+- **parameter และ return type เป็น interface หรือ concrete type?** function ที่รับ `io.Reader` สัญญาว่าทำงานกับอะไรก็ได้ที่ satisfy มัน ส่วน function ที่รับ `*os.File` ได้จำกัดประโยชน์ของตัวเองแล้ว ไม่ว่าจะตั้งใจหรือไม่ก็ตาม
+
+ทั้งหมดนี้ไม่ต้องรันโค้ดเลย reviewer ที่อ่าน `func (a *Account) Withdraw(ctx context.Context, amount int) error` ก่อนดู body จะรู้ทันทีว่า: นี่แก้ไข `a`, cancel ได้, และ fail ได้ — สิ่งที่ต้องเช็กต่อไปคือทุก caller เคารพทั้งสามข้อนี้หรือเปล่า
+
+## ตาม error path ให้ครบ
+
+ธรรมเนียม `if err != nil` ของ Go ทำให้ error path มักเป็น*ส่วนใหญ่*ของบรรทัดใน function และก็เป็น path ที่โค้ดจาก AI มักผิดพลาดแบบแนบเนียนที่สุดด้วย — เพราะ happy path คือสิ่งที่ training data ให้รางวัลว่าดูถูกต้อง การอ่าน function ให้ดีหมายถึงการไล่ตามทุก `return` ที่คืน error ที่ไม่ใช่ nil ไม่ใช่แค่ตัวสุดท้าย:
+
+- error มาจากไหน — จาก stdlib call, จาก error ระดับล่างที่ wrap มา, หรือจากการเทียบกับ sentinel?
+- มันถูก return, log, หรือทั้งสองอย่าง? การจัดการสองรอบ (log *และ* return) มักแปลว่า caller จะ log ซ้ำอีกที
+- early return ทำให้ resource รั่วไหม ทั้งที่บรรทัดถัดไปควรจะปิดมัน?
+- zero value ถูก return คู่กับ error ไหม แล้วมี caller ตัวไหนใช้ zero value นั้นโดยไม่เช็ก error ก่อนหรือเปล่า?
+
+บทที่อธิบายกลไกเบื้องหลังคำถามเหล่านี้คือ **[Error Values](/go/th/errors-generics/error-values/)** และ **[Wrapping Errors](/go/th/errors-generics/wrapping/)** — โมดูลนี้สมมติว่าคุณรู้จัก `%w`, `errors.Is`, และ `errors.As` แล้ว และจะฝึกให้คุณจับจุดที่โค้ด AI ละเมิดกฎเหล่านั้นแทน
+
+## ตาม goroutine lifetime
+
+ทุกครั้งที่มี keyword `go` มันเริ่มสิ่งหนึ่งที่ lifetime ของมันต้องถูกติดตามแยกจาก function ที่เรียกมัน การอ่านโค้ด concurrent หมายถึงต้องตอบให้ได้ ทุก goroutine ว่า: อะไรทำให้มันหยุด และใครรอมันหยุด?
+
+- มันอ่านหรือเขียน channel ที่อาจไม่มีวันพร้อมไหม — นี่คือ leak ที่รอเกิด?
+- มันถือ `context.Context` ที่ถูก cancel ได้ไหม — และมันเช็ก `ctx.Done()` จริงหรือเปล่า?
+- มันถูกติดตามด้วย `sync.WaitGroup` ไหม และ `Add` ถูกเรียกก่อน goroutine เริ่ม จาก goroutine เดียวกับที่จะเรียก `Wait` หรือเปล่า?
+- ถ้ามัน panic มี `recover` ที่เข้าถึงได้จาก*ภายใน goroutine เดียวกัน*ไหม — `recover` ที่อื่นช่วยมันไม่ได้
+
+**[Goroutines](/go/th/concurrency/goroutines/)**, **[Channels](/go/th/concurrency/channels/)**, และ **[The sync package](/go/th/concurrency/sync-primitives/)** ครอบคลุมเรื่อง semantics ไว้แล้ว ส่วน catalog ในโมดูลนี้จะแสดงให้เห็นชัดๆ ว่าโค้ด AI ละเมิดแต่ละกฎอย่างไร
+
+## ตาม resource ownership
+
+อะไรก็ตามที่มี method `Close`, `Unlock`, หรือ `Done` มีเจ้าของ และ Go ไม่เคยบังคับตอน compile ว่าใครคือเจ้าของ — วินัยทั้งหมดอยู่ที่โค้ดที่คุณกำลังอ่าน สำหรับทุก resource ที่ถูก acquire ให้ถามว่า:
+
+- ใครเรียก release ที่คู่กัน — ตัว acquirer เอง หรือสิ่งที่ acquirer ส่ง resource ต่อให้?
+- release ถูกรับประกันในทุก path ไหม รวมถึง early return และ panic — ปกติผ่าน `defer` ที่วางทันทีหลัง acquire สำเร็จ?
+- resource ถูกใช้หลังจาก release แล้วได้ไหม — เช่น รับค่าจาก channel ที่ปิดไปแล้ว, อ่านไฟล์หลัง `Close`, แตะ mutex หลังจาก struct ที่ถือมันถูก copy?
+
+<Playground code={readingOrderCode} />
+
+export const readingOrderCode = `package main
+
+import (
+\t"context"
+\t"errors"
+\t"fmt"
+)
+
+// The signature alone tells you three things before you read a line of the
+// body: ctx first means the call is cancellable, the pointer receiver means
+// Withdraw mutates the Account, and the error return means something here
+// can fail — go find out what before you trust a caller that ignores it.
+type Account struct {
+\tBalance int
+}
+
+func (a *Account) Withdraw(ctx context.Context, amount int) error {
+\tif err := ctx.Err(); err != nil {
+\t\treturn err // follow the error path: cancellation short-circuits the withdrawal
+\t}
+\tif amount > a.Balance {
+\t\treturn errors.New("insufficient funds")
+\t}
+\ta.Balance -= amount
+\treturn nil
+}
+
+func main() {
+\tacc := &Account{Balance: 100}
+\tctx := context.Background()
+
+\tif err := acc.Withdraw(ctx, 30); err != nil {
+\t\tfmt.Println("withdraw failed:", err)
+\t}
+\tfmt.Println("balance after first withdraw:", acc.Balance)
+
+\tif err := acc.Withdraw(ctx, 1000); err != nil {
+\t\tfmt.Println("withdraw failed:", err) // easy branch to miss when skimming the happy path
+\t}
+\tfmt.Println("balance after second withdraw:", acc.Balance)
+}`;
+
+## Mental Model
+
+```text
+ลำดับการอ่าน function ที่คุณไม่ได้เขียนเอง:
+
+1. Signature   → ctx ไหม? pointer หรือ value receiver? มี error return ไหม? param เป็น interface หรือ concrete?
+2. Error path  → ทุก return ที่ไม่ใช่ nil ไม่ใช่แค่ตัวสุดท้าย
+3. Goroutine   → อะไรหยุดแต่ละ `go` statement และใครรอมัน
+4. Ownership   → ใครเรียก Close/Unlock/cancel และมันถูกรับประกันในทุก path ไหม
+
+การกระโดดไปดูแค่ "compile ผ่านไหม รันได้ไหม" ไม่ตอบคำถามพวกนี้เลยสักข้อ
+```
+
+## ข้อแลกเปลี่ยน
+
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| อ่าน signature ก่อน | จับการละเมิด contract ได้ก่อนไล่ branch แม้แต่อันเดียว | ต้องรู้ว่า `context.Context`, pointer receiver, และ error return สัญญาอะไรไว้จริงๆ |
+| ไล่ error path ทั้งหมด | เจอ error ที่ถูกกลืน/จัดการซ้ำ/รั่วที่โค้ด AI ซ่อนไว้ | ช้ากว่าการอ่านแค่ happy path |
+| ติดตาม goroutine lifetime ชัดเจน | เจอ leak และ panic ที่หายไปก่อนมันจะปลุกคุณตอนตีสาม | ต้องจำ state เยอะขึ้นระหว่างอ่าน |
+| เช็ก ownership ทุกครั้งที่ acquire | เจอ resource leak และ bug แบบใช้หลัง close | น่าเบื่อกับโค้ดที่มี helper function เล็กๆ เยอะ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"compile ผ่านแล้ว output ก็ดูถูก แปลว่าถูกต้อง"** ทุก pattern ใน catalog ของโมดูลนี้ compile ผ่านและให้ output ที่ดูสมเหตุสมผลบน happy path ของมัน — นั่นแหละคือสิ่งที่ทำให้มันอันตราย
+- **"อ่าน happy path ก็เท่ากับอ่าน function แล้ว"** ใน Go แบบ idiomatic บรรทัดจัดการ error มักมีมากกว่าบรรทัด happy path การข้ามมันไปคือการข้ามส่วนใหญ่ของ function
+- **"ถ้าคนเขียนก็โอเค ต้องระวังแค่โค้ด AI"** ทุก pattern ในนี้ก็เจอในโค้ดที่คนเขียนเองเหมือนกัน AI แค่ผลิตมันออกมาในปริมาณที่เยอะกว่าและดูมั่นใจกว่ามาก
+- **"หน้าที่ reviewer คือหา bug ด้วยการรันโค้ด"** bug ส่วนใหญ่ใน catalog ของโมดูลนี้ไม่ crash กับ input ที่คุณลองเฉยๆ มันจะ crash ทีหลัง ตอน load สูง หรือตอนถูก cancel
+
+<Callout title="อ่านหา contract ไม่ใช่หา vibe">
+ทุกกฎในโมดูลนี้จบลงที่สิ่งที่จับต้องได้เสมอ: compiler error, ข้อความจาก `go vet`, runtime panic, หรือบรรทัดที่ระบุได้ว่า resource ไม่เคยถูกปล่อยเลย เวลา review โค้ด — ของตัวเองหรือของ AI — ให้มองหาการละเมิดที่จับต้องได้ ไม่ใช่แค่ว่าโค้ด "รู้สึก" idiomatic หรือเปล่า
+</Callout>
+
+export const quizReadingGoIndex = [
+  {
+    q: "คุณเห็น `func Save(ctx context.Context, r io.Reader) (*Record, error)` ก่อนจะอ่าน body คุณรู้อะไรไปแล้วบ้าง?",
+    options: [
+      "ไม่รู้อะไรเลย — ต้องอ่าน body ก่อน",
+      "call นี้ cancel ได้, รับ byte stream แบบไหนก็ได้ (ไม่ใช่แค่ file), และ fail ได้",
+      "function นี้ปลอดภัยสำหรับใช้แบบ concurrent แน่นอน",
+      "function นี้ไม่มีวัน allocate บน heap"
+    ],
+    answer: 1,
+    explain: "ctx ที่เป็น parameter ตัวแรกส่งสัญญาณว่า cancel ได้, io.Reader ส่งสัญญาณว่า function ทำงานกับ byte source แบบไหนก็ได้, และ error return ส่งสัญญาณว่ามี failure path — ทั้งหมดนี้อ่านได้จาก signature อย่างเดียว"
+  },
+  {
+    q: "ทำไม error path มักสำคัญกว่าที่ต้องอ่านให้ละเอียด เมื่อเทียบกับ happy path?",
+    options: [
+      "Go บังคับให้เขียนโค้ด error handling ยาวกว่า success handling",
+      "happy path คือสิ่งที่ training data และการทดสอบเร็วๆ ให้รางวัลว่าดูถูกต้อง ความผิดพลาดจึงไปกระจุกอยู่ที่ error path",
+      "compiler ไม่เช็ก error path",
+      "error path ถูก execute ก่อนเสมอ"
+    ],
+    answer: 1,
+    explain: "happy path ถูกทดสอบแบบสบายๆ และดูถูกต้องใน demo ส่วน error path — early return, resource cleanup ตอน fail, สิ่งที่ถูก log เทียบกับที่ถูก return — คือจุดที่โค้ด AI มักซ่อน bug แบบแนบเนียนไว้มากที่สุด"
+  },
+  {
+    q: "สำหรับ goroutine ที่เริ่มด้วย `go worker(ctx)` คำถามไหนสำคัญที่สุดตอน review มัน?",
+    options: [
+      "ชื่อ function สื่อความหมายดีหรือเปล่า",
+      "อะไรทำให้ goroutine หยุด และใครรอมันหยุด",
+      "ใช้ tab หรือ space ในการ indent",
+      "function ยาวกี่บรรทัด"
+    ],
+    answer: 1,
+    explain: "lifetime ของ goroutine มองไม่เห็นจาก compiler — การ review มันหมายถึงต้องตรวจสอบด้วยมือว่ามัน exit condition (ctx.Done(), channel ที่ปิดแล้ว, WaitGroup) และมีอะไรบางอย่างติดตามว่ามันจบจริงหรือเปล่า"
+  },
+  {
+    q: "```go\nfunc open() (*os.File, error) {\n    f, err := os.Open(\"data.txt\")\n    return f, err\n}\n```\nreviewer ควรเช็กอะไรต่อเกี่ยวกับทุก caller ของ `open`?",
+    options: [
+      "caller อ่านไฟล์ภายใน 100ms",
+      "caller เช็ก err ก่อนใช้ f และเรียก f.Close() เมื่อใช้เสร็จ — ในทุก return path",
+      "caller เปลี่ยนชื่อ f ให้สื่อความหมายกว่านี้",
+      "ไม่ต้องเช็กอะไรเลย — os.Open ไม่มีวัน fail"
+    ],
+    answer: 1,
+    explain: "open() ส่งต่อ ownership ของ resource ให้ caller หน้าที่ของ reviewer คือยืนยันว่าทุก caller เช็ก error ก่อนแตะ f (ซึ่งเป็น nil *os.File ตอน error) และปิดมันในทุก exit path ไม่ใช่แค่ path ที่สำเร็จ"
+  }
+];
+
+<Quiz client:visible id="reading-go/index" questions={quizReadingGoIndex} />
+
+<ProgressTracker client:visible id="reading-go/index" />

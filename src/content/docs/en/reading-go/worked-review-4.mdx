@@ -1,0 +1,245 @@
+---
+title: 'Worked review 4: a generic cache with TTL'
+description: 'A generic, time-limited cache in the style AI writes it — find the bugs, then see them fixed one by one.'
+sidebar:
+  order: 8
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+`Cache[K, V]` is a small generic, time-limited cache — `Set` stores a value with an expiry, `Get` should return `false` once that expiry has passed. It compiles, `go vet` says nothing, `golangci-lint run` says nothing, and it runs. It has **4 real bugs**, one of which is a genuine `fatal error` under real concurrent use.
+
+## The program
+
+<Playground code={wr4Code} />
+
+export const wr4Code = `package main
+
+import (
+\t"fmt"
+\t"time"
+)
+
+type entry[V any] struct {
+\tvalue V
+\texp   time.Time
+}
+
+type Cache[K comparable, V any] struct {
+\tdata map[K]entry[V]
+\tttl  time.Duration
+}
+
+func New[K comparable, V any](ttl time.Duration) Cache[K, V] {
+\treturn Cache[K, V]{data: make(map[K]entry[V]), ttl: ttl}
+}
+
+func (c Cache[K, V]) Set(key K, value V) {
+\tc.data[key] = entry[V]{value: value, exp: time.Now().Add(c.ttl)}
+}
+
+func (c Cache[K, V]) Get(key K) (V, bool) {
+\te, ok := c.data[key]
+\tif !ok {
+\t\tvar zero V
+\t\treturn zero, false
+\t}
+\tif time.Now().After(e.exp) {
+\t\tdelete(c.data, key)
+\t}
+\treturn e.value, true
+}
+
+func main() {
+\tc := New[string, int](50 * time.Millisecond)
+\tc.Set("a", 1)
+
+\tv, ok := c.Get("a")
+\tfmt.Println("immediately:", v, ok)
+
+\ttime.Sleep(100 * time.Millisecond)
+\tv, ok = c.Get("a")
+\tfmt.Println("after ttl:", v, ok)
+
+\tfor i := 0; i < 5; i++ {
+\t\tc.Set(fmt.Sprintf("k%d", i), i)
+\t}
+\ttime.Sleep(100 * time.Millisecond)
+\tfmt.Println("entries still in map after all expired, none re-Get:", len(c.data))
+
+\tc2 := c
+\tc2.Set("shared", 42)
+\tsharedVal, sharedOK := c.Get("shared")
+\tfmt.Println("c (unrelated-looking copy) also sees c2's write:", sharedVal, sharedOK)
+}`;
+
+## Find the bugs
+
+`c.Get("a")` after the TTL has already passed still reports `true`. Two supposedly independent-looking cache variables see each other's writes. Try to name at least three of the four bugs before opening the answer.
+
+<details>
+<summary>Reveal the 4 bugs</summary>
+
+1. **`Get` deletes the expired entry but still returns it as if it were valid.** `if time.Now().After(e.exp) { delete(c.data, key) }` runs, and then execution falls straight through to the unconditional `return e.value, true` below it — there is no `return zero, false` on the expired path. Real output: `after ttl: 1 true`, when it should be `0 false`. The entry is even correctly removed from the map (`delete` on a shared map reference works fine through a value receiver) — but the stale value ships anyway on the way out.
+2. **Neither `Set` nor `Get` synchronizes access to the map.** There is no `sync.Mutex` anywhere in `Cache`. Run four goroutines calling `Set`/`Get` on the same cache concurrently and Go's runtime — not just the race detector — catches it directly:
+   ```text
+   fatal error: concurrent map writes
+   ```
+   This is not a `-race`-only finding; unsynchronized concurrent map writes crash the process outright, with or without the race detector attached (`-race` additionally reports the exact two goroutines and lines involved).
+3. **Expired entries are never removed unless something happens to call `Get` on that exact key again.** The demo sets five keys, lets all of them expire, and never touches any of them again with `Get` — `len(c.data)` reports all 5 still present. A cache used as `Set`-mostly (write a value, look it up rarely or never again by that exact key) grows without bound; nothing ever sweeps it.
+4. **`New` returns `Cache[K, V]` by value with value-receiver methods, so a plain assignment silently aliases instead of copying.** `c2 := c` looks like an independent copy — `Cache` is a plain struct, after all — but `Cache`'s only real state is a map, and maps are reference types. `c2.Set("shared", 42)` is visible through `c` too: `c (unrelated-looking copy) also sees c2's write: 42 true`. Nothing here is technically incorrect Go — it is a value type whose "value" semantics are deceptive because of what it contains.
+
+</details>
+
+## The corrected program
+
+<Playground code={wr4FixedCode} />
+
+export const wr4FixedCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+\t"time"
+)
+
+type entry[V any] struct {
+\tvalue V
+\texp   time.Time
+}
+
+type Cache[K comparable, V any] struct {
+\tmu   sync.Mutex // fixed: guards data against concurrent Set/Get
+\tdata map[K]entry[V]
+\tttl  time.Duration
+\tdone chan struct{}
+}
+
+func New[K comparable, V any](ttl time.Duration) *Cache[K, V] { // fixed: pointer — copies now share explicitly, on purpose
+\tc := &Cache[K, V]{data: make(map[K]entry[V]), ttl: ttl, done: make(chan struct{})}
+\tgo c.janitor(ttl) // fixed: proactively evict expired entries, not just on access
+\treturn c
+}
+
+func (c *Cache[K, V]) janitor(interval time.Duration) {
+\tt := time.NewTicker(interval)
+\tdefer t.Stop()
+\tfor {
+\t\tselect {
+\t\tcase <-t.C:
+\t\t\tc.mu.Lock()
+\t\t\tfor k, e := range c.data {
+\t\t\t\tif time.Now().After(e.exp) {
+\t\t\t\t\tdelete(c.data, k)
+\t\t\t\t}
+\t\t\t}
+\t\t\tc.mu.Unlock()
+\t\tcase <-c.done:
+\t\t\treturn
+\t\t}
+\t}
+}
+
+func (c *Cache[K, V]) Close() { close(c.done) } // fixed: caller can stop the janitor goroutine
+
+func (c *Cache[K, V]) Set(key K, value V) {
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\tc.data[key] = entry[V]{value: value, exp: time.Now().Add(c.ttl)}
+}
+
+func (c *Cache[K, V]) Get(key K) (V, bool) {
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\te, ok := c.data[key]
+\tif !ok || time.Now().After(e.exp) { // fixed: expired counts as not found
+\t\tvar zero V
+\t\treturn zero, false
+\t}
+\treturn e.value, true
+}
+
+func main() {
+\tc := New[string, int](50 * time.Millisecond)
+\tdefer c.Close()
+\tc.Set("a", 1)
+
+\tv, ok := c.Get("a")
+\tfmt.Println("immediately:", v, ok)
+
+\ttime.Sleep(100 * time.Millisecond)
+\tv, ok = c.Get("a")
+\tfmt.Println("after ttl:", v, ok)
+
+\tfor i := 0; i < 5; i++ {
+\t\tc.Set(fmt.Sprintf("k%d", i), i)
+\t}
+\ttime.Sleep(200 * time.Millisecond) // give the janitor a couple of ticks
+\tfmt.Println("entries left after janitor sweep:", len(c.data))
+
+\tc2 := c // fixed: this is now an explicit pointer copy — no surprise aliasing of a value type
+\tc2.Set("shared", 42)
+\tsharedVal, sharedOK := c.Get("shared")
+\tfmt.Println("c and c2 are the same *Cache on purpose:", sharedVal, sharedOK)
+}`;
+
+Run the corrected version: `after ttl: 0 false`, `entries left after janitor sweep: 0` (a background `janitor` goroutine, stoppable via `Close`, sweeps expired entries on a ticker), and `c and c2 are the same *Cache on purpose: 42 true` — the aliasing is unchanged, but it is no longer a silent surprise: `*Cache[K, V]` documents in its type that copies share state, the same way every other pointer in Go does. Stress-testing this version with four goroutines calling `Set`/`Get` concurrently under `go run -race` reports no race and no fatal error — the version above crashed with `fatal error: concurrent map writes` under the identical load.
+
+<Callout title="A generic type is not automatically a safe type">
+Every bug here would exist identically in a non-generic `map[string]int`-based cache — generics changed nothing about the need for a mutex, a correct expiry check, or pointer semantics. Don't let a type parameter's novelty distract from the same review checklist that applies to any stateful type. See **[Generics](/go/en/errors-generics/generics/)** and **[The sync package](/go/en/concurrency/sync-primitives/)**.
+</Callout>
+
+export const quizWorkedReview4 = [
+  {
+    q: "`Get` calls `delete(c.data, key)` when an entry has expired, so the entry really is removed from the map. Why does the buggy version still report the value as found?",
+    options: [
+      "delete() doesn't actually work on generic map types",
+      "The function falls through to the unconditional `return e.value, true` after the delete, instead of returning the zero value and false on the expired path",
+      "time.Now().After(e.exp) always returns false",
+      "The value is cached a second time somewhere else"
+    ],
+    answer: 1,
+    explain: "Deleting the entry from the map and reporting whether it was found are two separate things this function needs to do correctly. The code does the first but not the second — there is no early return after the delete, so control falls through to the same unconditional return used for a valid, unexpired entry."
+  },
+  {
+    q: "Four goroutines call Set/Get on the same unsynchronized Cache concurrently. What actually happens, verified on this exact program?",
+    options: [
+      "Nothing — Go maps handle concurrent access safely by default",
+      "A `fatal error: concurrent map writes` crash — not just a -race warning, an unrecoverable runtime crash even without the race detector",
+      "The program silently returns wrong values but never crashes",
+      "It only fails if the map has more than 1000 entries"
+    ],
+    answer: 1,
+    explain: "Go's map implementation actively detects concurrent unsynchronized writes at runtime and calls fatal(), which cannot be recovered with recover() and terminates the process — this is a stronger, more immediate failure than an ordinary data race, and it needs no -race flag to manifest."
+  },
+  {
+    q: "In the buggy version, `c2 := c` followed by `c2.Set(...)` is visible through `c` too. Why does this surprise a reader more than the same thing happening with, say, `*MyStruct`?",
+    options: [
+      "It shouldn't surprise anyone — pointers and value types behave identically in Go",
+      "Cache[K, V] looks like an ordinary value type (no asterisk, a plain struct), so `c2 := c` reads like an independent copy — the aliasing is hidden inside the map field rather than being visible in the type itself",
+      "Generic types cannot be assigned with :=",
+      "This behavior only happens with comparable key types"
+    ],
+    answer: 1,
+    explain: "A `*MyStruct` type signals sharing in its own syntax — a reader expects aliasing. `Cache[K, V]` gives no such signal; its value-type appearance hides that its only real state (the map) is a reference type, so a plain assignment aliases instead of copying, silently."
+  },
+  {
+    q: "The fixed version adds a `janitor` goroutine started inside `New` and a `Close` method. Why does `Close` matter here, beyond just 'good practice'?",
+    options: [
+      "It doesn't matter — the janitor goroutine would stop on its own",
+      "Without calling Close, the janitor goroutine loops on its ticker forever, holding the mutex periodically and never exiting — exactly the goroutine-leak pattern from the AI Bug Catalog, just introduced by the fix itself",
+      "Close is required by the Go compiler for any type with a background goroutine",
+      "Close deletes all cache entries immediately"
+    ],
+    answer: 1,
+    explain: "Adding a background goroutine to fix one bug (unbounded growth of expired entries) creates a new lifetime-management responsibility: something must eventually signal it to stop. Close's job is exactly the goroutine-leak concern from pattern 10 in the AI Bug Catalog — a fix that isn't careful here just swaps one bug for another."
+  }
+];
+
+<Quiz client:visible id="reading-go/worked-review-4" questions={quizWorkedReview4} />
+
+<ProgressTracker client:visible id="reading-go/worked-review-4" />

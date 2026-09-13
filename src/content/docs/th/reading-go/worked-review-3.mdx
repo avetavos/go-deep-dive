@@ -1,0 +1,215 @@
+---
+title: 'Worked review 3: a CLI with context, signals, and timeout'
+description: 'CLI เล็กๆ ที่ fetch resource ไม่กี่ตัวพร้อม timeout และจัดการ Ctrl+C สไตล์ที่ AI เขียน — หา bug ก่อน แล้วดูวิธีแก้ทีละตัว'
+sidebar:
+  order: 7
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+CLI นี้ fetch resource สามตัวทีละตัว พร้อม timeout รวมและการจัดการ Ctrl+C มัน compile ผ่าน, `go vet` ไม่บ่นอะไรเลย, `golangci-lint run` ก็ไม่บ่นอะไรเลย, และมันรันได้ มันยังมี **bug จริง 5 ตัว** — สองตัวไม่มีเครื่องมือไหนในคอร์สนี้จับได้ และอีกหนึ่งตัวเครื่องมือจับได้แค่ครึ่งเดียว
+
+## The program
+
+<Playground code={wr3Code} />
+
+export const wr3Code = `package main
+
+import (
+\t"context"
+\t"fmt"
+\t"os"
+\t"os/signal"
+\t"time"
+)
+
+func fetch(ctx context.Context, name string, take time.Duration) (string, error) {
+\tdone := make(chan string, 1)
+\tgo func() {
+\t\ttime.Sleep(take) // pretend network work — ignores ctx entirely
+\t\tdone <- name + " ready"
+\t\tfmt.Println("  (background: fetch for", name, "finished anyway, nobody was waiting)")
+\t}()
+
+\tselect {
+\tcase msg := <-done:
+\t\treturn msg, nil
+\tcase <-ctx.Done():
+\t\treturn "", ctx.Err()
+\t}
+}
+
+func run() error {
+\tctx, cancel := context.WithTimeout(context.Background(), 2)
+\t_ = cancel // referenced but never called — still leaks, but go vet cannot tell
+\tsigCtx, _ := signal.NotifyContext(ctx, os.Interrupt)
+
+\tfor _, name := range []string{"users", "orders", "invoices"} {
+\t\tmsg, err := fetch(sigCtx, name, 30*time.Millisecond)
+\t\tif err != nil {
+\t\t\tif err.Error() == "context deadline exceeded" {
+\t\t\t\treturn fmt.Errorf("timed out fetching %s: %v", name, err)
+\t\t\t}
+\t\t\treturn fmt.Errorf("fetch %s: %v", name, err)
+\t\t}
+\t\tfmt.Println(msg)
+\t}
+\treturn nil
+}
+
+func main() {
+\tif err := run(); err != nil {
+\t\tfmt.Println("error:", err)
+\t}
+\ttime.Sleep(60 * time.Millisecond) // long enough to see the abandoned background print
+}`;
+
+## หา bug
+
+fetch ตัวแรกสุด timeout ทันที — ก่อนที่งานจำลอง 30ms จะมีโอกาสเสร็จด้วยซ้ำ — และมีบรรทัดหนึ่งพิมพ์ออกมา*หลัง*จาก error ทั้งที่ไม่ควรพิมพ์เลยถ้า timeout หยุดงานได้จริง ลองระบุ bug อย่างน้อย 3 ใน 5 ตัวก่อนเปิดเฉลย
+
+<details>
+<summary>เฉลย 5 bug</summary>
+
+1. **`context.WithTimeout(context.Background(), 2)` ขาด `* time.Second`** `2` เป็น untyped constant ที่แปลงตรงๆ เป็น `time.Duration(2)` — สอง nanosecond context จึงเลย deadline ไปแล้วก่อนที่ `fetch` call แรกจะเริ่มด้วยซ้ำ ตรงกับ output จริงเป๊ะ: `error: timed out fetching users: context deadline exceeded` บน resource ตัวแรกสุด
+2. **`cancel` ถูกอ้างอิงแต่ไม่เคยถูกเรียก** `_ = cancel` ทำให้ "ตัวแปรถูกใช้" แต่ไม่เคยเรียก function จริง timer เบื้องหลัง `WithTimeout` รั่วไปตลอด 2 nanosecond ของ... ความว่างเปล่า เพราะมันหมดเวลาไปแล้ว แต่โค้ดรูปแบบเดียวกันที่มี timeout ยาวขึ้นจะรั่วตลอดระยะเวลานั้นเต็มๆ การสะกดมีผลกับ tooling: เขียนใหม่เป็นรูปที่ผิดชัดกว่าคือ `ctx, _ := context.WithTimeout(...)` ทำให้ `go vet` ค้านทันที:
+   ```text
+   main.go:11:7: the cancel function returned by context.WithTimeout should be called, not discarded, to avoid a context leak
+   ```
+   การสะกดแบบ `_ = cancel` ในโปรแกรมจริงด้านบนรั่วแบบเดียวกันเป๊ะ และ `go vet` ไม่พูดอะไรเลย — เป็นช่องว่างจริงในสิ่งที่ heuristic ง่ายๆ ของ analyzer `lostcancel` มองเห็นได้
+3. **`stop` จาก `signal.NotifyContext` ถูกทิ้งและไม่เคยถูกเรียก** นี่ไม่ใช่แค่ "leak เล็กๆ" — documentation ของ `signal.NotifyContext` บอกไว้ชัดเจน: *"Future interrupts received will not trigger the default (exit) behavior until the returned stop function is called."* verify โดยตรงแล้ว: process ที่เรียก `signal.NotifyContext(ctx, os.Interrupt)` แล้วทิ้ง `stop` จากนั้นได้รับ `SIGINT` จริง จะไม่ exit:
+   ```text
+   sending SIGINT to myself, 500ms after NotifyContext with no stop() call
+   still alive: default SIGINT-exit behavior was never restored (stop() was never called)
+   ```
+   โปรแกรมเดียวกันที่ไม่มี signal handling เลย exit ทันทีกับ signal เดียวกันเป๊ะ:
+   ```text
+   sending SIGINT to myself with no signal handling installed at all
+   signal: interrupt
+   ```
+   การลืม `stop()` ไม่ได้แค่รั่ว memory — มันปิดการใช้งาน Ctrl+C แบบเงียบๆ ไปตลอดชีวิตที่เหลือของ process
+4. **error check เทียบ `err.Error() == "context deadline exceeded"` และ wrap ด้วย `%v`** มันบังเอิญทำงานได้ตรงนี้เพราะยังไม่มีอะไร wrap error นี้ แต่มันห่างจากการพังแบบเงียบๆ แค่ refactor เดียว: ทันทีที่ caller ตัวไหน wrap error นี้อีกที (`fmt.Errorf("worker failed: %w", err)`) string comparison จะไม่ match อีกต่อไป และ `%v` (แทนที่จะเป็น `%w`) ก็จะทำให้ `errors.Is` พังเร็วกว่านั้นอีก เพราะตัด chain ทิ้งไปเลย
+5. **background goroutine ของ `fetch` ไม่เคยดู `ctx` เลย** มันแค่ sleep ตาม `take` แล้วก็ส่ง จบ output จริงพิสูจน์ด้วยลำดับของมันเอง: `error: timed out fetching users: ...` พิมพ์ทันที และต่อเมื่อ*หลังจากนั้น*เท่านั้น — พอ sleep 30ms เต็มผ่านไป — `(background: fetch for users finished anyway, nobody was waiting)` ถึงพิมพ์ caller ยอมแพ้ไปแล้ว แต่ "งาน" ยังรันจนจบอยู่ดี เปลืองอะไรก็ตามที่มันถืออยู่ (connection, file handle, goroutine)
+
+</details>
+
+## The corrected program
+
+<Playground code={wr3FixedCode} />
+
+export const wr3FixedCode = `package main
+
+import (
+\t"context"
+\t"errors"
+\t"fmt"
+\t"os"
+\t"os/signal"
+\t"time"
+)
+
+func fetch(ctx context.Context, name string, take time.Duration) (string, error) {
+\tdone := make(chan string, 1)
+\tgo func() {
+\t\tselect { // fixed: the background goroutine now watches ctx too
+\t\tcase <-time.After(take):
+\t\t\tdone <- name + " ready"
+\t\tcase <-ctx.Done():
+\t\t\treturn // stop pretending to work once the caller stopped waiting
+\t\t}
+\t}()
+
+\tselect {
+\tcase msg := <-done:
+\t\treturn msg, nil
+\tcase <-ctx.Done():
+\t\treturn "", ctx.Err()
+\t}
+}
+
+func run() error {
+\tctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // fixed: real unit
+\tdefer cancel()                                                         // fixed: always release the timer
+\tsigCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+\tdefer stop() // fixed: always unregister — restores default Ctrl+C behavior when we're done
+
+\tfor _, name := range []string{"users", "orders", "invoices"} {
+\t\tmsg, err := fetch(sigCtx, name, 30*time.Millisecond)
+\t\tif err != nil {
+\t\t\tif errors.Is(err, context.DeadlineExceeded) { // fixed: errors.Is, not string comparison
+\t\t\t\treturn fmt.Errorf("timed out fetching %s: %w", name, err) // fixed: %w keeps the chain
+\t\t\t}
+\t\t\treturn fmt.Errorf("fetch %s: %w", name, err)
+\t\t}
+\t\tfmt.Println(msg)
+\t}
+\treturn nil
+}
+
+func main() {
+\tif err := run(); err != nil {
+\t\tfmt.Println("error:", err)
+\t}
+\ttime.Sleep(60 * time.Millisecond)
+}`;
+
+รันเวอร์ชันที่แก้แล้ว: ทั้งสาม resource พิมพ์ `ready` (timeout ตอนนี้เป็น 2 วินาทีจริงๆ นานพอสำหรับ fetch 30ms) ไม่มี background print กำพร้าเพราะ fetch goroutine ตอนนี้ exit ทันทีที่ `ctx.Done()` fire และทั้ง `cancel()` กับ `stop()` ถูก defer ทันทีข้างจุดที่สร้างมัน `go vet` และ `golangci-lint run` ทั้งคู่รายงาน 0 issue บนไฟล์ทั้งสองเวอร์ชัน — นี่แหละคือบทเรียนในตัวมันเอง: 3 ใน 5 bug ที่นี่ compile สะอาด, vet สะอาด, และ lint สะอาด
+
+<Callout title="resource ไม่ใช่แค่ memory">
+bug ที่ 3 คุ้มค่าที่จะครุ่นคิดต่อ: `stop()` ที่ดูเหมือน optional คือสิ่งที่ทำให้มันถูกข้ามได้ง่าย แต่หน้าที่ของมันไม่ใช่ garbage collection — มันคืนพฤติกรรมจริงของ process (Ctrl+C exit โปรแกรมได้จริง) ปฏิบัติกับทุก `context.CancelFunc` — จาก `WithCancel`, `WithTimeout`, `WithDeadline`, หรือ `signal.NotifyContext` — เหมือนเป็น resource ที่ต้องมีนิสัย `defer cancel()` ที่ต่อรองไม่ได้เหมือน `defer file.Close()` ดู **[Context](/go/th/concurrency/context/)**
+</Callout>
+
+export const quizWorkedReview3 = [
+  {
+    q: "The buggy program's very first fetch times out immediately, before any of the 30ms simulated work could finish. What causes that?",
+    options: [
+      "The network is simulated to always fail",
+      "context.WithTimeout(context.Background(), 2) passes the untyped constant 2 as a time.Duration directly — 2 nanoseconds, not 2 seconds",
+      "signal.NotifyContext always cancels immediately when stop is discarded",
+      "fetch has a bug that always returns ctx.Err()"
+    ],
+    answer: 1,
+    explain: "time.Duration คือ int64 นับ nanosecond การส่งจำนวนเต็มเปล่าๆ 2 (แทนที่จะเป็น 2 * time.Second) สร้าง context ที่มี deadline อยู่ 2 nanosecond ข้างหน้า — หมดอายุไปแล้วตั้งแต่ select ตัวแรกยังไม่ทันรัน"
+  },
+  {
+    q: "`go vet` flags `ctx, _ := context.WithTimeout(...)` with a lostcancel warning, but says nothing about `ctx, cancel := context.WithTimeout(...); _ = cancel`. Both leak identically. What does this gap tell you about the lostcancel analyzer?",
+    options: [
+      "The second spelling doesn't actually leak — vet is correct to stay silent",
+      "lostcancel's heuristic checks whether the cancel variable is referenced at all, not whether it is ever actually called — `_ = cancel` counts as a reference and silences the warning even though the function is never invoked",
+      "go vet only checks the first ten lines of a file",
+      "lostcancel was removed in Go 1.27"
+    ],
+    answer: 1,
+    explain: "การสะกดทั้งสองแบบทำให้ cancel function ไม่เคยถูกเรียกเหมือนกัน ซึ่งคือ leak จริง แต่ check ง่ายๆ ของ analyzer ที่แค่ดูว่า 'ตัวแปรนี้ถูกใช้ที่ไหนไหม' ก็พอใจกับ `_ = cancel` แล้ว ทั้งที่ 'ใช้' ตรงนี้แปลว่าแค่ทำให้ compiler ไม่บ่นเรื่อง unused variable เท่านั้น — เป็นข้อจำกัดจริงที่ควรรู้ไว้ ไม่ใช่เชื่อไปเฉยๆ"
+  },
+  {
+    q: "What does discarding the `stop` function returned by `signal.NotifyContext` actually cost, according to its documentation and the verified demo in this lesson?",
+    options: [
+      "Nothing measurable — it is a purely theoretical concern",
+      "It permanently prevents the process from exiting via the default Ctrl+C behavior for any signal received after that point, not just a memory leak",
+      "It causes the program to exit immediately",
+      "It only matters if the program never receives any signals at all"
+    ],
+    answer: 1,
+    explain: "documentation ของ signal.NotifyContext เองระบุว่า interrupt ในอนาคตจะไม่ trigger พฤติกรรม exit แบบ default จนกว่า stop จะถูกเรียก demo ที่ verify แล้วยืนยันตรงนี้: SIGINT จริงที่ส่งไปยัง process ที่ทิ้ง stop ไม่ทำให้มัน terminate ในขณะที่ signal เดียวกันทำให้ process ที่ไม่มี signal handling เลย terminate ทันที"
+  },
+  {
+    q: "In the buggy version, the line `(background: fetch for users finished anyway, nobody was waiting)` prints *after* `error: timed out fetching users: ...`. What does that ordering prove?",
+    options: [
+      "fmt.Println is asynchronous and prints in a random order",
+      "The background goroutine inside fetch never checked ctx.Done(), so it kept running its full simulated delay even after the caller had already given up and returned an error",
+      "The program actually succeeded and the error message is misleading",
+      "context.WithTimeout retries the fetch automatically"
+    ],
+    answer: 1,
+    explain: "error return ทันทีที่ ctx.Done() fire (เกือบจะทันที เพราะ bug 2ns) แต่ goroutine ที่ spawn ขึ้นมาเช็กแค่ time.Sleep เปล่าๆ ไม่มี select บน ctx เลย — มันจึงรันจนจบไม่ว่าจะยังมีใครรออยู่หรือเปล่า พิสูจน์ว่า cancellation ไม่เคยไปถึงงานที่กำลังทำอยู่จริงๆ"
+  }
+];
+
+<Quiz client:visible id="reading-go/worked-review-3" questions={quizWorkedReview3} />
+
+<ProgressTracker client:visible id="reading-go/worked-review-3" />

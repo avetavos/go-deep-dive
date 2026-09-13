@@ -1,0 +1,270 @@
+---
+title: 'Worked review 2: worker pool processing files'
+description: 'worker pool ประมวลผลไฟล์ สไตล์ที่ AI เขียน — หา bug ก่อน แล้วดูวิธีแก้ทีละตัว'
+sidebar:
+  order: 6
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+`ProcessAll` อ่านไฟล์เป็นชุดด้วย worker goroutine กลุ่มเล็กๆ แล้วคืนขนาดไฟล์ มัน compile ผ่าน, `go vet` ไม่บ่นอะไรเลย, และมันรันได้ — แต่มันไม่เคยประมวลผลไฟล์ครบทุกตัว บางทีก็รั่ว goroutine และ (ภายใต้ `-race`) มี data race จริงที่ demo เล็กๆ ด้านล่างนี้บังเอิญไม่ crash มันมี **bug จริง 5 ตัว**
+
+## The program
+
+<Playground code={wr2Code} />
+
+export const wr2Code = `package main
+
+import (
+\t"fmt"
+\t"os"
+\t"runtime"
+\t"time"
+)
+
+type Result struct {
+\tPath string
+\tSize int
+}
+
+func processFile(path string, delay time.Duration) (Result, error) {
+\ttime.Sleep(delay) // simulates variable I/O time per file
+\tdata, err := os.ReadFile(path)
+\tif err != nil {
+\t\treturn Result{}, err
+\t}
+\treturn Result{Path: path, Size: len(data)}, nil
+}
+
+func ProcessAll(paths []string, delays map[string]time.Duration, numWorkers int) []Result {
+\tjobs := make(chan string)
+\tvar results []Result
+
+\tfor i := 0; i < numWorkers; i++ {
+\t\tgo func() {
+\t\t\tfor p := range jobs {
+\t\t\t\tr, err := processFile(p, delays[p])
+\t\t\t\tif err == nil {
+\t\t\t\t\tresults = append(results, r)
+\t\t\t\t}
+\t\t\t}
+\t\t}()
+\t}
+
+\tfor _, p := range paths {
+\t\tjobs <- p
+\t}
+
+\ttime.Sleep(150 * time.Millisecond) // "wait" for workers to finish
+\treturn results
+}
+
+func main() {
+\tdir, _ := os.MkdirTemp("", "wr2")
+\tdefer func() { _ = os.RemoveAll(dir) }()
+
+\tnames := []string{"a.txt", "bb.txt", "ccc.txt", "slow.txt"}
+\tdelays := map[string]time.Duration{}
+\tvar paths []string
+\tfor i, name := range names {
+\t\tp := dir + "/" + name
+\t\t_ = os.WriteFile(p, make([]byte, i+1), 0o644)
+\t\tpaths = append(paths, p)
+\t\tdelays[p] = 20 * time.Millisecond
+\t}
+\tdelays[dir+"/slow.txt"] = 400 * time.Millisecond // slower than ProcessAll's fixed wait
+\tpaths = append(paths, dir+"/missing.txt")
+
+\tbefore := runtime.NumGoroutine()
+\tresults := ProcessAll(paths, delays, 2)
+\tafter := runtime.NumGoroutine()
+
+\tfmt.Println("processed", len(results), "of", len(paths), "files")
+\tfor _, r := range results {
+\t\tfmt.Printf("  %s: %d bytes\\n", r.Path[len(dir)+1:], r.Size)
+\t}
+\tfmt.Println("goroutines before:", before, "goroutines still running after:", after)
+}`;
+
+## หา bug
+
+`missing.txt` ไม่มีอยู่จริง และ `slow.txt` ก็ถูกทำให้ช้าโดยตั้งใจ — แต่ output แสดงว่าไฟล์ที่หายไปมีมากกว่า 2 ตัวจาก 5 ตัว และจำนวน goroutine ก็ไม่กลับไปเท่าจุดเริ่มต้น ลองระบุ bug อย่างน้อย 3 ใน 5 ตัวก่อนเปิดเฉลย
+
+<details>
+<summary>เฉลย 5 bug</summary>
+
+1. **`ProcessAll` "รอ" worker ด้วย `time.Sleep(150 * time.Millisecond)` แบบตายตัว แทนที่จะใช้ synchronization primitive จริง** ไม่มี `sync.WaitGroup`, ไม่มี done channel — แค่การเดาว่างานควรใช้เวลานานแค่ไหน `slow.txt` ถูกตั้งใจให้มี delay 400ms ซึ่งนานกว่าที่เดาไว้ 150ms มาก จึงหายไปจาก results เงียบๆ ทุกครั้งที่รัน — ไม่ถูกรายงานเป็น error แค่หายไปเฉยๆ เหมือนไม่เคยมีอยู่
+2. **channel `jobs` ไม่เคยถูกปิด** หลังจากส่งทุก path แล้ว ไม่มีอะไรบอก worker goroutine ให้หยุด แต่ละตัวค้างอยู่ใน `for p := range jobs` ตลอดกาล รอ work ที่จะไม่มีวันมาถึง output จริง: `goroutines before: 1 goroutines still running after: 3` — worker goroutine ทั้ง 2 ตัวไม่เคย exit เลย
+3. **`results` เป็น `[]Result` ธรรมดาที่ถูก append จากหลาย goroutine โดยไม่มี mutex** นี่คือ data race จริง — ดูเหมือนไม่มีอะไรใน run เล็กๆ นี้ (`go run` แบบไม่มี `-race` มักจะรันจบโดยไม่ crash) แต่เป็นจริงภายใต้ `go run -race`:
+   ```text
+   WARNING: DATA RACE
+   Write at 0x00c0001ca000 by goroutine 8:
+     main.ProcessAll.func1()
+   Previous read at 0x00c0001ca000 by goroutine 7:
+     main.ProcessAll.func1()
+   ```
+4. **error จากการอ่าน `missing.txt` ถูกทิ้งเงียบๆ** `if err == nil { results = append(...) }` แปลว่าความล้มเหลวใดๆ ก็หายไปเฉยๆ — caller บอกไม่ได้ว่า "ไฟล์ fail" ต่างจาก "ไฟล์ไม่เคยถูก schedule" ยังไง
+5. **ลำดับของ result ไม่เคยถูกรับประกันเลย แต่ไม่มีตรงไหนรองรับเรื่องนี้** การรันโปรแกรมเดียวกันนี้ 3 ครั้งติดกันได้ `2 of 5`, `3 of 5`, และ `3 of 5` — subset ต่างกันและลำดับต่างกันทุกครั้ง มาจาก timing ของการ schedule goroutine ล้วนๆ โค้ดที่สมมติว่า `results[0]` ตรงกับ `paths[0]` จะผิดเงียบๆ
+
+</details>
+
+## The corrected program
+
+<Playground code={wr2FixedCode} />
+
+export const wr2FixedCode = `package main
+
+import (
+\t"fmt"
+\t"os"
+\t"runtime"
+\t"sort"
+\t"sync"
+\t"time"
+)
+
+type Result struct {
+\tPath string
+\tSize int
+\tErr  error
+}
+
+func processFile(path string, delay time.Duration) (Result, error) {
+\ttime.Sleep(delay) // simulates variable I/O time per file
+\tdata, err := os.ReadFile(path)
+\tif err != nil {
+\t\treturn Result{}, err
+\t}
+\treturn Result{Path: path, Size: len(data)}, nil
+}
+
+func ProcessAll(paths []string, delays map[string]time.Duration, numWorkers int) []Result {
+\tjobs := make(chan string)
+\tresultsCh := make(chan Result)
+\tvar wg sync.WaitGroup // fixed: real completion signal instead of a fixed Sleep
+
+\tfor i := 0; i < numWorkers; i++ {
+\t\twg.Add(1)
+\t\tgo func() {
+\t\t\tdefer wg.Done()
+\t\t\tfor p := range jobs {
+\t\t\t\tr, err := processFile(p, delays[p])
+\t\t\t\tif err != nil {
+\t\t\t\t\tr = Result{Path: p, Err: err} // fixed: report the failure, don't drop it
+\t\t\t\t}
+\t\t\t\tresultsCh <- r
+\t\t\t}
+\t\t}()
+\t}
+
+\tgo func() {
+\t\tfor _, p := range paths {
+\t\t\tjobs <- p
+\t\t}
+\t\tclose(jobs) // fixed: workers can now see the channel drain and return
+\t}()
+\tgo func() {
+\t\twg.Wait()
+\t\tclose(resultsCh)
+\t}()
+
+\tvar results []Result
+\tfor r := range resultsCh { // fixed: single collector goroutine — no shared-slice race
+\t\tresults = append(results, r)
+\t}
+\tsort.Slice(results, func(i, j int) bool { return results[i].Path < results[j].Path }) // fixed: deterministic order
+\treturn results
+}
+
+func main() {
+\tdir, _ := os.MkdirTemp("", "wr2fixed")
+\tdefer func() { _ = os.RemoveAll(dir) }()
+
+\tnames := []string{"a.txt", "bb.txt", "ccc.txt", "slow.txt"}
+\tdelays := map[string]time.Duration{}
+\tvar paths []string
+\tfor i, name := range names {
+\t\tp := dir + "/" + name
+\t\t_ = os.WriteFile(p, make([]byte, i+1), 0o644)
+\t\tpaths = append(paths, p)
+\t\tdelays[p] = 20 * time.Millisecond
+\t}
+\tdelays[dir+"/slow.txt"] = 400 * time.Millisecond
+\tpaths = append(paths, dir+"/missing.txt")
+
+\tbefore := runtime.NumGoroutine()
+\tresults := ProcessAll(paths, delays, 2)
+\tafter := runtime.NumGoroutine()
+
+\tfmt.Println("processed", len(results), "of", len(paths), "files")
+\tfor _, r := range results {
+\t\tname := r.Path[len(dir)+1:]
+\t\tif r.Err != nil {
+\t\t\tfmt.Printf("  %s: error: %v\\n", name, r.Err)
+\t\t\tcontinue
+\t\t}
+\t\tfmt.Printf("  %s: %d bytes\\n", name, r.Size)
+\t}
+\tfmt.Println("goroutines before:", before, "goroutines still running after:", after)
+}`;
+
+รันเวอร์ชันที่แก้แล้ว มันรายงาน `processed 5 of 5 files` ทุกครั้ง เรียงลำดับเดียวกันทุกครั้ง `missing.txt` แสดงเป็น `error: open .../missing.txt: no such file or directory` แทนที่จะหายไปเงียบๆ และ `goroutines before: 1 goroutines still running after: 1` — pool ปิดตัวจริงๆ `go run -race` บนเวอร์ชันนี้ไม่รายงาน race เลย และ `golangci-lint run` รายงาน 0 issue
+
+<Callout title="Sleep ตายตัวไม่เคยแทนที่การรอที่แท้จริงได้">
+bug ที่ 1 คือสิ่งที่ควรจำไว้: `time.Sleep(N)` ที่ใช้แทน "รอจนกว่า goroutine จะเสร็จ" คือการเดาที่ในที่สุดจะผิดภายใต้ load จริงหรือ disk ที่ช้า ใช้ `sync.WaitGroup`, done channel, หรือ `errgroup.Group` แทน — ดู **[Goroutines](/go/th/concurrency/goroutines/)** และ **[The sync package](/go/th/concurrency/sync-primitives/)**
+</Callout>
+
+export const quizWorkedReview2 = [
+  {
+    q: "Three separate runs of the buggy program reported '2 of 5', '3 of 5', and '3 of 5' files processed. What does this variation, by itself, tell you about the bug?",
+    options: [
+      "Nothing — the program has a compile error that only sometimes triggers",
+      "At least one bug depends on goroutine scheduling timing rather than being a fixed, deterministic outcome",
+      "The files themselves are corrupted",
+      "os.ReadFile is nondeterministic by design"
+    ],
+    answer: 1,
+    explain: "bug ที่ทำให้อาการเปลี่ยนไปในแต่ละครั้งที่รัน binary เดียวกันด้วย input เดียวกัน คือ bug ที่ขึ้นกับ timing — ในที่นี้คือ Sleep 150ms ตายตัวที่แข่งกับการทำงานจริงของ goroutine ซึ่งไม่มี latency คงที่โดยธรรมชาติ"
+  },
+  {
+    q: "After ProcessAll returns, `runtime.NumGoroutine()` shows 2 more goroutines running than before the call. What are those goroutines doing?",
+    options: [
+      "They already finished and are being garbage collected",
+      "They are blocked forever inside `for p := range jobs`, because jobs is never closed",
+      "They are retrying failed file reads",
+      "They are duplicates created by the race detector"
+    ],
+    answer: 1,
+    explain: "range บน channel จะจบก็ต่อเมื่อ channel ถูกปิดเท่านั้น เนื่องจาก ProcessAll ไม่เคยเรียก close(jobs) loop range ของแต่ละ worker จึง block ตลอดไป รอค่าที่จะไม่มีวันมาถึง — goroutine leak"
+  },
+  {
+    q: "Why does `go run` on the buggy version typically complete without crashing, even though `results = append(results, r)` is a genuine data race?",
+    options: [
+      "It is not actually a race — the compiler would reject it if it were",
+      "The race detector is always on by default in `go run`",
+      "Without the `-race` flag, Go does not instrument memory accesses to detect concurrent access — the race exists in the program regardless of whether that specific run happens to crash or corrupt visibly",
+      "Maps and slices in Go are always safe for concurrent access"
+    ],
+    answer: 2,
+    explain: "race detector ทำงานเฉพาะตอนมี -race เท่านั้น ถ้าไม่มี race อาจรันไปนานโดยไม่มีอาการที่เห็นได้จากภายนอกเลย — การไม่มี crash ที่เห็นได้ไม่ใช่หลักฐานว่าโค้ดถูกต้อง เป็นแค่หลักฐานว่า run ครั้งนั้นบังเอิญไม่เจอ interleaving ที่แย่"
+  },
+  {
+    q: "The fixed version uses a `resultsCh` channel plus a single collector goroutine (`for r := range resultsCh { results = append(...) }`) instead of a mutex around the shared slice. Why does this avoid the race without any explicit lock?",
+    options: [
+      "Channels are just mutexes with a different name",
+      "Only one goroutine (the collector) ever touches `results`, so there is no concurrent access to synchronize — the channel serializes the values into that single goroutine",
+      "resultsCh automatically deduplicates concurrent writes",
+      "It doesn't avoid the race — the fixed version still needs a mutex"
+    ],
+    answer: 1,
+    explain: "race ในเวอร์ชันที่มี bug มาจากหลาย worker goroutine เขียนลง slice เดียวกันพร้อมกัน การส่งทุก result ผ่าน channel ไปยัง collector goroutine ตัวเดียวที่กำหนดไว้ แปลว่า results ถูกแตะโดย goroutine ตัวนั้นตัวเดียวเท่านั้น — 'อย่าสื่อสารด้วยการแชร์ memory จงแชร์ memory ด้วยการสื่อสาร' กำจัด race ได้โดยโครงสร้างเลย"
+  }
+];
+
+<Quiz client:visible id="reading-go/worked-review-2" questions={quizWorkedReview2} />
+
+<ProgressTracker client:visible id="reading-go/worked-review-2" />

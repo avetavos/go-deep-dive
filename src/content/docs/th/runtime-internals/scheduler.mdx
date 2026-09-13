@@ -1,0 +1,362 @@
+---
+title: Scheduler
+description: 'Local และ global run queue, work stealing, netpoller, syscall hand-off, sysmon, async preemption, GOMAXPROCS, schedtrace และการโต stack ของ goroutine ด้วยวิธี copy'
+sidebar:
+  order: 3
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## จุดที่บทนี้เริ่มต่อ
+
+บท [Goroutines](/go/th/concurrency/goroutines/) แนะนำ GMP model (Goroutine, Machine, Processor) ไปแล้ว รวมถึง work stealing, ความต่างระหว่าง netpoller กับ syscall, async preemption ตั้งแต่ Go 1.14, `GOMAXPROCS` ที่รับรู้ container ตั้งแต่ Go 1.25, และตัวอย่าง `GODEBUG=schedtrace=1000` เบื้องต้น บทนี้จะไม่พูดซ้ำ — จะไปที่ส่วนที่บทนั้นไม่ได้พูด: goroutine ที่พร้อมรันจริง ๆ ไปต่อคิวที่ไหน, thread `sysmon` ที่แทบมองไม่เห็นทำอะไรบ้าง, วิธีอ่าน `schedtrace` แบบเต็มบรรทัดทีละ field, `runtime.Gosched`, และ stack ของ goroutine โตขึ้นได้อย่างไรจริง ๆ
+
+## Run queue สองชั้น ไม่ใช่ชั้นเดียว
+
+P แต่ละตัว (processor, scheduling context ที่แนะนำในบท Goroutines) มี **local run queue** ของตัวเอง: ring buffer ขนาดคงที่เก็บ goroutine ที่พร้อมรันได้สูงสุด **256** ตัว (`runq [256]guintptr` ใน runtime source, `runtime/runtime2.go`) P แต่ละตัวยังมี slot พิเศษอีกหนึ่งช่องคือ `runnext` สำหรับ fast path เฉพาะกรณี: เมื่อ goroutine ที่กำลังรันทำให้ goroutine อีกตัวพร้อมรัน (ปกติคือ send บน channel ที่ goroutine นั้นกำลัง receive อยู่) goroutine ที่เพิ่งพร้อมจะเข้า `runnext` และถูก*ลองก่อน*เลย มาก่อนทั้ง local queue — นี่คือสิ่งที่ทำให้การส่งต่องานแบบ producer/consumer มี latency ต่ำ แทนที่จะต้องรอต่อท้าย goroutine 256 ตัวที่เข้าคิวอยู่แล้ว
+
+นอกจาก local queue แล้ว ยังมี **global run queue** เพียงหนึ่งเดียว อยู่บน scheduler struct ที่ share กัน (`sched.runq` ใน `runtime/runtime2.go`) implement เป็น linked list ที่ไม่จำกัดขนาด แทนที่จะเป็น array ตายตัว goroutine จะไปอยู่ที่นั่นได้ในสามสถานการณ์: local queue เต็มแล้ว overflow เข้าไป, P กำลังถูกปลดระวาง (งานของมันต้องไปอยู่ที่ไหนสักที่), หรือ runtime เองสร้าง goroutine ขึ้นนอก context ของ P ตัวใดตัวหนึ่งโดยเฉพาะ P ทุกตัวจะเช็ก global queue เป็นระยะ ๆ — ไม่ใช่ทุกครั้งที่ตัดสินใจ schedule เพราะนั่นจะสร้าง contention บน lock ที่ M ทุกตัวต้อง take — โดยเฉพาะเพื่อไม่ให้ goroutine ที่นั่งอยู่ใน global queue อดตายอยู่หลังกระแสงาน local ที่ไม่มีที่สิ้นสุด
+
+export const runQueueDiagram = `flowchart TB
+  subgraph Global["Global run queue (unbounded linked list, sched.runq)"]
+    GQ["overflow from local queues / retired P's work"]
+  end
+  subgraph P1["P1"]
+    RN1["runnext (1 slot, fast path)"]
+    LQ1["local run queue (256 slots)"]
+  end
+  subgraph P2["P2"]
+    RN2["runnext"]
+    LQ2["local run queue (256 slots)"]
+  end
+  GQ -.."checked periodically, not every tick".-> P1
+  GQ -.-> P2
+  LQ1 -."P1 idle: steals half of P2's local queue".-> LQ2`;
+
+<Mermaid code={runQueueDiagram} title="สองชั้น: local queue ต่อ P (256 slot บวกอีกหนึ่ง fast-path slot) และ global overflow queue เดียว" />
+
+## Work stealing แบบละเอียด
+
+บท Goroutines พูดถึงแนวคิดระดับสูงไปแล้ว — P ที่ว่างจะขโมยงานจาก P ที่ยุ่งแทนที่จะนั่งว่างเปล่า กลไกจริง (`runqsteal` ใน `runtime/proc.go`) จะขโมย**ครึ่งหนึ่ง**ของ local run queue ของ P เหยื่อเสมอในการดำเนินการเดียว ไม่ใช่ทีละตัว: นี่ช่วย amortize ต้นทุนของการขโมย (ซึ่งต้อง synchronize กับ P เหยื่อชั่วครู่) ให้กระจายไปทั่วหลาย goroutine และมัน self-balance เองด้วย — P ยิ่งยุ่งมาก งานยิ่งหลุดออกไปมากในการขโมยครั้งถัดไป ถ้า local queue ของ P อื่นทุกตัวว่างเปล่าเหมือนกัน P ที่กำลังขโมยจะ fallback ไปเช็ก global run queue แล้วค่อยไป netpoller ก่อนจะยอมว่างในที่สุด
+
+## sysmon: background thread ของ scheduler
+
+นอกจาก M ที่รัน goroutine ของคุณแล้ว runtime ยังมี background thread เฉพาะอีกหนึ่งตัวคือ `sysmon` ที่ทำงานเป็นอิสระจาก P ใด ๆ — มันไม่ต้องมี P เพื่อทำงานของตัวเอง อ่าน doc comment ของมันเองใน `runtime/proc.go` (source ของ Go 1.26.5) sysmon มีไว้เพื่อ "can retake P's from syscalls, preempt long running G's, and poll the network if all P's are busy for long stretches" มีสามหน้าที่ที่ตามมาจากนั้น:
+
+1. **ดึง P ที่ติดอยู่ใน syscall กลับมา** นี่คือกลไกที่อยู่เบื้องหลังความต่างระหว่าง netpoller กับ syscall จากบท Goroutines: เมื่อ goroutine เรียก blocking syscall, M ของมันจะถือ P ไว้สักพัก แต่ถ้า syscall ใช้เวลานาน sysmon (หรือ scheduler เองในโอกาสถัดไป) จะส่ง P นั้นให้ M ตัวอื่นที่ว่างผ่าน `handoffp` เพื่อไม่ให้ P เสียเวลาไปกับ syscall ตัวเดียวที่ช้า
+2. **บังคับ async preemption** sysmon คือตัวที่สังเกตว่า goroutine ถือ P ของมันไว้ประมาณ 10ms โดยไม่ยอม yield แล้วส่ง signal preemption ตามที่บท Goroutines อธิบาย — มันคือตัวที่คอยดูนาฬิกาจริง ๆ
+3. **poll network เมื่อทุก P ยุ่งหมด** ปกติ P ที่ว่างจะ poll netpoller เอง แต่ถ้าไม่มี P ตัวไหนว่างเลย (ทุกตัวเต็มไปด้วยงาน CPU-bound) sysmon จะ poll แทนเป็นระยะ ๆ เพื่อไม่ให้ network event ต้องรอ P ว่างไม่มีกำหนด
+
+sysmon ตื่นด้วยการ sleep แบบสั้นและปรับได้ — ไม่กี่มิลลิวินาทีตอนโปรแกรม active แล้วค่อย ๆ ถอยไปทาง 10ms ตอน idle — แทนที่จะรันต่อเนื่อง เพื่อให้ overhead ของตัวมันเองยังต่ำอยู่
+
+## อ่านบรรทัด `GODEBUG=schedtrace` จริง
+
+บท Goroutines แสดง schedtrace หนึ่งบรรทัดผ่าน ๆ ไปแล้ว นี่คือบรรทัดที่จับได้จริงภายใต้ load จริง — 40 goroutine กำลังวนลูปคำนวณ arithmetic แบบแน่น, `GOMAXPROCS` ปล่อยค่า default ไว้ที่ 11 บนเครื่อง darwin/arm64 11-core, `GODEBUG=schedtrace=20`:
+
+```text
+SCHED 46ms: gomaxprocs=11 idleprocs=0 threads=12 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=0 [ 0 0 0 5 2 0 0 2 0 3 0 ] schedticks=[ 6 3 3 3 3 5 5 4 5 3 8 ]
+```
+
+ทีละ field:
+
+| Field | ความหมายในบรรทัดนี้ |
+|---|---|
+| `46ms` | มิลลิวินาทีตั้งแต่โปรแกรมเริ่มรัน |
+| `gomaxprocs=11` | จำนวน P — goroutine 11 ตัวรัน Go code พร้อมกันได้ |
+| `idleprocs=0` | ทุก P มีงานอยู่ตอนนี้ — ไม่มีตัวไหนว่าง ตรงกับที่ควรเป็นเมื่อมี 40 goroutine แบบ CPU-bound |
+| `threads=12` | M (OS thread) ที่มีอยู่ตอนนี้ — หนึ่งตัวต่อ P บวกอีกสองสามตัวสำรองไว้สำหรับ syscall/capacity เสริม |
+| `spinningthreads=0` | ไม่มี M ตัวไหนกำลัง spin (ตามหางานอยู่แทนที่จะรันหรือ park) — สมเหตุสมผลเมื่อทุก P มีงานอยู่แล้ว |
+| `needspinning=1` | scheduler flag ไว้ว่าอาจต้องการ M แบบ spinning เร็ว ๆ นี้ |
+| `idlethreads=0` | ไม่มี M ตัวไหน park รองานอยู่ |
+| `runqueue=0` | global run queue ว่างเปล่า — ภายใต้ workload นี้ goroutine ทุกตัวพอดีกับ local queue ไม่ต้องใช้ overflow queue เลย |
+| `[ 0 0 0 5 2 0 0 2 0 3 0 ]` | ความยาว local run queue ของแต่ละ P หนึ่งตัวเลขต่อ P ตามลำดับ P — สาม P ที่นี่ (index 3, 4, 9) มี goroutine ต่อคิวใน local หลายตัว ที่เหลือมี 0 เพราะ goroutine ที่กำลังรันอยู่ตัวเดียวคืองานทั้งหมดที่ถูก assign ให้ |
+| `schedticks=[ 6 3 3 3 3 5 5 4 5 3 8 ]` | จำนวน scheduling event ที่ P แต่ละตัวประมวลผลไปแล้ว — proxy คร่าว ๆ บอกว่า P นั้นมี churn ของการ schedule มากแค่ไหน |
+
+ใช้ `schedtrace` เมื่อ goroutine ดูเหมือนค้าง และคุณต้องรู้ว่า scheduler เองกำลังขาดแคลนหรือไม่ (ทุก P ยุ่ง, global queue ค้าง) เทียบกับ bug อยู่ใน logic ของโปรแกรมคุณเอง — สองอย่างนี้ดูเหมือนกันจากภายนอก (เหมือนไม่มีอะไรเกิดขึ้น) แต่ต้องแก้คนละแบบเลย
+
+## `runtime.Gosched`
+
+`runtime.Gosched()` สละตาของ goroutine ผู้เรียกบน P ปัจจุบันโดยสมัครใจ ให้ goroutine ที่พร้อมรันตัวอื่นได้รัน โดยไม่ block หรือ park goroutine ผู้เรียก — มันกลับเข้า run queue ทันทีและจะรันต่อเมื่อ scheduler วนกลับมาถึงมัน มันคือ cooperative yield ตรงข้ามกับ async preemption แบบ*ไม่สมัครใจ*จากบท Goroutines (ที่ runtime บังคับกับ goroutine ที่ไม่ยอม yield เอง)
+
+`Gosched` หายากในโค้ดจริง — แทบทุกเหตุผลที่อยากใช้มัน (รอ goroutine อื่น, รอให้ I/O เสร็จ) มี primitive ที่ดีกว่า (channel, `WaitGroup`, `context`) การใช้งานที่ชัดที่สุดคือตัวอย่างแบบด้านล่างนี้พอดี: บังคับให้เกิด interleaving ที่คาดเดาได้ระหว่าง goroutine เมื่อคุณต้องการสังเกต scheduling จริง ๆ หรือ loop ที่แน่นและไม่ allocate เลยซึ่งไม่เคยเรียกอะไรที่จะให้ scheduler เข้ามาแทรกได้เองตามธรรมชาติ
+
+export const goschedCode = `package main
+
+import (
+\t"fmt"
+\t"runtime"
+\t"sync"
+)
+
+func main() {
+\truntime.GOMAXPROCS(1) // one P: only one goroutine runs Go code at a time
+
+\tvar wg sync.WaitGroup
+\torder := make([]string, 0, 6)
+\tvar mu sync.Mutex
+
+\trecord := func(label string) {
+\t\tmu.Lock()
+\t\torder = append(order, label)
+\t\tmu.Unlock()
+\t}
+
+\twg.Add(2)
+\tgo func() {
+\t\tdefer wg.Done()
+\t\tfor i := 0; i < 3; i++ {
+\t\t\trecord(fmt.Sprintf("A%d", i))
+\t\t\truntime.Gosched() // voluntarily yield to let goroutine B run
+\t\t}
+\t}()
+\tgo func() {
+\t\tdefer wg.Done()
+\t\tfor i := 0; i < 3; i++ {
+\t\t\trecord(fmt.Sprintf("B%d", i))
+\t\t\truntime.Gosched()
+\t\t}
+\t}()
+\twg.Wait()
+\tfmt.Println(order)
+}`;
+
+<Playground code={goschedCode} />
+
+Output จริงบน Go 1.27, darwin/arm64, สี่ครั้งที่รันแยกกัน: `[B0 A0 B1 A1 B2 A2]` ทุกครั้ง ลำดับ interleaving ที่แน่นอนยังคงเป็นการตัดสินใจของ scheduler ไม่ใช่การรับประกันของภาษา — เครื่องอื่น, Go version อื่น หรือ `GOMAXPROCS` อื่นอาจสลับกันคนละแบบได้จริง หรือแม้แต่รัน loop ทั้งหมดของ goroutine หนึ่งก่อนอีกตัว — แต่ด้วย `GOMAXPROCS(1)` และ `Gosched()` หลังทุกก้าว ทั้งสอง goroutine ได้ตาของตัวเอง แทนที่จะเป็นแบบที่จะเกิดขึ้นถ้าไม่เคย yield เลยคือตัวหนึ่งรันจน loop จบก่อนอีกตัวจะเริ่ม
+
+## GOMAXPROCS ในหนึ่งประโยค พร้อมชี้ไปที่แหล่งข้อมูลจริง
+
+บทนี้จะไม่ derive เรื่อง `GOMAXPROCS` เทียบกับ `NumCPU`, default ที่รับรู้ cgroup ตั้งแต่ Go 1.25, หรือ floor "ไม่ต่ำกว่า 2" ใหม่ — บท [Goroutines](/go/th/concurrency/goroutines/) ครอบคลุมทั้งสามเรื่องลึกอยู่แล้ว และไม่มีอะไรในนี้เปลี่ยนมัน สิ่งเดียวที่ควรพูดให้ชัดเพิ่มเติม: `GOMAXPROCS` ตั้งค่า*จำนวน P* และทุกอย่างในบทนี้ (local queue, `runnext`, work stealing, `runqueue` ใน schedtrace line) มีอยู่ต่อ P — ดังนั้น container CPU limit ที่ลด `GOMAXPROCS` จะลดจำนวน local run queue และ M ที่รัน Go code จริง ๆ โดยตรง ไม่ใช่แค่ "ขีดจำกัด concurrency" ที่เป็นนามธรรม
+
+## Stack ของ goroutine โตด้วยวิธี copy
+
+goroutine ใหม่เริ่มด้วย stack ขนาด **2048 byte** พอดี (`stackMin` ใน `runtime/stack.go`, source ของ Go 1.26.5) — เล็กพอที่จะสร้างมันได้ถูก และเล็กพอที่จะไม่พอสำหรับ call chain ที่ลึก เมื่อการเรียก function จะทำให้ stack ปัจจุบัน overflow, runtime จะไม่ขยายมันในที่เดิม (อาจมี stack ของ goroutine อื่นถูกจัดสรรอยู่ติดกันใน memory) — มัน**จัดสรร stack segment ใหม่ที่ใหญ่กว่า, copy stack เก่าทุก byte ลงไป, แล้วอัปเดต pointer ทุกตัวบน stack ที่ชี้เข้าไปในของเก่า** (เหตุผลที่ stack ของ goroutine ต่างจาก thread ของ C ตรงที่มันย้ายที่ได้อย่างปลอดภัย: Go compiler track ว่า stack slot ไหนถือ pointer อยู่) นโยบายการโตเป็นการ double ตรง ๆ (`newsize := oldsize * 2` ใน `runtime/stack.go`) กลยุทธ์ double เดียวกับที่ใช้ที่อื่นใน runtime เพราะมันทำให้ต้นทุน*แบบ amortized*ของการโตซ้ำ ๆ ต่ำ ภายหลัง ถ้า stack usage ของ goroutine ลดลงเหลือต่ำกว่าหนึ่งในสี่ของขนาดปัจจุบัน (เช็กตอน garbage collector scan stack) runtime จะหดมันลงครึ่งหนึ่ง — stack ของ goroutine คืน memory กลับได้ ไม่ใช่แค่เอาไปอย่างเดียว
+
+export const stackGrowthCode = `package main
+
+import (
+\t"fmt"
+\t"unsafe"
+)
+
+const maxDepth = 20000
+
+var addrs [maxDepth]uintptr
+
+// recurse records the address of a local array at every recursion depth.
+// Most consecutive depths sit a small, steady distance apart on the same
+// stack segment; a handful of large jumps mark the moments the runtime
+// copied the whole stack to a new, larger block.
+func recurse(depth int) {
+\tvar local [128]byte
+\taddrs[depth] = uintptr(unsafe.Pointer(&local))
+\tif depth+1 < maxDepth {
+\t\trecurse(depth + 1)
+\t}
+}
+
+func main() {
+\trecurse(0)
+
+\tjumps := 0
+\tfor i := 1; i < maxDepth; i++ {
+\t\tdiff := int64(addrs[i-1]) - int64(addrs[i])
+\t\tif diff < 0 {
+\t\t\tdiff = -diff
+\t\t}
+\t\tif diff > 100_000 { // far bigger than one frame's ~150 bytes
+\t\t\tjumps++
+\t\t\tif jumps <= 6 {
+\t\t\t\tfmt.Printf("stack copy near depth %d: jumped %d bytes\\n", i, diff)
+\t\t\t}
+\t\t}
+\t}
+\tfmt.Println("total large jumps (stack copies) detected:", jumps)
+}`;
+
+<Playground code={stackGrowthCode} />
+
+Output จริงบน Go 1.27, darwin/arm64:
+
+```text
+stack copy near depth 19: jumped 921440 bytes
+stack copy near depth 47: jumped 1269920 bytes
+stack copy near depth 103: jumped 1310560 bytes
+stack copy near depth 445: jumped 352096 bytes
+stack copy near depth 901: jumped 261984 bytes
+stack copy near depth 1811: jumped 524128 bytes
+total large jumps (stack copies) detected: 9
+```
+
+depth ที่เกิดการ copy คงที่ทุกครั้งที่รัน — 19, 47, 103, 445, 901, 1811 double ขึ้นเรื่อย ๆ คร่าว ๆ ตรงกับนโยบายการโตแบบ double จาก source ด้านบนพอดี ที่แสดงเป็นพฤติกรรมที่สังเกตได้จริง ระยะทาง byte ที่แน่นอนไม่คงที่: รันโปรแกรมนี้ซ้ำหลายครั้งติดกันได้ depth เดิมทั้งหกทุกครั้ง แต่ขนาด jump ต่างกัน (หกครั้งติดต่อกันบนเครื่องเดียวกันได้ค่าตั้งแต่ประมาณ 170,000 ถึง 1,540,000 byte สำหรับ jump แรก) — memory address ไม่คงที่ระหว่าง process launch แต่ละครั้งอยู่แล้ว (Go 1.26 ทำให้เรื่องนี้ตั้งใจมากขึ้นด้วยการเพิ่ม heap base address randomization บน 64-bit platform เป็นมาตรการเสริมความปลอดภัย) สิ่งที่ไม่เคยเปลี่ยนคือข้อเท็จจริงของการ jump เอง: ทุก event เหล่านั้นย้าย stack เดิมทั้งหมด รวมถึงข้อมูล call frame ของ `addrs` เองและ `local` array ของทุก call `recurse` ที่ค้างอยู่ ไปยัง memory block ใหม่ — มองไม่เห็นเลยจากมุมมองของโปรแกรม เพราะ compiler อัปเดต pointer ทุกตัวให้คุณแล้ว
+
+## Mental Model
+
+```text
+                    ┌─────────────── Global run queue (unbounded) ───────────────┐
+                    │            checked periodically by any idle P              │
+                    └──────────────────────────┬───────────────────────────────-┘
+                                                 │ overflow / retired-P work
+              ┌──────────────┐          ┌──────────────┐          ┌──────────────┐
+              │  P1          │          │  P2          │          │  P3 (idle)   │
+              │  runnext: G7 │          │  runnext: -  │          │  runnext: -  │
+              │  runq[256]:  │◄─steal───│  runq[256]:  │          │  runq[256]:  │
+              │  [G1 G2 G3]  │   half   │  [G4 G5]     │          │  [empty]     │
+              └──────┬───────┘          └──────┬───────┘          └──────┬───────┘
+                     │ M1 runs Gs               │ M2 runs Gs              │ steals from P1/P2,
+                     ▼                          ▼                         │ or checks netpoller,
+                   CPU 0                      CPU 1                       │ or checks global queue
+                                                                           ▼
+                                                                    (sysmon watches all
+                                                                     of this from outside)
+```
+
+## ข้อแลกเปลี่ยน
+
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| Local queue ต่อ P (256 slot + `runnext`) | fast path แบบไม่ต้อง lock สำหรับกรณีทั่วไป | มีขอบเขต — overflow ต้องไปอยู่ที่ไหนสักที่ (global queue) |
+| Global queue เดียว | overflow และ fairness backstop ที่เรียบง่าย | ต้องใช้ lock; เช็กเป็นระยะเพื่อลด contention |
+| ขโมยครึ่งหนึ่ง ไม่ใช่ทีละตัว | amortize ต้นทุนการขโมย; self-balance เอง | ตัวเลือกแรกของ P ที่ว่าง (ขโมย) ยังช้ากว่าเจองาน local |
+| `sysmon` เป็น thread แยกที่ไม่มี P | ทำงานได้แม้ทุก P จะเต็ม | เป็นอีกชิ้นส่วนที่ต้องคิดถึงตอนอ่าน trace |
+| Stack โตแบบ double | โตถูกแบบ amortized; copy น้อยครั้งตลอดชีวิต goroutine | แต่ละครั้งที่ copy คือ pause จริง แม้จะหายาก สัดส่วนตามขนาด stack |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"global run queue ถูกเช็กทุกครั้งที่ตัดสินใจ schedule"** — มันถูกเช็กเป็นระยะโดยเฉพาะเพื่อไม่ให้ต้อง take lock ตลอดเวลา การตัดสินใจ schedule ส่วนใหญ่แตะแค่ local queue ของ P ปัจจุบันเท่านั้น
+- **"work stealing ขโมยทีละ goroutine"** — `runqsteal` ขโมยครึ่งหนึ่งของ local queue ของเหยื่อในการดำเนินการเดียว
+- **"`sysmon` เป็นแค่ M อีกตัวที่รัน goroutine"** — มันทำงานเป็นอิสระจาก P ใด ๆ เลย เพื่อให้มันแทรกแซงได้แม้ทุก P จะยุ่งเต็มที่กำลังรันโค้ดของคุณ
+- **"address ของ stack goroutine คงที่ตลอดชีวิตมัน"** — มันย้ายทุกครั้งที่ stack โตหรือหด แค่การอัปเดต pointer อัตโนมัติของภาษาทำให้เรื่องนี้มองไม่เห็นจากโค้ดของคุณ
+- **"`Gosched` คือวิธีทำให้โค้ด concurrent deterministic"** — มันแค่ทำให้ interleaving แบบใดแบบหนึ่ง*มีโอกาสมากขึ้น*ภายใต้ `GOMAXPROCS` และ runtime version หนึ่ง ๆ มันไม่ใช่ตัวแทนของ synchronization จริงเมื่อความถูกต้องขึ้นอยู่กับลำดับจริง ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+bug ที่เกิดจาก scheduler มักไม่ดูเหมือน bug — มันดูเหมือนโค้ดที่ "บางทีก็ช้า" หรือ "บางทีก็เหมือนค้าง" ตรวจสิ่งเหล่านี้:
+
+- loop แบบ CPU-bound ที่แน่นและไม่มี channel operation, function call หรือ allocation เลย เคยรันยาวนานไหม? ก่อน Go 1.14 แบบนี้ทำให้ P อดตายได้ไม่มีกำหนด วันนี้ async preemption จำกัดไว้ที่ประมาณ 10ms แต่นั่นก็ยังคือ 10ms ที่ goroutine อื่นบน P นั้นไม่ได้รัน
+- `runtime.Gosched()` ถูกใช้แทนเงื่อนไขการรอที่แท้จริง (channel receive, `WaitGroup`) — "yield ใน loop จนกว่า goroutine อื่นน่าจะเสร็จแล้ว" — แทนที่จะ synchronize จริง ๆ หรือเปล่า?
+- โปรแกรม spawn goroutine มากกว่า `GOMAXPROCS` มาก ๆ ทำงาน CPU-bound ทั้งหมด แล้วคาดหวังให้รันขนานกัน? มีแค่ `GOMAXPROCS` ตัวเท่านั้นที่รัน Go code ได้ในเวลาใดเวลาหนึ่ง ที่เหลือต่อคิว ไม่ได้มี core เพิ่มมาจากไหน
+- array หรือ struct ขนาดใหญ่ถูก allocate ข้างใน function ที่ recursive ลึก โดยไม่คิดว่าต้นทุนของแต่ละ frame คูณกันไปตามความลึกของ recursion บังคับให้ stack โต (และ copy) มากกว่าเวอร์ชันที่ตื้นกว่าหรือแบบ iterative หรือเปล่า?
+
+<SpotTheBug code={`func computeAll(n int) []int {
+	results := make([]int, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			for {
+				// tight CPU-bound retry loop, no channel op, no sleep
+				if attempt(i, results) {
+					return
+				}
+			}
+		}(i)
+	}
+	time.Sleep(2 * time.Second) // "should be enough time"
+	return results
+}`}>
+มีปัญหาแบบ scheduler สองอย่างแยกกันอยู่ใน function เดียวนี้ อย่างแรก goroutine ถูก spawn `n` ตัวโดยไม่มีขอบเขตเลย — ถ้า `n` ใหญ่ จะมี goroutine มากกว่าที่ `GOMAXPROCS` จะรันพร้อมกันได้เยอะมาก ส่วนใหญ่แค่ต่อคิว (ใน local run queue แล้วก็ global) แทนที่จะคืบหน้าแบบขนานจริง สมมติฐานที่ซ่อนอยู่ของ function ว่า goroutine มากขึ้นแปลว่างานขนานมากขึ้นตามสัดส่วนนั้นผิดเมื่อเกิน `GOMAXPROCS` ตัว อย่างที่สอง retry loop ของแต่ละ goroutine ไม่มี channel operation, blocking call หรือ sleep เลย — goroutine ที่เจอ `attempt` คืน `false` เรื่อย ๆ จะ spin บน CPU ล้วน ๆ และแม้ async preemption (Go 1.14+) จะป้องกันไม่ให้มันอดตาย P ของมัน*ตลอดไป* มันก็ยังแย่งเวลาของ P นั้นเท่า ๆ กับ goroutine ที่ทำงานจริงมีประโยชน์อยู่ ตราบใดที่มันยัง spin
+
+`time.Sleep(2 * time.Second)` ยิ่งซ้ำเติมทั้งสองปัญหา: มันคือการเดา wall-clock ที่ใช้แทน signal การเสร็จจริง — ตรงกับ reasoning แบบ "น่าจะพอเวลาแล้ว" ที่บท Memory Model เตือนไว้เป๊ะ เพียงแต่ที่นี่มันล้มเหลวด้วยการทิ้งงานที่ยังไม่เสร็จไว้ (หรือเสียเวลา 2 วินาทีถ้าทุกอย่างเสร็จใน 50ms) แทนที่จะ race
+
+```go
+func computeAll(n int) []int {
+	results := make([]int, n)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.GOMAXPROCS(0)) // bound concurrency to available Ps
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			for !attempt(i, results) {
+				runtime.Gosched() // yield between attempts instead of spinning uncontested
+			}
+		}(i)
+	}
+	wg.Wait() // real completion signal, not a wall-clock guess
+	return results
+}
+```
+</SpotTheBug>
+
+> 💡 ตัวอย่างจากของจริง
+>
+> server ของ `net/http` รับแต่ละ connection ด้วย goroutine เฉพาะของมันเอง (`net/http.Server.Serve`, standard library) — ดีไซน์นี้ทำงานได้ที่ scale ใหญ่ก็เพราะทุกอย่างในบทนี้: การ read ที่ block บน keep-alive connection ที่ idle จะ park บน netpoller แทนที่จะตรึง P ไว้ ดังนั้น connection goroutine หลายหมื่นตัวที่ส่วนใหญ่ idle จึงเสีย attention ของ scheduler น้อยมาก ส่วนตัวที่มีงานจริงก็แข่งกันอย่างยุติธรรมเพื่อ CPU time เท่ากับ `GOMAXPROCS` ผ่านกลไก local/global queue และ work stealing เดียวกับที่อธิบายไว้ข้างบน
+
+export const quizScheduler = [
+  {
+    q: "ความจุคงที่ของ local run queue ของ P คือเท่าไหร่ และ `runnext` มีไว้ทำอะไร?",
+    options: [
+      "ไม่จำกัด; runnext เป็นสำเนาของ global queue",
+      "256 slot; runnext เป็น fast-path slot เดียวสำหรับ goroutine ที่ตัวปัจจุบันเพิ่งทำให้พร้อมรัน ถูกลองก่อนที่เหลือของ local queue",
+      "1024 slot; runnext เก็บ goroutine ที่กำลังรันอยู่",
+      "ไม่มีความจุคงที่ -- มันโตแบบ dynamic เหมือน slice"
+    ],
+    answer: 1,
+    explain: "runq เป็น array ขนาดคงที่ [256]guintptr ใน runtime source runnext เป็น slot พิเศษอีกช่องนอก array นั้น สงวนไว้เฉพาะสถานการณ์เดียว: goroutine ที่ตัวที่กำลังรันอยู่เพิ่งทำให้ runnable ได้ priority เพื่อให้การส่งต่องานแบบ producer/consumer ยังมี latency ต่ำ"
+  },
+  {
+    q: "ตาม doc comment ของมันเองใน runtime/proc.go, sysmon ทำอะไรได้ที่ M ธรรมดาที่รันบน P ไม่ได้?",
+    options: [
+      "รัน user goroutine เร็วกว่า M ปกติ",
+      "ดึง P ที่ติดอยู่ใน syscall นานกลับมา, บังคับ async preemption กับ G ที่รันนานเกินไป, และ poll network เมื่อทุก P เต็ม -- ทั้งหมดโดยไม่ต้องมี P ของตัวเอง",
+      "แก้ GOMAXPROCS โดยตรงโดยไม่ผ่าน runtime.GOMAXPROCS",
+      "compile Go code ตอน runtime"
+    ],
+    answer: 1,
+    explain: "sysmon ทำงานเป็นอิสระจาก P ใด ๆ โดยเฉพาะเพื่อให้มันทำงานได้แม้ในกรณีที่แย่ที่สุด -- ทุก P ยุ่งเต็มที่ -- ซึ่งเป็นตอนที่สามหน้าที่ที่มันระบุไว้ (ดึง P คืน, บังคับ preemption, poll network) สำคัญที่สุด"
+  },
+  {
+    q: "ในบรรทัด `GODEBUG=schedtrace=1000` การที่ `runqueue=N` ไม่เป็นศูนย์ (ต่างจากตัวเลขในวงเล็บต่อ P) บ่งบอกอะไร?",
+    options: [
+      "จำนวน goroutine ทั้งหมดในโปรแกรม",
+      "goroutine N ตัวอยู่ใน global run queue เดียว ไม่ได้อยู่ใน local queue ของ P ตัวไหน",
+      "goroutine N ตัว crash แล้วกำลังถูกเก็บกวาด",
+      "N คือจำนวน M ที่ block อยู่ใน syscall ตอนนี้"
+    ],
+    answer: 1,
+    explain: "runqueue รายงานความยาวของ global run queue เดียว (sched.runq) ส่วน list ในวงเล็บที่ตามมาคือความยาว local queue ต่อ P แยกกัน -- ตัวเลขสองตัวนี้ตอบคำถามคนละข้อ"
+  },
+  {
+    q: "runtime.Gosched() ทำอะไรกับ goroutine ผู้เรียกจริง ๆ?",
+    options: [
+      "block goroutine จนกว่าอีกตัวจะเสร็จ",
+      "terminate goroutine ก่อนเวลา",
+      "สละ P โดยสมัครใจเพื่อให้ goroutine อื่นที่พร้อมรันได้รัน แล้ว goroutine ผู้เรียกกลับเข้า run queue แล้วรันต่อทีหลัง -- ไม่ block หรือ park",
+      "เพิ่ม GOMAXPROCS ขึ้นหนึ่งชั่วคราว"
+    ],
+    answer: 2,
+    explain: "Gosched คือ cooperative yield: goroutine ยังคง runnable อยู่ตลอดและแค่สละตาปัจจุบันของตัวเอง ต่างจาก channel receive หรือ Mutex.Lock ที่ park goroutine ได้จริงจนกว่าจะมีอะไรปลุกมัน"
+  },
+  {
+    q: "```go\nconst maxDepth = 20000\nvar addrs [maxDepth]uintptr\n\nfunc recurse(depth int) {\n    var local [128]byte\n    addrs[depth] = uintptr(unsafe.Pointer(&local))\n    if depth+1 < maxDepth {\n        recurse(depth + 1)\n    }\n}\n```\nทำไม `addrs[i]` บางชุดที่ติดกันถึงต่างกันมาก (หลายแสน byte) แทนที่จะเป็นก้าวเล็ก ๆ คงที่?",
+    options: [
+      "การแปลง unsafe.Pointer ถูกออกแบบให้ non-deterministic",
+      "Go garbage collector ย้าย stack variable แบบสุ่ม",
+      "stack ของ goroutine ถูกโตด้วยการ copy ไป memory block ใหม่ที่ใหญ่กว่า ณ จุดนั้น ทำให้ address ของ local variable เดิมทุกตัวเปลี่ยนพร้อมกัน",
+      "compiler เรียงลำดับ recursive call ใหม่"
+    ],
+    answer: 2,
+    explain: "แต่ละ event การโต stack จัดสรร segment ใหม่ (double ขนาดเดิม) และ copy stack เก่าทั้งหมดลงไป พร้อมอัปเดต pointer ทุกตัว event เดียวนั้นย้าย local variable ทุกตัวที่อยู่บน stack แล้วพร้อมกัน ซึ่งแสดงออกมาเป๊ะ ๆ เป็น jump ที่ใหญ่ผิดปกติระหว่างสอง address ที่ปกติจะอยู่ใกล้กัน"
+  },
+  {
+    q: "โปรแกรม spawn goroutine แบบ CPU-bound 500 ตัวบนเครื่องที่ GOMAXPROCS=8 และไม่มี synchronization อื่นเลย เกิดอะไรขึ้นจริง?",
+    options: [
+      "ทั้ง 500 ตัวรันขนานจริงเพราะ Go goroutine concurrent เสมอ",
+      "โปรแกรม deadlock เพราะ goroutine มากกว่า P",
+      "มีอย่างมาก 8 goroutine ที่ execute Go code ได้ในเวลาใดเวลาหนึ่ง ที่เหลือรอใน local และ global run queue แล้วถูก schedule เข้ามาเมื่อ P ว่างลง",
+      "Go เพิ่ม GOMAXPROCS เป็น 500 ให้อัตโนมัติเพื่อรองรับ"
+    ],
+    answer: 2,
+    explain: "GOMAXPROCS จำกัดจำนวน goroutine ที่ execute Go code ได้พร้อมกัน ไม่ว่าจะมีอยู่กี่ตัว goroutine อีก 492 ตัวที่เหลือถูกต้องสมบูรณ์และจะได้รันในที่สุด แต่มีแค่ 8 ตัวที่รันได้ในเวลาใดเวลาหนึ่ง การสร้างเพิ่มไม่ได้สร้าง parallelism เพิ่มเกินขีดจำกัดนั้น"
+  }
+];
+
+<Quiz client:visible id="runtime-internals/scheduler" questions={quizScheduler} />
+
+<ProgressTracker client:visible id="runtime-internals/scheduler" />

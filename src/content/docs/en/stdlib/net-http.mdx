@@ -1,0 +1,599 @@
+---
+title: net/http
+description: 'Handlers, ServeMux routing, http.Server and http.Client timeouts, middleware, graceful shutdown, and httptest — the stdlib package most AI-generated Go is made of.'
+sidebar:
+  order: 6
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## The handler signature: ResponseWriter and *Request
+
+Every HTTP handler in Go has the same shape:
+
+```go
+func(w http.ResponseWriter, r *http.Request)
+```
+
+`w` comes first by convention, mirroring the rest of the standard library — `fmt.Fprintln(w, ...)`, `io.Copy(dst, src)`, `json.NewEncoder(w)` all put the thing being written to before the thing being read from or the data itself. There is no compiler rule enforcing the order; it is a readability convention `net/http` established and every framework built on top of it follows.
+
+The two parameter types are different in a way that matters:
+
+- **`http.ResponseWriter` is an interface** (`Header() Header`, `Write([]byte) (int, error)`, `WriteHeader(int)`). The concrete type behind it differs by context: a real `net.Conn`-backed writer in production, `*httptest.ResponseRecorder` in a test. Some concrete types implement extra optional interfaces — `http.Flusher`, `http.Hijacker` — that a handler can type-assert for when it needs them (covered in Type Assertions).
+- **`*Request` is a pointer to a concrete struct.** A `Request` carries a body (`io.ReadCloser`), a context, and other fields a handler should never accidentally copy — copying a `Request` by value would duplicate a struct that is meant to represent one single incoming request, while sharing (or worse, silently forking) the body reader underneath it. There is exactly one `*Request` per call, and the pointer keeps it that way.
+
+## HandleFunc, NewServeMux, and the default mux
+
+`http.HandleFunc(pattern, handler)` is a package-level function. It registers the handler on `http.DefaultServeMux`, a single global `*ServeMux` variable that every call to `http.HandleFunc` anywhere in the program — your code, and any imported package's `init()` — shares.
+
+```go
+import _ "net/http/pprof" // registers /debug/pprof/* on DefaultServeMux as a side effect
+
+func main() {
+	http.HandleFunc("/hello", helloHandler) // now sharing a mux with pprof
+	http.ListenAndServe(":8080", nil)       // nil Handler means "use DefaultServeMux"
+}
+```
+
+Importing `net/http/pprof` purely for its side effect (a blank `_` import, the same pattern covered in Packages & Imports) registers profiling endpoints under `/debug/pprof/` on that same global mux. If your production binary imports pprof anywhere in its dependency tree and also calls `http.ListenAndServe(addr, nil)`, those profiling endpoints — which can dump goroutine stacks and heap contents — are reachable on the public port. This is a real, recurring incident category, not a hypothetical.
+
+`http.NewServeMux()` creates a private mux instead, scoped to whatever you pass it as a `Handler`. Prefer it in any program with more than a handful of routes, and always in library code — a library that calls `http.HandleFunc` pollutes every program that imports it.
+
+## Routing since Go 1.22
+
+As of Go 1.22, `ServeMux` patterns can include an HTTP method and wildcard path segments:
+
+```go
+mux := http.NewServeMux()
+mux.HandleFunc("GET /items/{id}", itemHandler)   // method + wildcard segment
+mux.HandleFunc("POST /items", createHandler)     // method, no wildcard
+mux.HandleFunc("GET /items/special", specialHandler) // more specific literal
+```
+
+Inside a matched handler, `r.PathValue("id")` returns the segment `{id}` captured from the URL. A trailing `...` wildcard (`/files/{path...}`) captures the rest of the path instead of one segment.
+
+**Precedence: more specific wins.** When two registered patterns could both match a request, `ServeMux` picks the more specific one — a literal segment beats a wildcard at the same position. Registering `GET /items/{id}` and `GET /items/special` and requesting each path in turn, verified locally:
+
+```text
+/items/special -> 200 literal special
+/items/42      -> 200 wildcard id= 42
+/items/        -> 200 subtree catch-all, path= /items/
+/items/a/b     -> 200 subtree catch-all, path= /items/a/b
+```
+
+`/items/special` matches the literal pattern, not the wildcard one, even though both could technically match; `/items/` (registered as its own pattern with a trailing slash) acts as a subtree catch-all for anything under it that no more specific pattern claims.
+
+**Trailing slash redirects.** If you register only `GET /items/` (a subtree pattern) and a client requests `/items` (no trailing slash), `ServeMux` automatically replies with a redirect to add the slash — verified locally:
+
+```text
+GET /items -> 307 /items/
+```
+
+**Ambiguous patterns are a registration-time panic, not a runtime routing decision.** Two patterns that would match exactly the same set of requests — for example `/items/{id}` and `/items/{name}` — cannot both be registered:
+
+```text
+panic: pattern "/items/{name}" (registered at ...) conflicts with pattern "/items/{id}" (registered at ...):
+/items/{name} matches the same requests as /items/{id}
+```
+
+(file:line noise trimmed; the message itself is unedited from a local run). This fails immediately when the program starts, not on the first conflicting request — one more reason to prefer `http.NewServeMux()` plus a startup smoke test over the implicit `DefaultServeMux`.
+
+## http.Server and its timeouts
+
+`http.ListenAndServe(addr, handler)` is a convenience wrapper around an `http.Server` with every field left at its zero value:
+
+```go
+http.ListenAndServe(":8080", mux) // ReadTimeout, WriteTimeout, IdleTimeout: all zero
+```
+
+Per the `http.Server` documentation, a zero `ReadTimeout`, `WriteTimeout`, or `IdleTimeout` means **no timeout at all** — a slow or malicious client can hold a connection open indefinitely. `ReadHeaderTimeout` has the same zero-means-none rule but additionally falls back to `ReadTimeout` when it is zero and `ReadTimeout` is set. Production code should construct the `Server` explicitly:
+
+```go
+srv := &http.Server{
+	Addr:              ":8080",
+	Handler:           mux,
+	ReadHeaderTimeout: 5 * time.Second, // caps time to read just the headers
+	ReadTimeout:       10 * time.Second,
+	WriteTimeout:      10 * time.Second,
+	IdleTimeout:       120 * time.Second, // keep-alive connections
+}
+srv.ListenAndServe()
+```
+
+`ReadHeaderTimeout` alone stops the most common slow-client attack (trickling headers one byte at a time) without limiting how long a legitimately slow request body upload is allowed to take — that is what `ReadTimeout` (whole request, including body) and per-handler deadlines via `r.Context()` are for.
+
+## Writing a response
+
+Three rules govern everything a handler writes to `w`:
+
+1. **Set headers before calling `WriteHeader` or `Write`.** `w.Header().Set(...)` mutates a map that is only read once — the moment the status line goes out. Any header set after that point is silently ignored.
+2. **`WriteHeader(code)` sends the status line and headers.** Calling it more than once, or calling it after `Write` has already sent an implicit `200 OK`, does not change what the client sees — it only prints a warning to the server's log (`http: superfluous response.WriteHeader call from ...`).
+3. **`http.Error(w, msg, code)` is the standard way to fail a request.** It sets `Content-Type: text/plain; charset=utf-8`, deletes any previously set `Content-Length`, writes the status code, and writes `msg` followed by a newline — all three steps in the right order, so you rarely need to do this by hand.
+
+```go
+if !ok {
+	http.Error(w, "item not found", http.StatusNotFound)
+	return
+}
+w.Header().Set("Content-Type", "application/json") // must come before Encode
+json.NewEncoder(w).Encode(it)                       // Encode's first Write implies WriteHeader(200)
+```
+
+`json.NewEncoder(w).Encode(v)` is the idiomatic JSON response pattern: it writes directly to `w` with no intermediate `[]byte`, and its first byte written triggers the implicit `200 OK` if you have not called `WriteHeader` yourself.
+
+## Reading a request body
+
+`json.NewDecoder(r.Body).Decode(&v)` is the mirror image on the way in — it decodes straight from the stream instead of buffering the whole body into memory with `io.ReadAll` first. Two safety details matter for any body a client controls:
+
+- **`http.MaxBytesReader(w, r.Body, n)` caps how many bytes a body may contain.** Wrap `r.Body` with it before decoding; a body over the limit makes `Decode` return an error whose text is exactly `http: request body too large` (verified locally) instead of letting an attacker stream gigabytes into your process.
+- **You do not close `r.Body` yourself.** Per the `net/http` documentation: *"For server requests, the Request Body is always non-nil... The Server will close the request body. The ServeHTTP Handler does not need to."* This is the one place in the whole package where the usual "you opened it, you close it" rule does not apply.
+
+```go
+r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // reject bodies over 1 MiB
+var in item
+if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	http.Error(w, err.Error(), http.StatusBadRequest)
+	return
+}
+```
+
+## The client side
+
+`http.Get`, `http.Post`, and friends at the package level use `http.DefaultClient`, whose zero value has `Timeout: 0` — **no timeout**, per the `http.Client` documentation ("A Timeout of zero means no timeout"). A hung server or a network partition on the other end can block that call forever. Always construct a client with a timeout:
+
+```go
+client := &http.Client{Timeout: 5 * time.Second}
+```
+
+Three more mistakes are common enough that `go vet` and the standard library documentation both call them out directly:
+
+- **`defer resp.Body.Close()` must come *after* the error check, never before.** `Client.Do`'s documentation is explicit: *"On error, any Response can be ignored"* — meaning `resp` can be `nil` when `err != nil`. Deferring `resp.Body.Close()` before checking `err` calls `.Body.Close()` through a nil pointer. `go vet`'s `httpresponse` analyzer catches this at build time:
+
+  ```text
+  main.go:12:8: using resp before checking for errors
+  ```
+
+  Bypassing vet and running the same code anyway panics exactly as predicted:
+
+  ```text
+  panic: runtime error: invalid memory address or nil pointer dereference
+  ```
+
+  The fix is always the same shape:
+
+  ```go
+  resp, err := client.Get(url)
+  if err != nil {
+  	return err
+  }
+  defer resp.Body.Close() // resp is guaranteed non-nil here
+  ```
+
+- **`Do` does not check the status code for you.** Per the documentation: *"A non-2xx status code doesn't cause an error."* A `404` or `500` response is a perfectly successful `Do` call with `err == nil` — you must check `resp.StatusCode` yourself before trusting the body.
+- **`io.ReadAll(resp.Body)` has no size limit.** A malicious or misbehaving server can stream an unbounded response and exhaust memory; wrap the body in `io.LimitReader(resp.Body, n)` first when the response size is not already trusted.
+
+`http.NewRequestWithContext(ctx, method, url, body)` is the constructor to reach for whenever a request should be cancellable — it ties the request's lifetime to a `context.Context` instead of only the client's blanket `Timeout`, so a per-call deadline or a caller's own cancellation propagates through.
+
+## Middleware
+
+Middleware in `net/http` is nothing more than a function that takes a `Handler` and returns a new `Handler` wrapping it:
+
+```go
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("--> %s %s\n", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r) // call through, then (optionally) act again after
+	})
+}
+```
+
+Because the shape `func(http.Handler) http.Handler` always takes and returns the same interface, middleware composes by simple function application: `loggingMiddleware(authMiddleware(mux))` runs logging first, then auth, then the mux — outermost wrapper runs first on the way in and last on the way out.
+
+The playground below wires a handler, a mux with 1.22-style routes, a middleware chain, and a client together — server and client run in the same process via `httptest.NewServer`, so no external network is needed:
+
+export const netHttpMainCode = `package main
+
+import (
+\t"bytes"
+\t"context"
+\t"encoding/json"
+\t"fmt"
+\t"io"
+\t"net/http"
+\t"net/http/httptest"
+\t"time"
+)
+
+type item struct {
+\tID   string \`json:"id"\`
+\tName string \`json:"name"\`
+}
+
+var items = map[string]item{"1": {ID: "1", Name: "widget"}}
+
+// itemHandler reads the {id} path value that ServeMux extracted for us.
+func itemHandler(w http.ResponseWriter, r *http.Request) {
+\tid := r.PathValue("id")
+\tit, ok := items[id]
+\tif !ok {
+\t\thttp.Error(w, "item not found", http.StatusNotFound) // sets status + Content-Type + body
+\t\treturn
+\t}
+\tw.Header().Set("Content-Type", "application/json") // header before WriteHeader
+\tjson.NewEncoder(w).Encode(it)                       // Encode calls WriteHeader(200) implicitly
+}
+
+// createHandler decodes a JSON body with a size cap.
+func createHandler(w http.ResponseWriter, r *http.Request) {
+\tr.Body = http.MaxBytesReader(w, r.Body, 1<<20) // reject bodies over 1 MiB
+\tvar in item
+\tif err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+\t\thttp.Error(w, err.Error(), http.StatusBadRequest)
+\t\treturn
+\t}
+\titems[in.ID] = in
+\tw.WriteHeader(http.StatusCreated) // must come before any Write
+\tjson.NewEncoder(w).Encode(in)
+}
+
+// loggingMiddleware wraps a Handler and returns a Handler -- the chaining shape.
+func loggingMiddleware(next http.Handler) http.Handler {
+\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+\t\tfmt.Printf("--> %s %s\\n", r.Method, r.URL.Path)
+\t\tnext.ServeHTTP(w, r)
+\t})
+}
+
+func main() {
+\tmux := http.NewServeMux()
+\tmux.HandleFunc("GET /items/{id}", itemHandler)
+\tmux.HandleFunc("POST /items", createHandler)
+
+\t// httptest.NewServer starts a real listener on localhost so the client
+\t// below talks real HTTP, but everything stays inside this one process.
+\tts := httptest.NewServer(loggingMiddleware(mux))
+\tdefer ts.Close()
+
+\tclient := &http.Client{Timeout: 5 * time.Second} // never use the default client without one
+
+\tresp, err := client.Get(ts.URL + "/items/1")
+\tif err != nil {
+\t\tfmt.Println("GET error:", err)
+\t\treturn
+\t}
+\tdefer resp.Body.Close() // deferred AFTER the error check, not before
+\tbody, _ := io.ReadAll(resp.Body)
+\tfmt.Println("GET /items/1:", resp.StatusCode, string(body))
+
+\tresp2, err := client.Get(ts.URL + "/items/999")
+\tif err != nil {
+\t\tfmt.Println("GET error:", err)
+\t\treturn
+\t}
+\tdefer resp2.Body.Close()
+\t// Do never treats a 4xx/5xx as an error -- you must check StatusCode yourself.
+\tif resp2.StatusCode != http.StatusOK {
+\t\tbody2, _ := io.ReadAll(resp2.Body)
+\t\tfmt.Println("GET /items/999:", resp2.StatusCode, string(body2))
+\t}
+
+\tctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+\tdefer cancel()
+\tpayload, _ := json.Marshal(item{ID: "2", Name: "gadget"})
+\treq, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/items", bytes.NewReader(payload))
+\tif err != nil {
+\t\tfmt.Println("build request:", err)
+\t\treturn
+\t}
+\tresp3, err := client.Do(req)
+\tif err != nil {
+\t\tfmt.Println("POST error:", err)
+\t\treturn
+\t}
+\tdefer resp3.Body.Close()
+\tbody3, _ := io.ReadAll(resp3.Body)
+\tfmt.Println("POST /items:", resp3.StatusCode, string(body3))
+}`;
+
+<Playground code={netHttpMainCode} />
+
+Real output from this program on Go 1.27.0:
+
+```text
+--> GET /items/1
+GET /items/1: 200 {"id":"1","name":"widget"}
+
+--> GET /items/999
+GET /items/999: 404 item not found
+
+--> POST /items
+POST /items: 201 {"id":"2","name":"gadget"}
+
+```
+
+The blank line after each request is not a mistake: both `http.Error` and `json.NewEncoder.Encode` write their own trailing newline, and `fmt.Println` adds a second one on top of it.
+
+## Context cancellation and graceful shutdown
+
+Every incoming `*Request` carries a `context.Context` reachable through `r.Context()`. Per the documentation, that context "is canceled when the client's connection closes, the request is canceled (with HTTP/2), or when the ServeHTTP method returns." A handler that starts slow work should pass `r.Context()` down and check `ctx.Err()` (or select on `ctx.Done()`) periodically — otherwise the handler keeps running and consuming resources long after the client has given up and gone away.
+
+Shutting the whole server down cleanly needs the same idea at the process level: stop accepting new connections, but let in-flight handlers finish. `signal.NotifyContext` turns an OS signal into a `context.Context`, and `srv.Shutdown(ctx)` does the actual graceful stop:
+
+```go
+srv := &http.Server{Handler: mux}
+
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+
+go func() {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+}()
+
+<-ctx.Done() // blocks until SIGINT/SIGTERM
+stop()
+
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := srv.Shutdown(shutdownCtx); err != nil {
+	log.Println("forced shutdown:", err)
+}
+```
+
+`srv.Shutdown` closes the listener immediately, then waits (up to the deadline) for every in-flight handler to return on its own. `ListenAndServe` unblocks with exactly `http.ErrServerClosed` — the expected, non-error outcome of a deliberate shutdown, not a failure to log. A deterministic twin of this — an OS-assigned port and a timer instead of a real OS signal — verified locally:
+
+```text
+server shut down cleanly
+Serve returned ErrServerClosed: true
+```
+
+This snippet needs a real TCP listener and OS signals, so — like the concurrency module's graceful shutdown example — it does not run in this page's browser-based Playground.
+
+## Testing with httptest
+
+`httptest.NewRecorder()` implements `http.ResponseWriter` entirely in memory, so a handler can be exercised directly with no listener, no goroutine, and no network at all:
+
+export const netHttpTestCode = `package main
+
+import (
+\t"encoding/json"
+\t"fmt"
+\t"net/http"
+\t"net/http/httptest"
+)
+
+type item struct {
+\tID   string \`json:"id"\`
+\tName string \`json:"name"\`
+}
+
+var items = map[string]item{"1": {ID: "1", Name: "widget"}}
+
+func itemHandler(w http.ResponseWriter, r *http.Request) {
+\tid := r.PathValue("id")
+\tit, ok := items[id]
+\tif !ok {
+\t\thttp.Error(w, "item not found", http.StatusNotFound)
+\t\treturn
+\t}
+\tw.Header().Set("Content-Type", "application/json")
+\tjson.NewEncoder(w).Encode(it)
+}
+
+func main() {
+\tmux := http.NewServeMux()
+\tmux.HandleFunc("GET /items/{id}", itemHandler)
+
+\t// httptest.NewRequest + httptest.NewRecorder test the handler directly --
+\t// no listener, no goroutine, no network at all.
+\treq := httptest.NewRequest(http.MethodGet, "/items/1", nil)
+\trec := httptest.NewRecorder()
+\tmux.ServeHTTP(rec, req)
+
+\tfmt.Println("status:", rec.Code)
+\tfmt.Println("content-type:", rec.Header().Get("Content-Type"))
+\tfmt.Println("body:", rec.Body.String())
+
+\t// A request for a missing id exercises the error path the same way.
+\treq2 := httptest.NewRequest(http.MethodGet, "/items/999", nil)
+\trec2 := httptest.NewRecorder()
+\tmux.ServeHTTP(rec2, req2)
+\tfmt.Println("missing status:", rec2.Code, "body:", rec2.Body.String())
+}`;
+
+<Playground code={netHttpTestCode} />
+
+Real output from this program on Go 1.27.0:
+
+```text
+status: 200
+content-type: application/json
+body: {"id":"1","name":"widget"}
+
+missing status: 404 body: item not found
+
+```
+
+`httptest.NewServer` is the other half of the toolkit — it starts a real listener (used by the main playground above) for tests that need actual round-trip HTTP, such as exercising a client library or checking that headers survive a real socket. Reach for `NewRecorder` for a single handler in isolation, and `NewServer` when the client under test cannot be pointed at anything other than a real URL.
+
+## Request lifecycle
+
+export const netHttpLifecycleDiagram = `flowchart TD
+  C["Client"] -- "TCP connect + HTTP request" --> S["http.Server (ReadHeaderTimeout, ReadTimeout)"]
+  S -- "ServeHTTP(w, r)" --> MW["Middleware chain"]
+  MW -- "next.ServeHTTP(w, r)" --> H["Handler: r.PathValue, json.NewDecoder(r.Body)"]
+  H -- "Header().Set, then WriteHeader, then Write" --> R["status line + headers + body"]
+  R --> C
+  Ctx["r.Context()"] -. "cancelled if the client disconnects" .-> H`;
+
+<Mermaid code={netHttpLifecycleDiagram} title="One request's path from TCP connection to response" />
+
+## Mental Model
+
+```text
+http.Server{Addr, Handler, ReadTimeout, WriteTimeout, ...}
+  |
+  v
+DefaultServeMux (global, shared by every http.HandleFunc call)
+  or
+  *ServeMux (private, created with http.NewServeMux())
+  |
+  v
+middleware(middleware(handler))   -- outermost runs first in, last out
+  |
+  v
+func(w http.ResponseWriter, r *http.Request)
+  r.PathValue("id")        <- from the matched route pattern
+  r.Context()              <- cancelled if the client disconnects
+  json.NewDecoder(r.Body)  <- server closes r.Body for you
+  |
+  v
+w.Header().Set(...)  ->  w.WriteHeader(code)  ->  w.Write(body)
+  (must happen in this order -- headers are frozen at WriteHeader)
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| `http.DefaultServeMux` via `http.HandleFunc` | Zero setup, one line per route | Global mutable state shared with every imported package |
+| `http.NewServeMux()` | Isolated routing, safe in library code | One more variable to thread through your program |
+| 1.22 method + wildcard routing | No third-party router needed for most APIs | Ambiguous patterns panic at startup; no regex constraints on segments |
+| `http.Server` with explicit timeouts | Protects against slow-client and resource-exhaustion attacks | More fields to reason about than `ListenAndServe(addr, nil)` |
+| `httptest.NewRecorder` | Fast, in-memory handler tests | Does not exercise real TCP behavior (chunking, connection reuse) |
+
+## Common Misconceptions
+
+- **`ListenAndServe(addr, nil)` is a safe default** — every timeout field on the underlying `http.Server` is zero, meaning none of them are enforced; a slow or hostile client can hold a connection open forever.
+- **`resp.Body.Close()` is safe to defer immediately after `Do`/`Get`** — `resp` can be `nil` when `err != nil`; deferring the close before checking `err` panics with a nil pointer dereference, and `go vet`'s `httpresponse` analyzer flags exactly this pattern.
+- **A successful `Do` call means a successful request** — `Do` only returns an error for network/policy failures; a `404` or `500` is `err == nil` with a status code you must check yourself.
+- **Calling `WriteHeader` twice, or after `Write`, changes what the client sees** — it does not. The first byte written (or the first `WriteHeader` call) freezes the status and headers; anything after that only produces a `superfluous response.WriteHeader call` log line.
+- **You must close `r.Body` in a handler, symmetrically with closing `resp.Body` on the client** — the server does this for you; only the client side needs an explicit `Close`.
+
+> 💡 Real-world example
+>
+> **`net/http/pprof`**: importing it for its side effect registers `/debug/pprof/*` on `http.DefaultServeMux` — the exact mechanism described above for why the global mux is dangerous in a program that also calls `http.ListenAndServe(addr, nil)`.
+>
+> **`http.ErrServerClosed`**: returned by `Serve`/`ListenAndServe` after a call to `Server.Shutdown`, and treated as the non-error, expected outcome of a graceful shutdown rather than logged as a failure.
+
+<Callout title="Construct the Server and the Client explicitly">
+`http.ListenAndServe(addr, nil)` and a bare `http.Get(url)` both reach for a zero-value struct with every timeout disabled. Reserve them for throwaway scripts and local prototypes; anything that talks to the real network — inbound or outbound — should construct an `http.Server` with its timeout fields set, and an `http.Client` with a `Timeout`.
+</Callout>
+
+## Reading AI-generated code
+
+`net/http` code is some of the most common Go an AI assistant writes, and also some of the most reliably wrong on exactly the points above. Check for these before trusting a review:
+
+- Does every `http.Client` used for a real network call have a `Timeout` set, or is it the zero-value default client?
+- Is `defer resp.Body.Close()` placed *after* the `if err != nil` check, never before it?
+- Is `resp.StatusCode` checked after `Do`/`Get`, or does the code assume a nil error means success?
+- Does a handler call `w.Header().Set(...)` before the first `Write` or `WriteHeader`, never after?
+- Does the program call `http.HandleFunc` / `http.ListenAndServe(addr, nil)` while also importing a package (like `net/http/pprof`) that registers routes on the same global mux?
+- Does a goroutine spawned inside a handler carry `r.Context()` forward, or does it keep running (and consuming resources) after the client disconnects?
+
+<SpotTheBug code={`func createHandler(w http.ResponseWriter, r *http.Request) {
+	var in Item
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	body, _ := json.Marshal(in)
+	w.Write(body)
+	w.WriteHeader(http.StatusCreated)
+}`}>
+
+`w.Write(body)` sends the response body immediately, and since no status was set yet, Go implicitly sends `200 OK` as part of that first write. The `w.WriteHeader(http.StatusCreated)` on the next line is too late — the status line already went out. Verified locally: the client sees status `200`, never `201`, and the server logs
+
+```text
+http: superfluous response.WriteHeader call from main.createHandler (main.go:23)
+```
+
+Fix it by calling `WriteHeader` before the first `Write` (or before the encoder's first internal write):
+
+```go
+w.WriteHeader(http.StatusCreated)
+w.Write(body)
+```
+
+or, using the encoder directly, `w.WriteHeader(http.StatusCreated)` followed by `json.NewEncoder(w).Encode(in)`.
+
+</SpotTheBug>
+
+export const quizNetHttp = [
+  {
+    q: "Why is *http.Request a pointer while http.ResponseWriter is an interface?",
+    options: [
+      "Request is a concrete struct representing exactly one incoming request (copying it would risk duplicating its body reader); ResponseWriter varies by context (real connection vs. a test recorder) and needs different concrete implementations",
+      "Interfaces are always faster than pointers in Go, so ResponseWriter uses one for performance",
+      "Request must be a pointer because structs cannot be passed as function arguments in Go",
+      "There is no real difference -- either could be swapped for the other without changing behavior"
+    ],
+    answer: 0,
+    explain: "Request is one concrete type used everywhere, so a pointer avoids copying its body/context; ResponseWriter needs to be an interface precisely because its real implementation differs between production connections and httptest.ResponseRecorder in tests."
+  },
+  {
+    q: "```go\nimport _ \"net/http/pprof\"\n\nfunc main() {\n\thttp.HandleFunc(\"/hello\", helloHandler)\n\thttp.ListenAndServe(\":8080\", nil)\n}\n```\nWhat does this expose, and why?",
+    options: [
+      "Nothing extra -- the blank import only affects local tooling, not the running server",
+      "The /debug/pprof/* profiling endpoints, because pprof registers them on http.DefaultServeMux during init(), which ListenAndServe(addr, nil) also serves",
+      "A compile error, because http.HandleFunc and net/http/pprof cannot be used in the same program",
+      "Only /hello is served; pprof's routes require a separate ListenAndServe call"
+    ],
+    answer: 1,
+    explain: "net/http/pprof registers its handlers on the shared http.DefaultServeMux as an import side effect; ListenAndServe(addr, nil) serves that same global mux, so both /hello and every /debug/pprof/* route become publicly reachable."
+  },
+  {
+    q: "```go\nmux := http.NewServeMux()\nmux.HandleFunc(\"GET /items/{id}\", h1)\nmux.HandleFunc(\"GET /items/special\", h2)\n```\nWhich handler runs a GET request for `/items/special`?",
+    options: [
+      "h1, because wildcard patterns are matched first",
+      "h2, because a more specific literal pattern beats a wildcard at the same position",
+      "Neither -- registering both patterns is a startup panic",
+      "Both run, in registration order"
+    ],
+    answer: 1,
+    explain: "Verified locally: requesting /items/special returns h2's response (\"literal special\"), while /items/42 falls through to h1's wildcard handler -- ServeMux always prefers the more specific pattern."
+  },
+  {
+    q: "```go\nclient := &http.Client{}\nresp, err := client.Get(\"https://example.com/slow\")\n```\nWhat is wrong with this client, and what can happen as a result?",
+    options: [
+      "Nothing -- http.Client{} is already configured with a sensible default timeout",
+      "It has no Timeout set (the zero value means no timeout), so a slow or unresponsive server can block this call forever",
+      "client.Get always fails on HTTPS URLs without an explicit Transport",
+      "The client leaks a goroutine on every call regardless of the server's behavior"
+    ],
+    answer: 1,
+    explain: "http.Client's zero value has Timeout: 0, which per the documentation means no timeout at all -- always set an explicit Timeout for any client that talks to a real network."
+  },
+  {
+    q: "```go\nresp, err := client.Get(url)\ndefer resp.Body.Close()\nif err != nil {\n\treturn err\n}\n```\nWhat happens when this request fails to connect?",
+    options: [
+      "The function returns the error normally, and Close() is a harmless no-op on a nil Body",
+      "resp is nil when err != nil, so defer resp.Body.Close() panics with a nil pointer dereference before the error is ever returned",
+      "Go automatically reorders the defer to run after the nil check",
+      "This code fails to compile because defer cannot appear before an error check"
+    ],
+    answer: 1,
+    explain: "Client.Do's documentation states any Response can be nil when err != nil; deferring Body.Close() before the check dereferences a nil pointer -- verified locally, this panics with \"invalid memory address or nil pointer dereference\", and go vet's httpresponse analyzer flags it as \"using resp before checking for errors\"."
+  },
+  {
+    q: "```go\nresp, err := client.Get(url)\nif err != nil {\n\treturn err\n}\ndefer resp.Body.Close()\ndata, _ := io.ReadAll(resp.Body)\nprocessJSON(data)\n```\nWhat did this code forget to check, and why does it matter?",
+    options: [
+      "Nothing -- err == nil already guarantees a successful, well-formed JSON response",
+      "resp.StatusCode -- Do does not treat a 4xx/5xx response as an error, so processJSON may run on an error page's body instead of real data",
+      "It forgot to check len(data) before calling processJSON",
+      "It forgot to set a Content-Type header, which is required on the client side"
+    ],
+    answer: 1,
+    explain: "A non-2xx status code doesn't cause Do to return an error -- the documentation says so explicitly. Skipping the resp.StatusCode check means a 404 or 500 error page gets fed straight into processJSON as if it were valid data."
+  }
+];
+
+<Quiz client:visible id="stdlib/net-http" questions={quizNetHttp} />
+
+<ProgressTracker client:visible id="stdlib/net-http" />

@@ -1,0 +1,1023 @@
+---
+title: The AI bug catalog
+description: '24 bugs AI-generated Go code produces constantly — the wrong code, the real symptom, the fix, and which tool (if any) catches it.'
+sidebar:
+  order: 2
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+Every pattern below was written to look exactly like the Go an AI assistant actually produces, then compiled, run, and — where relevant — raced or vetted for real. The quoted panics, compiler errors, and tool output are copied verbatim from those runs, not reconstructed from memory. Click **Spot the bug** to think before you read the answer; each entry ends with **Caught by**, naming the one tool (`go vet`, `staticcheck`, `golangci-lint`, `-race`) that actually flags it — or stating plainly that nothing does.
+
+The 24 patterns are grouped the same way as the **[Review Checklist](/go/en/reading-go/review-checklist/)** that follows this lesson: errors, concurrency, resources, API contract, types, and tooling/style.
+
+<Playground code={typedNilCode} />
+
+export const typedNilCode = `package main
+
+import "fmt"
+
+type MyError struct{ msg string }
+
+func (e *MyError) Error() string { return e.msg }
+
+func doWork(fail bool) *MyError {
+\tif fail {
+\t\treturn &MyError{msg: "boom"}
+\t}
+\treturn nil
+}
+
+func run(fail bool) error {
+\tvar err *MyError = doWork(fail) // typed nil
+\treturn err                      // wrapped into a non-nil interface
+}
+
+func main() {
+\terr := run(false)
+\tif err != nil {
+\t\tfmt.Println("got error:", err)
+\t} else {
+\t\tfmt.Println("no error")
+\t}
+}`;
+
+This first pattern is the one worth running yourself before reading any further — the playground above prints `got error: <nil>`, not `no error`. Everything below follows the same rule: real code, real output, no exceptions.
+
+## Errors
+
+### 1. A typed nil wrapped in an `error` is not nil
+
+`doWork` returns a nil `*MyError`. `run` declares its return type as the `error` interface, so the nil pointer gets boxed into a two-word interface value: `(type=*MyError, data=nil)`. That value is not equal to the interface zero value — `err != nil` is true even though the pointer inside it is nil.
+
+**Symptom:** the playground above prints `got error: <nil>` instead of `no error`.
+
+**Fix:** return the interface type directly from the point where you know whether there is an error, so a "no error" path returns a literal `nil`, not a nil concrete pointer boxed into `error`:
+
+```go
+func run(fail bool) error {
+	if err := doWork(fail); err != nil {
+		return err
+	}
+	return nil // a real nil error, not a boxed nil pointer
+}
+```
+
+**Caught by:** `staticcheck`, via `golangci-lint`, flags the specific case where the return is statically provable never-nil:
+
+```text
+SA4023: this comparison is always true (staticcheck)
+```
+
+That message only fires when staticcheck can prove it; a version where `doWork`'s result flows through more indirection can slip past every tool in this list. Treat this as a rule to apply by eye, not one to rely on a linter for. See **[A nil pointer inside an interface is not nil](/go/en/methods-interfaces/interfaces/)**.
+
+<SpotTheBug code={`func validate(input string) *ValidationError {
+	if input == "" {
+		return &ValidationError{"empty input"}
+	}
+	return nil
+}
+
+func process(input string) error {
+	var err *ValidationError = validate(input)
+	return err
+}`}>
+
+Same bug, different names. `process(anything-non-empty)` returns a non-nil `error` even though `validate` returned a nil pointer — `err != nil` is true in every caller. Fix: `if err := validate(input); err != nil { return err }; return nil`.
+
+</SpotTheBug>
+
+### 2. `:=` inside an `if` shadows the outer `err`
+
+```go
+func mightFail() (int, error) {
+	return 0, errors.New("fail")
+}
+
+func process() error {
+	var err error
+	if v, err := mightFail(); err != nil { // := shadows outer err
+		fmt.Println("inner saw error, v =", v)
+	}
+	return err // outer err was never assigned — always nil
+}
+```
+
+**Symptom:** run it and `process()` prints `<nil>` even though `mightFail` always fails — verified output:
+
+```text
+inner saw error, v = 0
+process() returned: <nil>
+```
+
+**Fix:** assign to the outer `err` instead of redeclaring it — drop the `:=` for `err` alone by declaring `v` first, or restructure so there is only one `err` in scope:
+
+```go
+func process() error {
+	var err error
+	var v int
+	if v, err = mightFail(); err != nil {
+		fmt.Println("inner saw error, v =", v)
+	}
+	return err
+}
+```
+
+**Caught by:** nothing by default. `go vet` does not run the `shadow` analyzer, and it is not part of `golangci-lint`'s `standard` preset either. Enabled explicitly it does catch it:
+
+```text
+shadow: declaration of "err" shadows declaration at line 13 (govet)
+```
+
+Turn it on with `linters.settings.govet.enable: [shadow]` in `golangci-lint`'s config — it is not on by default because it also flags many harmless, intentional shadows. See **[Variables & Types](/go/en/basics/variables-types/)**.
+
+### 20. `errors.As` without `&` panics instead of failing quietly
+
+```go
+func validate() error {
+	return &ValidationError{Field: "email"}
+}
+
+func main() {
+	err := validate()
+	var ve *ValidationError // nil *ValidationError
+	if errors.As(err, ve) { // missing & — target must be a pointer to ve's type
+		fmt.Println("bad field:", ve.Field)
+	}
+}
+```
+
+**Symptom — real panic:**
+
+```text
+panic: errors: target must be a non-nil pointer
+```
+
+**Fix:** pass `&ve`, not `ve` — the target argument must itself be a pointer to the variable that will receive the match:
+
+```go
+var ve *ValidationError
+if errors.As(err, &ve) {
+	fmt.Println("bad field:", ve.Field)
+}
+```
+
+**Caught by:** `go vet`'s `errorsas` analyzer, before you ever run the program:
+
+```text
+errorsas: second argument to errors.As must be a non-nil pointer to either a type that implements error, or to any interface type (govet)
+```
+
+See **[Wrapping Errors](/go/en/errors-generics/wrapping/)**.
+
+### 21. `recover()` only works one level of call away from `defer`
+
+```go
+func handlePanic() {
+	if r := recover(); r != nil { // recover() not called directly by a deferred function
+		fmt.Println("recovered:", r)
+	}
+}
+
+func wrapper() {
+	handlePanic() // wrapper is deferred, but it calls handlePanic — a plain call
+}
+
+func risky() {
+	defer wrapper()
+	panic("boom")
+}
+```
+
+`defer wrapper()` makes `wrapper` the deferred function — but `wrapper` calls `handlePanic()` as an ordinary function call, and `recover()` inside `handlePanic` is therefore *not* "called directly by a deferred function" per the language spec. It returns `nil` and does nothing.
+
+**Symptom — real output, process crashes:**
+
+```text
+panic: boom
+
+goroutine 1 [running]:
+main.risky()
+```
+
+**Fix:** call `recover()` directly inside the function that is itself the argument to `defer` — do not route it through a helper:
+
+```go
+func risky() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("recovered:", r)
+		}
+	}()
+	panic("boom")
+}
+```
+
+**Caught by:** nothing. `go vet`, `staticcheck`, and `golangci-lint`'s standard set are all silent on this file. See **[Panic and Recover](/go/en/errors-generics/panic-recover/)**.
+
+### 24. `log.Fatal` in library code skips every caller's `defer`
+
+```go
+func loadConfig(path string) map[string]string {
+	if path == "" {
+		log.Fatal("config path is empty") // library code should never call log.Fatal
+	}
+	return map[string]string{"path": path}
+}
+
+func main() {
+	defer fmt.Println("cleanup: closing database connection") // must always run
+	cfg := loadConfig("")
+	fmt.Println(cfg)
+}
+```
+
+`log.Fatal` calls `os.Exit(1)` after logging — and `os.Exit` terminates the process immediately, running no deferred functions anywhere on the stack, in any goroutine.
+
+**Symptom — real output:**
+
+```text
+2026/09/13 16:49:05 config path is empty
+exit status 1
+```
+
+`"cleanup: closing database connection"` never prints — the deferred `main` cleanup silently never ran.
+
+**Fix:** a package that is not `main` should return an `error` and let the caller decide whether the failure is fatal:
+
+```go
+func loadConfig(path string) (map[string]string, error) {
+	if path == "" {
+		return nil, errors.New("config path is empty")
+	}
+	return map[string]string{"path": path}, nil
+}
+```
+
+**Caught by:** nothing by default. A linter such as `forbidigo` can be configured to forbid `log.Fatal`/`os.Exit` calls outside `main`, but that requires opting in with an explicit pattern — no default preset flags it. See **[Panic and Recover](/go/en/errors-generics/panic-recover/)**.
+
+## Concurrency
+
+### 10. A goroutine with no way to stop leaks forever
+
+```go
+func leaky() {
+	ch := make(chan int) // unbuffered, nobody ever sends
+	go func() {
+		<-ch // blocks forever — this goroutine can never exit
+	}()
+}
+
+func main() {
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		leaky()
+	}
+	time.Sleep(100 * time.Millisecond)
+	after := runtime.NumGoroutine()
+	fmt.Println("goroutines before:", before, "after launching 5 leaky ones:", after)
+}
+```
+
+**Symptom — real output:**
+
+```text
+goroutines before: 1 after launching 5 leaky ones: 6
+```
+
+The program does not crash. It does not even look wrong — it exits cleanly, having leaked 5 goroutines that will never be collected for as long as the process runs.
+
+**Fix:** give the goroutine a way out — a `context.Context`, a `done` channel, or a value on `ch`:
+
+```go
+func notLeaky(ctx context.Context) {
+	ch := make(chan int)
+	go func() {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return
+		}
+	}()
+}
+```
+
+**Caught by:** nothing at compile time or lint time — a leak is a property of a running program, not of the source text. Diagnose it at runtime with `runtime.NumGoroutine()` in a test, or a goroutine profile (`net/http/pprof`'s `/debug/pprof/goroutine`). The third-party `go.uber.org/goleak` package can assert "no leaked goroutines" at the end of a test, but it is not part of this course's tool list. See **[Goroutines](/go/en/concurrency/goroutines/)**.
+
+### 11. `wg.Add` called from inside the goroutine it is counting
+
+```go
+var wg sync.WaitGroup
+results := make([]int, 0, 5)
+var mu sync.Mutex
+
+for i := 0; i < 5; i++ {
+	go func(n int) {
+		wg.Add(1) // Add happens inside the goroutine — Wait() below can race ahead of it
+		defer wg.Done()
+		mu.Lock()
+		results = append(results, n)
+		mu.Unlock()
+	}(i)
+}
+
+wg.Wait() // may return before every Add(1) has even run
+fmt.Println("collected:", len(results), "of 5")
+```
+
+`wg.Wait()` can observe the counter at zero — because none of the five goroutines has reached `Add(1)` yet — and return immediately, before any of them have run.
+
+**Symptom — real output (reproduced 3/3 runs):**
+
+```text
+collected: 0 of 5
+```
+
+**Fix:** call `Add` in the loop, before launching the goroutine — the counter must already reflect all pending work before `Wait` can be called:
+
+```go
+for i := 0; i < 5; i++ {
+	wg.Add(1)
+	go func(n int) {
+		defer wg.Done()
+		mu.Lock()
+		results = append(results, n)
+		mu.Unlock()
+	}(i)
+}
+wg.Wait()
+```
+
+**Caught by:** `go vet`'s `waitgroup` analyzer (Go 1.26+), directly:
+
+```text
+waitgroup: WaitGroup.Add called from inside new goroutine (govet)
+```
+
+`staticcheck` also flags it independently as `SA2000`, and `go run -race` reports a data race on the WaitGroup's internal counter. Three tools agree — this is one of the few patterns here with no honest excuse to ship. See **[Goroutines](/go/en/concurrency/goroutines/)**.
+
+### 12. A panic in a goroutine cannot be recovered from anywhere else
+
+```go
+func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("main recovered:", r) // this never runs
+		}
+	}()
+
+	fmt.Println("starting background task")
+	go func() {
+		panic("background task exploded")
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	fmt.Println("done") // never reached
+}
+```
+
+`recover()` only stops a panic unwinding the goroutine it is deferred in. `main`'s `recover` has no reach into a different goroutine's stack.
+
+**Symptom — real output, whole process dies:**
+
+```text
+starting background task
+panic: background task exploded
+
+goroutine 34 [running]:
+main.main.func2()
+```
+
+**Fix:** every goroutine that can panic needs its own recovery, at the top of that goroutine:
+
+```go
+go func() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("background task recovered:", r)
+		}
+	}()
+	panic("background task exploded")
+}()
+```
+
+**Caught by:** nothing. `go vet` and `golangci-lint`'s standard set do not flag a bare `go func(){ ... }()` with no recover. See **[Goroutines](/go/en/concurrency/goroutines/)** and **[Panic and Recover](/go/en/errors-generics/panic-recover/)**.
+
+### 13. A value receiver silently copies the mutex it locks
+
+```go
+type Counter struct {
+	mu  sync.Mutex
+	val int
+}
+
+func (c Counter) Inc() { // value receiver copies the mutex on every call
+	c.mu.Lock()
+	c.val++
+	c.mu.Unlock()
+}
+
+func main() {
+	c := Counter{}
+	c.Inc()
+	fmt.Println(c.val) // stays 0: Inc mutated its own copy
+}
+```
+
+**Symptom — real output:**
+
+```text
+0
+```
+
+`Inc` locks, increments, and unlocks a `Counter` that is a fresh copy on every call — the original `c.val` is never touched, and the copied mutex protects nothing shared.
+
+**Fix:** use a pointer receiver, always, for any type containing a `sync.Mutex` (or anything else that must not be copied):
+
+```go
+func (c *Counter) Inc() {
+	c.mu.Lock()
+	c.val++
+	c.mu.Unlock()
+}
+```
+
+**Caught by:** `go vet`'s `copylocks` analyzer, directly and unconditionally:
+
+```text
+copylocks: Inc passes lock by value: main.Counter contains sync.Mutex (govet)
+```
+
+This is on by every default vet/lint configuration in this course's toolchain — there is no honest reason for this bug to reach code review. See **[The sync package](/go/en/concurrency/sync-primitives/)**.
+
+### 14. Capturing a loop variable in a goroutine — only fixed since Go 1.22
+
+```go
+var wg sync.WaitGroup
+results := make([]int, 3)
+for i, v := range []int{10, 20, 30} {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		results[i] = v // captures the loop variables i and v directly
+	}()
+}
+wg.Wait()
+fmt.Println(results)
+```
+
+Whether this is a bug depends entirely on the `go` directive in `go.mod`. Verified on this exact file, changing only that line:
+
+```text
+go.mod says "go 1.21":  results == [0 0 30]   (reproduced 3/3 runs on this machine)
+go.mod says "go 1.27":  results == [10 20 30]
+```
+
+Under Go 1.21 semantics `i` and `v` are one variable shared by every iteration of the loop — by the time the goroutines run, the loop has usually already advanced or finished, so most of them see the same, final values. This is a genuine data race on `i` and `v`, not just stale data — the exact wrong values it prints are not guaranteed to repeat on a different machine or Go version, even though this run reproduced consistently.
+
+**Fix, if you must support pre-1.22 semantics or the `go.mod` line is out of your control:** shadow the variable inside the loop body before capturing it: `i, v := i, v`. Under a `go 1.22`+ directive (the course default, since `go.mod` says `go 1.27`) this bug cannot occur — Go changed the loop variable's scope to per-iteration.
+
+**Caught by:** `go vet`'s `loopclosure` analyzer — but only when it can still happen. Real output on this same file:
+
+```text
+go.mod "go 1.21": loop variable i captured by func literal
+                   loop variable v captured by func literal
+go.mod "go 1.27": (silent — vet knows the semantics changed and there is nothing to warn about)
+```
+
+If you are reading Go code without knowing its `go.mod` directive, you cannot tell from the loop alone whether this is live — check the directive first. See **[Functions](/go/en/basics/functions/)**.
+
+### 17. `break` inside a `select` inside a `for` only breaks the `select`
+
+```go
+for {
+	select {
+	case <-ch:
+		fmt.Println("received")
+	case <-done:
+		break // only breaks out of select, NOT the for loop
+	}
+}
+```
+
+A bare `break` targets the innermost `for`, `switch`, or `select` — and `select` counts. It exits the `select` statement, then the enclosing `for` immediately loops again.
+
+**Symptom:** verified with a version that counts iterations after `done` is already closed — the loop keeps re-entering `select` and hitting the same `case <-done` repeatedly instead of exiting, spinning until something else stops it (in the verified reproduction, a separate iteration counter had to force an exit after 4 passes just to end the demo).
+
+**Fix:** use a label to name the `for` loop and break that label explicitly:
+
+```go
+loop:
+	for {
+		select {
+		case <-ch:
+			fmt.Println("received")
+		case <-done:
+			break loop
+		}
+	}
+```
+
+**Caught by:** `staticcheck`'s `SA4011`, directly:
+
+```text
+SA4011: ineffective break statement. Did you mean to break out of the outer loop? (staticcheck)
+```
+
+See **[Control Flow](/go/en/basics/control-flow/)**.
+
+### 22. `context.Background()` in a background job loses cancellation on purpose — but so does forgetting `WithoutCancel`
+
+```go
+func handleSignup(reqCtx context.Context, wg *sync.WaitGroup) {
+	wg.Add(1)
+	// BUG: reuses the request-scoped context for background work that must
+	// outlive the request.
+	go sendWelcomeEmail(reqCtx, "[buggy: reqCtx]", wg)
+}
+```
+
+Reusing the incoming request's `context.Context` for work that is meant to continue after the request returns means that work dies the instant the client disconnects or the handler returns — the exact opposite of "background."
+
+**Symptom — real output**, simulating the request context being cancelled 20ms into a 150ms background email send:
+
+```text
+[buggy: reqCtx] aborted early: context canceled
+[fixed: WithoutCancel] email sent
+```
+
+**Fix:** `context.WithoutCancel(reqCtx)` keeps any request-scoped *values* but detaches the work from the request's cancellation and deadline:
+
+```go
+go sendWelcomeEmail(context.WithoutCancel(reqCtx), "[fixed]", wg)
+```
+
+The mirror-image mistake is starting genuinely unrelated background work from `context.Background()` and then storing that bare context in a struct field to reuse later — both hide the same design question ("whose lifetime does this context follow?") behind code that compiles without complaint either way.
+
+**Caught by:** nothing. There is no default `go vet`, `staticcheck`, or `golangci-lint` check for context lifetime mismatches or for storing a `context.Context` in a struct. See **[Context](/go/en/concurrency/context/)**.
+
+## Resources
+
+### 3. `defer` inside a loop does not run until the function returns
+
+```go
+func processAll(paths []string) error {
+	total := 0
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			return fmt.Errorf("open %s (file #%d): %w", p, total, err)
+		}
+		defer f.Close() // accumulates: does not run until processAll returns
+		total++
+	}
+	fmt.Println("opened", total, "files, all still open")
+	return nil
+}
+```
+
+`defer` schedules `f.Close()` to run when `processAll` returns — not when the loop iteration ends. Every file opened stays open until the whole function is done.
+
+**Symptom — real output**, opening 300 files under a 200-file-descriptor limit (`ulimit -n 200`):
+
+```text
+processAll failed: open .../f196.txt (file #196): open .../f196.txt: too many open files
+```
+
+Under a normal, generous descriptor limit the same code "works" — which is exactly why this ships: it passes every quick test and only fails under load or with many files.
+
+**Fix:** close each file at the end of its own iteration, not the function's — most simply by moving the loop body into its own function so `defer` is scoped to one file:
+
+```go
+func processOne(p string) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close() // scoped to this one file
+	// ... use f ...
+	return nil
+}
+```
+
+**Caught by:** nothing. `go vet` and `golangci-lint`'s standard set are silent on the accumulation itself (`errcheck` may separately flag an unchecked `Close` error, which is a different, unrelated finding). See **[io and bufio](/go/en/stdlib/io-bufio/)**.
+
+### 4. `defer resp.Body.Close()` before checking `err` dereferences a nil pointer
+
+```go
+func fetch(url string) error {
+	resp, err := http.Get(url)
+	defer resp.Body.Close() // resp may be nil when err != nil
+	if err != nil {
+		return err
+	}
+	fmt.Println(resp.StatusCode)
+	return nil
+}
+```
+
+When `http.Get` fails, it returns a nil `*http.Response` alongside the error — but `defer resp.Body.Close()` evaluates `resp.Body` immediately, before the deferred call ever runs, and `resp` is nil.
+
+**Symptom — real panic**, calling an address nothing listens on:
+
+```text
+panic: runtime error: invalid memory address or nil pointer dereference
+[signal SIGSEGV: segmentation violation code=0x2 addr=0x40 pc=...]
+```
+
+**Fix:** check the error first; only defer the close once you know `resp` is non-nil:
+
+```go
+resp, err := http.Get(url)
+if err != nil {
+	return err
+}
+defer resp.Body.Close()
+```
+
+**Caught by:** `go vet`, directly, no configuration needed:
+
+```text
+main.go:10:8: using resp before checking for errors
+```
+
+See **[The client side](/go/en/stdlib/net-http/)**.
+
+### 6. `&http.Client{}` with no `Timeout` can hang forever
+
+```go
+noTimeout := &http.Client{}
+noTimeout.Get(url) // no Timeout field set
+```
+
+The zero-value `http.Client` has no request timeout at all — if the server accepts the connection and never responds, the call blocks for as long as the process runs.
+
+**Symptom — real output**, against a server that accepts the TCP connection and writes nothing back:
+
+```text
+no-timeout client: still blocked after 2s, as expected
+with-timeout client error: Get "http://127.0.0.1:PORT/": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+```
+
+**Fix:** always set `Timeout` on any `http.Client` you construct — or build the request with `http.NewRequestWithContext` and a context deadline for finer control:
+
+```go
+client := &http.Client{Timeout: 10 * time.Second}
+```
+
+**Caught by:** nothing automated — this is a property of runtime behavior against a slow or hostile server, not something visible in the source alone. See **[The client side](/go/en/stdlib/net-http/)**.
+
+## API contract
+
+### 5. Not checking `resp.StatusCode` treats an error page as valid data
+
+```go
+func fetchBody(url string) (string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	// no resp.StatusCode check — a 500 error page is treated as valid data
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+```
+
+`http.Get` only returns a non-nil `err` for transport failures (DNS, connection refused, timeout) — a `404` or `500` response is a completely successful HTTP round trip as far as `err` is concerned.
+
+**Symptom — real output**, against a test server that returns HTTP 500 with an error body:
+
+```text
+err=<nil> body="internal error, try later"
+```
+
+The caller has no way to tell this apart from a genuine, successful response without inspecting `resp.StatusCode` itself.
+
+**Fix:** check the status code explicitly before trusting the body:
+
+```go
+if resp.StatusCode != http.StatusOK {
+	return "", fmt.Errorf("unexpected status: %s", resp.Status)
+}
+```
+
+**Caught by:** nothing. See **[The client side](/go/en/stdlib/net-http/)**.
+
+### 7. `omitempty` does not omit a zero-value `time.Time`
+
+```go
+type Event struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+e := Event{Name: "signup"} // CreatedAt left zero-value by mistake
+b, _ := json.Marshal(e)
+```
+
+**Symptom — real output:**
+
+```text
+{"name":"signup","created_at":"0001-01-01T00:00:00Z"}
+```
+
+`omitempty` only omits Go's "empty" values — `false`, `0`, a nil pointer/interface, and an empty string/slice/map/array. A zero-value `struct` (which `time.Time`'s zero value is) is never "empty" by that definition, so it is always encoded.
+
+**Fix:** use a `*time.Time` and leave it nil when there is no value, or (Go 1.24+) use `omitzero` instead, which honors a type's own `IsZero()` method:
+
+```go
+CreatedAt time.Time `json:"created_at,omitzero"`
+```
+
+**Caught by:** nothing. See **[encoding/json](/go/en/stdlib/encoding-json/)**.
+
+### 8. `encoding/json` silently drops unexported fields
+
+```go
+type user struct {
+	Name  string
+	email string // unexported: encoding/json cannot see it
+}
+
+u := user{Name: "Ada", email: "ada@example.com"}
+b, _ := json.Marshal(u)
+```
+
+**Symptom — real output:**
+
+```text
+{"Name":"Ada"}
+```
+
+No error, no warning — `email` is invisible to the `reflect` package the same way it is invisible outside the declaring package, and `encoding/json` simply has nothing to encode.
+
+**Fix:** export the field (and tag it) if it belongs in the JSON contract:
+
+```go
+type user struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+```
+
+**Caught by:** nothing automated flags a *silently dropped* field — there is no error to report. See **[encoding/json](/go/en/stdlib/encoding-json/)**.
+
+### 9. A nil slice marshals to `null`, not `[]`
+
+```go
+type Resp struct {
+	Items []string `json:"items"`
+}
+
+var r Resp // Items left as nil slice
+b, _ := json.Marshal(r)
+```
+
+**Symptom — real output:**
+
+```text
+{"items":null}
+```
+
+A nil slice and an empty slice are different values in Go, and `encoding/json` respects that difference — many API clients treat a `null` items field as an error case rather than "zero items."
+
+**Fix:** initialize the slice to empty rather than leaving it nil when the contract requires `[]`:
+
+```go
+type Resp struct {
+	Items []string `json:"items"`
+}
+
+r := Resp{Items: []string{}}
+```
+
+**Caught by:** nothing — both are entirely valid JSON encodings of entirely valid Go values; only your API contract says which one is required. See **[encoding/json](/go/en/stdlib/encoding-json/)**.
+
+## Types
+
+### 15. `append` on a sub-slice overwrites the array it was sliced from
+
+```go
+base := []int{1, 2, 3, 4, 5}
+a := base[1:3] // len=2 cap=4, shares base's backing array
+a = append(a, 99) // fits in cap — overwrites base[3] in place
+```
+
+**Symptom — real output:**
+
+```text
+before append, base: [1 2 3 4 5]
+after append,  base: [1 2 3 99 5]
+a: [2 3 99]
+```
+
+`a` had room to grow within `base`'s existing backing array (`cap(a) == 4`, `len(a) == 2`), so `append` reused that array instead of allocating a new one — silently corrupting `base[3]`.
+
+**Fix:** use a full slice expression to cap `a`'s capacity at its own length, forcing any `append` beyond that to allocate a fresh array: `a := base[1:3:3]`.
+
+**Caught by:** nothing — both the original and the fixed version compile and run without any diagnostic; this is purely a semantic trap in how slices share memory. See **[Slices](/go/en/types-data/slices/)**.
+
+### 16. Writing to a nil map panics
+
+```go
+var m map[string]int // nil map
+m["x"] = 1           // panics
+```
+
+A nil map can be read from freely (a lookup on a nil map returns the zero value, `ok == false`) but writing to one panics — reads and writes are not symmetric.
+
+**Symptom — real panic:**
+
+```text
+panic: assignment to entry in nil map
+```
+
+**Fix:** initialize the map with `make` (or a composite literal) before writing to it:
+
+```go
+m := make(map[string]int)
+m["x"] = 1
+```
+
+**Caught by:** `staticcheck`'s `SA5000`, when it can prove the map is always nil at the write site:
+
+```text
+SA5000: assignment to nil map (staticcheck)
+```
+
+`go vet` alone does not catch this — the proof only comes from `staticcheck`'s more thorough analysis, and only in cases simple enough for it to prove. See **[Maps](/go/en/types-data/maps/)**.
+
+### 19. `maps.Keys` returns an iterator, not a slice
+
+```go
+m := map[string]int{"b": 2, "a": 1, "c": 3}
+sort.Strings(maps.Keys(m)) // maps.Keys returns iter.Seq[string], not []string
+```
+
+Since Go 1.23, `maps.Keys` returns `iter.Seq[K]` — a range-over-func iterator — not a `[]K`. This is not a runtime bug at all; it does not compile.
+
+**Symptom — real compiler error:**
+
+```text
+./main.go:11:15: cannot use maps.Keys(m) (value of func type iter.Seq[string]) as []string value in argument to sort.Strings
+```
+
+**Fix:** materialize a sorted slice with `slices.Sorted`, which is built exactly for this:
+
+```go
+keys := slices.Sorted(maps.Keys(m))
+```
+
+**Caught by:** the compiler itself — `go build`/`go vet` both report the same type error; this bug cannot reach a binary. It appears in this catalog because AI models trained on pre-1.23 code (where `golang.org/x/exp/maps.Keys` did return a `[]K`) reproduce the old call shape confidently. See **[Iterators](/go/en/errors-generics/iterators/)**.
+
+## Tooling & style
+
+### 18. `time.Sleep(5)` sleeps 5 nanoseconds, not 5 seconds
+
+```go
+time.Sleep(5) // 5 nanoseconds, not 5 seconds — missing * time.Second
+```
+
+`time.Sleep` takes a `time.Duration`, which is just an `int64` count of nanoseconds — the untyped constant `5` converts to `time.Duration(5)`, five nanoseconds, with no complaint from the compiler.
+
+**Symptom — real output:**
+
+```text
+slept for: 34.75µs
+```
+
+(The measured time is slightly more than 5ns because scheduling a goroutine has its own overhead — the sleep itself contributes almost nothing.)
+
+A related but distinct mistake — multiplying a plain `int` by `time.Second` — does not compile at all:
+
+```go
+n := attempt * 2
+return n * time.Second // n is a plain int, not time.Duration
+```
+
+```text
+./main.go:10:9: invalid operation: n * time.Second (mismatched types int and time.Duration)
+```
+
+**Fix:** always spell out the unit, and convert explicitly when multiplying a variable:
+
+```go
+time.Sleep(5 * time.Second)
+return time.Duration(n) * time.Second
+```
+
+**Caught by:** `staticcheck`'s `SA1004` for the bare-literal case:
+
+```text
+SA1004: sleeping for 5 nanoseconds is probably a bug; be explicit if it isn't (staticcheck)
+```
+
+The `n * time.Second` type-mismatch variant is caught earlier and more bluntly — by the compiler itself, before any linter runs. See **[time](/go/en/stdlib/time/)**.
+
+### 23. A one-implementation interface, `interface{}`, and a receiver named `this`
+
+```go
+type UserStoreInterface interface {
+	Get(id int) (interface{}, error) // interface{} instead of any
+}
+
+type userStore struct{ data map[int]string }
+
+func (this *userStore) Get(id int) (interface{}, error) { // receiver named "this"
+	v, ok := this.data[id]
+	if !ok {
+		return nil, fmt.Errorf("user %d not found", id)
+	}
+	return v, nil
+}
+```
+
+Three separate smells, one snippet: an interface with exactly one implementation (no polymorphism is actually happening — it is pure indirection), the pre-1.18 spelling `interface{}` where `any` is the modern idiom, and a receiver named like a Java/JavaScript `this` instead of a short Go-style abbreviation of the type name.
+
+**Caught by:** two of the three, partially:
+
+```text
+ST1006: receiver name should be a reflection of its identity; don't use generic names such as "this" or "self" (staticcheck)
+any: interface{} can be replaced by any (modernize)
+```
+
+`staticcheck`'s `ST1006` (part of `golangci-lint`'s default `standard` set) catches the receiver name unconditionally. The `interface{}` → `any` rewrite is caught by the `modernize` analyzer — but `modernize` is **not** in `golangci-lint`'s `standard` preset; it must be enabled explicitly (`linters.enable: [modernize]`). The single-implementation interface itself is caught by nothing: no tool counts how many types implement an interface across a codebase, so an unnecessary abstraction like `UserStoreInterface` never triggers a warning no matter how it is configured. Deleting it — and having `userStore` satisfy whatever the *caller* actually needs — is a judgment call this module exists to teach you to make. See **[Interfaces](/go/en/methods-interfaces/interfaces/)** and **[Methods](/go/en/methods-interfaces/methods/)**.
+
+## Mental Model
+
+```text
+24 patterns, sorted by who actually catches them:
+
+Compiler / go build  → 19 (maps.Keys shape), 18b (int * time.Duration)
+go vet (no config)   → 4, 11 (waitgroup), 13 (copylocks), 20 (errorsas)
+go vet (opt-in)      → 2 (shadow), 14 (loopclosure, only pre-1.22 go.mod)
+staticcheck           → 1 (SA4023), 11 (SA2000), 16 (SA5000), 17 (SA4011),
+                        18a (SA1004), 23 (ST1006)
+modernize (opt-in)    → 23 (interface{} → any)
+-race                 → 11 (WaitGroup data race)
+Nothing               → 3, 5, 6, 7, 8, 9, 10, 12, 15, 21, 22, 24 — half the catalog
+```
+
+<Callout title="Half of this catalog has no automated safety net">
+Twelve of the twenty-four patterns above are caught by no tool this course covers, run with any configuration. That is the actual argument for this module: tooling narrows what you have to read for by eye, it never replaces reading. Run every tool in **[Verification Tools](/go/en/reading-go/verification-tools/)** on every diff — and still read the diff.
+</Callout>
+
+export const quizAiBugCatalog = [
+  {
+    q: "```go\nfunc f() *MyErr { return nil }\nfunc g() error { var e *MyErr = f(); return e }\n```\nWhat does `g() != nil` evaluate to, and why?",
+    options: [
+      "false — nil is nil regardless of type",
+      "true — a nil *MyErr boxed into the error interface is a non-nil interface value",
+      "It does not compile",
+      "It panics at runtime"
+    ],
+    answer: 1,
+    explain: "An interface value is non-nil if it has a concrete type, even when the underlying pointer is nil. g() returns error(*MyErr)(nil), which is not equal to the interface zero value."
+  },
+  {
+    q: "Which single change makes `wg.Wait()` reliably wait for all 5 goroutines in the WaitGroup pattern in this catalog?",
+    options: [
+      "Call wg.Add(5) once before the loop instead of Add(1) inside each goroutine",
+      "Replace WaitGroup with a longer time.Sleep",
+      "Move wg.Wait() before the loop",
+      "Nothing needs to change — WaitGroup handles this automatically"
+    ],
+    answer: 0,
+    explain: "Add must run in the goroutine that will call Wait, before the counted goroutines start — either one Add(len) before the loop or Add(1) inside the loop body itself (not inside the launched goroutine)."
+  },
+  {
+    q: "Why does `go vet` flag the copylocks pattern (a value-receiver method on a struct containing sync.Mutex) but not the append-on-sub-slice aliasing bug?",
+    options: [
+      "copylocks is a much older check than the slice aliasing rule",
+      "Copying a mutex is a structural property vet's static analysis can always detect from the type alone; whether an append aliases a parent array depends on runtime capacity, which is not always knowable from source",
+      "go vet does not check anything related to structs",
+      "The slice aliasing bug is not actually a bug"
+    ],
+    answer: 1,
+    explain: "vet's copylocks analyzer only needs to see that a type contains a Mutex (or similar) and is used by value — a pure type-level fact. Whether append reuses the backing array depends on len/cap values that a static analyzer cannot always determine."
+  },
+  {
+    q: "A reviewer sees `resp, err := http.Get(url)` followed immediately by `defer resp.Body.Close()`, then `if err != nil { return err }`. What is wrong, independent of whether `url` happens to be reachable during testing?",
+    options: [
+      "Nothing — this is correct as long as url is valid",
+      "defer evaluates resp.Body immediately; if http.Get returned a non-nil err, resp is nil and this panics",
+      "defer should never be used with network calls",
+      "resp.Body.Close() should be called twice for safety"
+    ],
+    answer: 1,
+    explain: "The bug is unconditional on control flow, not on network reachability: whenever err is non-nil, http.Get's contract guarantees resp is nil, and evaluating resp.Body before the err check dereferences that nil pointer immediately when the defer statement runs its argument evaluation."
+  }
+];
+
+<Quiz client:visible id="reading-go/ai-bug-catalog" questions={quizAiBugCatalog} />
+
+<ProgressTracker client:visible id="reading-go/ai-bug-catalog" />

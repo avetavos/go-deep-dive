@@ -1,0 +1,245 @@
+---
+title: 'Worked review 4: a generic cache with TTL'
+description: 'generic cache แบบมีเวลาหมดอายุ สไตล์ที่ AI เขียน — หา bug ก่อน แล้วดูวิธีแก้ทีละตัว'
+sidebar:
+  order: 8
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+`Cache[K, V]` คือ generic cache เล็กๆ ที่มีเวลาหมดอายุ — `Set` เก็บค่าพร้อม expiry, `Get` ควร return `false` เมื่อ expiry นั้นผ่านไปแล้ว มัน compile ผ่าน, `go vet` ไม่บ่นอะไรเลย, `golangci-lint run` ก็ไม่บ่นอะไรเลย, และมันรันได้ มันมี **bug จริง 4 ตัว** ตัวหนึ่งเป็น `fatal error` จริงภายใต้การใช้งานแบบ concurrent จริง
+
+## The program
+
+<Playground code={wr4Code} />
+
+export const wr4Code = `package main
+
+import (
+\t"fmt"
+\t"time"
+)
+
+type entry[V any] struct {
+\tvalue V
+\texp   time.Time
+}
+
+type Cache[K comparable, V any] struct {
+\tdata map[K]entry[V]
+\tttl  time.Duration
+}
+
+func New[K comparable, V any](ttl time.Duration) Cache[K, V] {
+\treturn Cache[K, V]{data: make(map[K]entry[V]), ttl: ttl}
+}
+
+func (c Cache[K, V]) Set(key K, value V) {
+\tc.data[key] = entry[V]{value: value, exp: time.Now().Add(c.ttl)}
+}
+
+func (c Cache[K, V]) Get(key K) (V, bool) {
+\te, ok := c.data[key]
+\tif !ok {
+\t\tvar zero V
+\t\treturn zero, false
+\t}
+\tif time.Now().After(e.exp) {
+\t\tdelete(c.data, key)
+\t}
+\treturn e.value, true
+}
+
+func main() {
+\tc := New[string, int](50 * time.Millisecond)
+\tc.Set("a", 1)
+
+\tv, ok := c.Get("a")
+\tfmt.Println("immediately:", v, ok)
+
+\ttime.Sleep(100 * time.Millisecond)
+\tv, ok = c.Get("a")
+\tfmt.Println("after ttl:", v, ok)
+
+\tfor i := 0; i < 5; i++ {
+\t\tc.Set(fmt.Sprintf("k%d", i), i)
+\t}
+\ttime.Sleep(100 * time.Millisecond)
+\tfmt.Println("entries still in map after all expired, none re-Get:", len(c.data))
+
+\tc2 := c
+\tc2.Set("shared", 42)
+\tsharedVal, sharedOK := c.Get("shared")
+\tfmt.Println("c (unrelated-looking copy) also sees c2's write:", sharedVal, sharedOK)
+}`;
+
+## หา bug
+
+`c.Get("a")` หลังจาก TTL ผ่านไปแล้วยังรายงาน `true` อยู่ ตัวแปร cache สองตัวที่ดูเหมือนเป็นอิสระจากกันกลับเห็นการเขียนของกันและกัน ลองระบุ bug อย่างน้อย 3 ใน 4 ตัวก่อนเปิดเฉลย
+
+<details>
+<summary>เฉลย 4 bug</summary>
+
+1. **`Get` ลบ entry ที่หมดอายุแล้ว แต่ยัง return มันเหมือนยัง valid อยู่** `if time.Now().After(e.exp) { delete(c.data, key) }` รัน แล้ว execution ก็ตกไปที่ `return e.value, true` ที่ไม่มีเงื่อนไขด้านล่างตรงๆ — ไม่มี `return zero, false` บน path ที่หมดอายุเลย output จริง: `after ttl: 1 true` ทั้งที่ควรเป็น `0 false` entry ถูกลบออกจาก map ถูกต้องด้วยซ้ำ (`delete` บน map ที่แชร์ผ่าน reference ทำงานได้ปกติแม้ผ่าน value receiver) — แต่ค่าเก่ายังถูกส่งออกไปอยู่ดี
+2. **ทั้ง `Set` และ `Get` ไม่ sync การเข้าถึง map เลย** ไม่มี `sync.Mutex` ที่ไหนใน `Cache` เลย ลองรัน 4 goroutine เรียก `Set`/`Get` บน cache เดียวกันพร้อมกัน แล้ว runtime ของ Go เอง — ไม่ใช่แค่ race detector — จับได้ตรงๆ:
+   ```text
+   fatal error: concurrent map writes
+   ```
+   นี่ไม่ใช่ finding ที่ต้องพึ่ง `-race` เท่านั้น การเขียน map พร้อมกันแบบไม่ sync ทำให้ process crash ทันที ไม่ว่าจะมี race detector ติดอยู่หรือไม่ (`-race` เพิ่มเติมจะรายงาน goroutine และบรรทัดที่เกี่ยวข้องแบบเป๊ะๆ)
+3. **entry ที่หมดอายุไม่เคยถูกลบเลย นอกจากบังเอิญมีใครเรียก `Get` บน key นั้นซ้ำ** demo นี้ตั้ง 5 key ปล่อยให้หมดอายุทั้งหมด แล้วไม่แตะมันด้วย `Get` อีกเลย — `len(c.data)` รายงานว่ายังเหลือทั้ง 5 ตัว cache ที่ใช้แบบ `Set` เป็นหลัก (เขียนค่า แล้วแทบไม่เคยหรือไม่เคย lookup key นั้นซ้ำอีกเลย) จะโตไม่มีที่สิ้นสุด ไม่มีอะไรมากวาดมันเลย
+4. **`New` คืน `Cache[K, V]` แบบ value พร้อม method แบบ value receiver การ assign ธรรมดาจึงกลาย alias แทนที่จะเป็นการ copy แบบเงียบๆ** `c2 := c` ดูเหมือน copy ที่เป็นอิสระ — `Cache` เป็นแค่ struct ธรรมดา ท้ายที่สุดแล้ว — แต่ state จริงของ `Cache` มีแค่ map เดียว และ map เป็น reference type `c2.Set("shared", 42)` มองเห็นได้ผ่าน `c` ด้วย: `c (unrelated-looking copy) also sees c2's write: 42 true` ไม่มีอะไรผิดกฎ Go ตรงนี้เลยในทางเทคนิค — มันคือ value type ที่ "value" semantics ของมันหลอกตาเพราะสิ่งที่มันบรรจุอยู่ข้างใน
+
+</details>
+
+## The corrected program
+
+<Playground code={wr4FixedCode} />
+
+export const wr4FixedCode = `package main
+
+import (
+\t"fmt"
+\t"sync"
+\t"time"
+)
+
+type entry[V any] struct {
+\tvalue V
+\texp   time.Time
+}
+
+type Cache[K comparable, V any] struct {
+\tmu   sync.Mutex // fixed: guards data against concurrent Set/Get
+\tdata map[K]entry[V]
+\tttl  time.Duration
+\tdone chan struct{}
+}
+
+func New[K comparable, V any](ttl time.Duration) *Cache[K, V] { // fixed: pointer — copies now share explicitly, on purpose
+\tc := &Cache[K, V]{data: make(map[K]entry[V]), ttl: ttl, done: make(chan struct{})}
+\tgo c.janitor(ttl) // fixed: proactively evict expired entries, not just on access
+\treturn c
+}
+
+func (c *Cache[K, V]) janitor(interval time.Duration) {
+\tt := time.NewTicker(interval)
+\tdefer t.Stop()
+\tfor {
+\t\tselect {
+\t\tcase <-t.C:
+\t\t\tc.mu.Lock()
+\t\t\tfor k, e := range c.data {
+\t\t\t\tif time.Now().After(e.exp) {
+\t\t\t\t\tdelete(c.data, k)
+\t\t\t\t}
+\t\t\t}
+\t\t\tc.mu.Unlock()
+\t\tcase <-c.done:
+\t\t\treturn
+\t\t}
+\t}
+}
+
+func (c *Cache[K, V]) Close() { close(c.done) } // fixed: caller can stop the janitor goroutine
+
+func (c *Cache[K, V]) Set(key K, value V) {
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\tc.data[key] = entry[V]{value: value, exp: time.Now().Add(c.ttl)}
+}
+
+func (c *Cache[K, V]) Get(key K) (V, bool) {
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\te, ok := c.data[key]
+\tif !ok || time.Now().After(e.exp) { // fixed: expired counts as not found
+\t\tvar zero V
+\t\treturn zero, false
+\t}
+\treturn e.value, true
+}
+
+func main() {
+\tc := New[string, int](50 * time.Millisecond)
+\tdefer c.Close()
+\tc.Set("a", 1)
+
+\tv, ok := c.Get("a")
+\tfmt.Println("immediately:", v, ok)
+
+\ttime.Sleep(100 * time.Millisecond)
+\tv, ok = c.Get("a")
+\tfmt.Println("after ttl:", v, ok)
+
+\tfor i := 0; i < 5; i++ {
+\t\tc.Set(fmt.Sprintf("k%d", i), i)
+\t}
+\ttime.Sleep(200 * time.Millisecond) // give the janitor a couple of ticks
+\tfmt.Println("entries left after janitor sweep:", len(c.data))
+
+\tc2 := c // fixed: this is now an explicit pointer copy — no surprise aliasing of a value type
+\tc2.Set("shared", 42)
+\tsharedVal, sharedOK := c.Get("shared")
+\tfmt.Println("c and c2 are the same *Cache on purpose:", sharedVal, sharedOK)
+}`;
+
+รันเวอร์ชันที่แก้แล้ว: `after ttl: 0 false`, `entries left after janitor sweep: 0` (background goroutine `janitor` ที่หยุดได้ผ่าน `Close` กวาด entry ที่หมดอายุตาม ticker) และ `c and c2 are the same *Cache on purpose: 42 true` — การ alias ยังเหมือนเดิม แต่ไม่ใช่เรื่องเซอร์ไพรส์เงียบๆ อีกต่อไป: `*Cache[K, V]` บอกไว้ในตัว type เองแล้วว่า copy จะแชร์ state กัน เหมือน pointer ตัวอื่นทุกตัวใน Go เทส stress เวอร์ชันนี้ด้วย 4 goroutine เรียก `Set`/`Get` พร้อมกันภายใต้ `go run -race` ไม่รายงาน race และไม่มี fatal error เลย — เวอร์ชันด้านบน crash ด้วย `fatal error: concurrent map writes` ภายใต้ load แบบเดียวกัน
+
+<Callout title="generic type ไม่ได้ทำให้ปลอดภัยขึ้นอัตโนมัติ">
+ทุก bug ที่นี่จะมีอยู่เหมือนเดิมทุกประการใน cache ที่ใช้ `map[string]int` ธรรมดาไม่มี generic — generics ไม่ได้เปลี่ยนอะไรเลยเรื่องความจำเป็นต้องมี mutex, expiry check ที่ถูกต้อง, หรือ pointer semantics อย่าให้ความแปลกใหม่ของ type parameter ทำให้เสียสมาธิจาก review checklist เดียวกันที่ใช้กับ stateful type ตัวไหนก็ได้ ดู **[Generics](/go/th/errors-generics/generics/)** และ **[The sync package](/go/th/concurrency/sync-primitives/)**
+</Callout>
+
+export const quizWorkedReview4 = [
+  {
+    q: "`Get` calls `delete(c.data, key)` when an entry has expired, so the entry really is removed from the map. Why does the buggy version still report the value as found?",
+    options: [
+      "delete() doesn't actually work on generic map types",
+      "The function falls through to the unconditional `return e.value, true` after the delete, instead of returning the zero value and false on the expired path",
+      "time.Now().After(e.exp) always returns false",
+      "The value is cached a second time somewhere else"
+    ],
+    answer: 1,
+    explain: "การลบ entry ออกจาก map กับการรายงานว่าเจอมันหรือเปล่า เป็นสองเรื่องที่ function นี้ต้องทำให้ถูกต้องแยกกัน โค้ดทำอย่างแรกได้ถูก แต่ไม่ได้ทำอย่างที่สอง — ไม่มี early return หลังจาก delete เลย control จึงตกไปที่ return แบบเดียวกับที่ใช้กับ entry ที่ valid และยังไม่หมดอายุ"
+  },
+  {
+    q: "Four goroutines call Set/Get on the same unsynchronized Cache concurrently. What actually happens, verified on this exact program?",
+    options: [
+      "Nothing — Go maps handle concurrent access safely by default",
+      "A `fatal error: concurrent map writes` crash — not just a -race warning, an unrecoverable runtime crash even without the race detector",
+      "The program silently returns wrong values but never crashes",
+      "It only fails if the map has more than 1000 entries"
+    ],
+    answer: 1,
+    explain: "Go map implementation ตรวจจับการเขียนพร้อมกันแบบไม่ sync ตอน runtime อย่างจริงจัง แล้วเรียก fatal() ซึ่ง recover() กู้คืนไม่ได้ และจบ process ทันที — นี่เป็น failure ที่แรงกว่าและทันทีกว่า data race ธรรมดา และไม่ต้องมี flag -race ก็เกิดได้"
+  },
+  {
+    q: "In the buggy version, `c2 := c` followed by `c2.Set(...)` is visible through `c` too. Why does this surprise a reader more than the same thing happening with, say, `*MyStruct`?",
+    options: [
+      "It shouldn't surprise anyone — pointers and value types behave identically in Go",
+      "Cache[K, V] looks like an ordinary value type (no asterisk, a plain struct), so `c2 := c` reads like an independent copy — the aliasing is hidden inside the map field rather than being visible in the type itself",
+      "Generic types cannot be assigned with :=",
+      "This behavior only happens with comparable key types"
+    ],
+    answer: 1,
+    explain: "type `*MyStruct` ส่งสัญญาณเรื่องการแชร์ไว้ในไวยากรณ์ของมันเอง — ผู้อ่านคาดหวัง aliasing อยู่แล้ว `Cache[K, V]` ไม่มีสัญญาณแบบนั้นเลย หน้าตาแบบ value type ของมันซ่อนไว้ว่า state จริงตัวเดียวของมัน (map) เป็น reference type การ assign ธรรมดาจึง alias แทนที่จะ copy แบบเงียบๆ"
+  },
+  {
+    q: "The fixed version adds a `janitor` goroutine started inside `New` and a `Close` method. Why does `Close` matter here, beyond just 'good practice'?",
+    options: [
+      "It doesn't matter — the janitor goroutine would stop on its own",
+      "Without calling Close, the janitor goroutine loops on its ticker forever, holding the mutex periodically and never exiting — exactly the goroutine-leak pattern from the AI Bug Catalog, just introduced by the fix itself",
+      "Close is required by the Go compiler for any type with a background goroutine",
+      "Close deletes all cache entries immediately"
+    ],
+    answer: 1,
+    explain: "การเพิ่ม background goroutine เพื่อแก้ bug หนึ่งตัว (entry ที่หมดอายุโตไม่มีที่สิ้นสุด) สร้างความรับผิดชอบใหม่เรื่อง lifetime management: ต้องมีอะไรสักอย่างส่งสัญญาณให้มันหยุดในที่สุด หน้าที่ของ Close ตรงกับปัญหา goroutine-leak จาก pattern 10 ใน AI Bug Catalog เป๊ะๆ — การแก้ที่ไม่ระวังตรงนี้ก็แค่สลับ bug ตัวหนึ่งไปเป็นอีกตัวเท่านั้น"
+  }
+];
+
+<Quiz client:visible id="reading-go/worked-review-4" questions={quizWorkedReview4} />
+
+<ProgressTracker client:visible id="reading-go/worked-review-4" />
