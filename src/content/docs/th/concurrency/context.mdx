@@ -23,11 +23,11 @@ Package context แก้ปัญหาที่เป็นรูปธรร�
 ## การสร้าง Contexts
 
 ```go
-// Root contexts — ไม่มี cancellation
-context.Background()   // root ระดับบนสุด ใช้ใน main หรือ test setup
-context.TODO()         // placeholder เมื่อยังไม่แน่ใจจะใช้ context ไหน
+// Root contexts — never carry cancellation
+context.Background()   // top-level root, use in main or test setup
+context.TODO()         // placeholder when you are unsure which context to use
 
-// Derived contexts — เพิ่ม cancellation/timeout บน parent
+// Derived contexts — add cancellation/timeout on top of a parent
 ctx, cancel := context.WithCancel(parent)
 ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 ctx, cancel := context.WithDeadline(parent, time.Now().Add(5*time.Second))
@@ -54,7 +54,7 @@ select {
 case result := <-workCh:
     return result, nil
 case <-ctx.Done():
-    return "", ctx.Err() // context.Canceled หรือ context.DeadlineExceeded
+    return "", ctx.Err() // context.Canceled or context.DeadlineExceeded
 }
 ```
 

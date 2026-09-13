@@ -122,6 +122,22 @@ BenchmarkFib-11           58771    20169 ns/op    0 B/op    0 allocs/op
 
 `Fibonacci` allocates nothing because it uses only stack variables — that is why both alloc columns are zero on both rows. A function that builds a `[]string` would show non-zero values.
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| `go test -bench` | Measures performance with a built-in tool | Needs multiple runs — watch for noise from GC and CPU throttling |
+| `b.N` auto-calibration | The framework picks an iteration count that gives a stable result | Setup left inside the loop gets measured too |
+| `b.ReportAllocs()` | Shows heap allocations per operation clearly | You need to understand escape analysis to interpret the result |
+| pprof profiling | Deep CPU/memory hotspot analysis | Profiling overhead — do not leave it running in production by accident |
+
+## Common Misconceptions
+
+- **A benchmark result on your dev machine matches production** — CPU throttling, GC state, and background processes differ between machines.
+- **`b.N` is a count you choose** — Go calibrates `b.N` automatically so the benchmark runs for about a second — never set `b.N` yourself.
+- **`allocs/op = 0` always means optimal** — zero allocations is good, but if CPU work went up instead, the result may not actually be better.
+- **Benchmarks are only for micro-optimization** — benchmarks can also validate architectural decisions, e.g. channel vs mutex, slice vs map.
+
 <Callout title="Let the framework drive iterations — never set the count yourself">
 The benchmark framework controls the iteration count (`b.N` under the hood) to achieve a statistically stable measurement. If you set `b.N` directly or use a fixed loop count, your timings will be unreliable. Also use `-benchmem` as a habit: even functions that look allocation-free sometimes surprise you, and catching unnecessary heap allocations early is far cheaper than profiling in production.
 </Callout>

@@ -12,17 +12,15 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ปรัชญาการออกแบบของ Go
 
-Go ถูกออกแบบโดยทีมที่ Google เพื่อแก้ปัญหาจริงในการพัฒนา software ขนาดใหญ่ ปรัชญาหลักมีสี่ข้อ:
+Go ถูกออกแบบมาโดยยึดสี่แนวคิดที่ส่งผลต่อทุกสิ่งที่คุณเขียน
 
-**ความเรียบง่าย (Simplicity)** — Go เลือกความเรียบง่ายเหนือความหลากหลายของ feature ทุก keyword และ syntax มีเหตุผลที่ชัดเจน ภาษามี keyword เพียง 25 คำ ทำให้เรียนรู้ได้เร็วและอ่าน code ของคนอื่นได้ง่าย
+**ความเรียบง่ายเหนือความฉลาดเกินไป (Simplicity over cleverness)** ภาษามี spec เล็ก มี keyword เพียง 25 คำ ตั้งใจไม่มี overloading, ไม่มี default arguments, ไม่มี implicit conversion, และไม่มี inheritance เมื่อคุณอ่าน code ของ Go ที่คนอื่นเขียน มันจะดูเหมือน code ที่คุณเองก็เขียนได้เกือบทุกจุด นั่นคือความตั้งใจ
 
-**เวลา compile เร็ว (Fast Compile)** — Go compile เป็นวินาที ไม่ใช่นาที แม้สำหรับ codebase ขนาดใหญ่ ทำให้ feedback loop สั้นและ iteration เร็ว
+**Compile เร็ว (Fast compile)** การ compile เร็วเป็นเป้าหมายการออกแบบตั้งแต่แรก ไม่ใช่สิ่งที่คิดทีหลัง — Go ถูกสร้างขึ้นที่ Google เพื่อแก้ปัญหา build ของ C++ ที่ช้าเป็นนาทีซึ่งผู้สร้างภาษาเจอมาโดยตรง การ compile แม้แต่ codebase ขนาดใหญ่มักใช้เวลาแค่ไม่กี่วินาที ทำให้ loop แก้-compile-รัน สั้นและ iteration เร็ว
 
-**วิธีเดียวที่ชัดเจน (One Obvious Way)** — สำหรับปัญหาส่วนใหญ่ มักมีวิธีหนึ่งที่ Go แนะนำ ทำให้ codebase ขนาดใหญ่อ่านสม่ำเสมอ เพราะทุกคนเขียนด้วยรูปแบบเดียวกัน
+**Explicit มากกว่า Implicit (Explicit over implicit)** การแปลง type และการจัดการ error เป็นแบบ explicit ทั้งหมด ไม่มีอะไรเกิดขึ้นเบื้องหลังที่คุณไม่ได้เขียนเอง ค่าจะอยู่ที่ stack หรือ heap ถูกตัดสินใจโดย escape analysis ของ compiler ไม่ใช่จากสิ่งที่มองเห็นได้ตรงจุดเรียกใช้ — ดูบท Pointers เรื่องนี้ทำให้ code ตามรอยและตรวจสอบได้ง่าย
 
-**Explicit มากกว่า Implicit** — Go บังคับให้คุณระบุประเภทและการแปลงอย่างชัดเจน ไม่มี magic type coercion ที่ซ่อนอยู่
-
-นอกจากนี้ compiler ของ Go ยัง**ปฏิเสธ unused variable และ unused import ทันทีตอน compile** — ไม่ใช่แค่ warning แต่เป็น compile error ที่ทำให้ build ไม่ผ่าน กฎนี้บังคับให้ทุกไฟล์กระชับและทุก dependency มีเหตุผลที่ต้องใช้จริง
+**วิธีเดียวที่ชัดเจน (One obvious way)** เครื่องมือของ Go บังคับ code style เดียว (`gofmt`), module system เดียว (`go mod`), และ test runner เดียว (`go test`) การถกเถียงเรื่อง formatting, ลำดับ import, และโครงสร้าง project จึงไม่เกิดขึ้นเลย
 
 ## โมดูลนี้ครอบคลุมอะไร
 
@@ -91,7 +89,7 @@ func main() {
 - **"Go ใช้ได้แค่ backend server"** — Go ใช้งานได้กับ CLI tools, DevOps tooling, WebAssembly, embedded systems, และ data pipelines
 
 <Callout title="Explicit มากกว่า Implicit">
-Go บังคับให้คุณระบุประเภทและการแปลงอย่างชัดเจน ไม่มี coercion แบบ implicit เช่น คุณไม่สามารถบวก `int` กับ `float64` ได้โดยตรง ต้องแปลงก่อนเสมอ ทำให้ code อ่านง่ายขึ้นและลด bug ที่เกิดจาก type mismatch ได้อย่างมาก
+Go บังคับให้คุณระบุ type และการแปลงอย่างชัดเจน ไม่มี coercion แบบ implicit เช่น คุณไม่สามารถบวก `int` กับ `float64` ได้โดยตรง ต้องแปลงก่อนเสมอ ทำให้ code อ่านง่ายขึ้นและลด bug ที่เกิดจาก type mismatch ได้อย่างมาก
 </Callout>
 
 export const quizIndex = [

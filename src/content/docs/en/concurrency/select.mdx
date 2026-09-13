@@ -111,6 +111,20 @@ func main() {
 
 <Playground code={selectCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| select over multiple channels | handle several event sources at once | random selection when multiple cases are ready |
+| default case | non-blocking check | a tight loop spins the CPU |
+| select with context.Done() | easy cancellation | must be added to every select that might run long |
+
+## Common Misconceptions
+
+- **`select` behaves like `switch`** — `select` picks at random when multiple cases are ready, not first-match
+- **A `default` case makes `select` faster** — a tight loop around a `default` case spins the CPU and burns it
+- **`time.After` leaks because it spawns a new goroutine every call** — a timer never spawns a goroutine; before Go 1.23 an unstopped timer sat on the heap until it fired (a real leak — of the timer object, not a goroutine); since 1.23 the GC reclaims it even without `Stop`, but calling `time.After` repeatedly in a hot loop still allocates a new timer object every iteration — use `time.NewTimer` + `Reset` instead
+
 <Callout title="Gotcha: empty select blocks forever">
 A `select` with no cases — `select {}` — blocks the current goroutine forever. This is occasionally used intentionally to keep `main` alive (a leaner alternative to `for {}`), but it is more commonly a mistake. Always ensure your select has at least one reachable case or a `default`. A `select` with only a `default` and no channel cases executes the `default` immediately every time — useful for a non-blocking poll, but an infinite loop if placed inside `for` without additional logic.
 </Callout>

@@ -26,4 +26,20 @@ Work through modules in order. Each lesson contains a runnable playground — th
 | **[Standard Library](/go/en/stdlib/)** | `fmt`, `strings`, `io`, `net/http`, `encoding/json`, `time` — the stdlib you will use every day. | **Available now** |
 | **[Testing & Tooling](/go/en/testing-tooling/)** | `go test`, table-driven tests, benchmarks, the race detector, `go vet`, and `golangci-lint`. | **Available now** |
 
-Start with **[Basics & Syntax](/go/en/basics/)** if you are new to Go, or jump directly to **[Concurrency](/go/en/concurrency/)** — the module that makes Go unique.
+Start with **[Basics & Syntax](/go/en/basics/)** if you are new to Go, or jump directly to **[Concurrency](/go/en/concurrency/)** — the module that makes Go unique. Every term the course uses is collected in the **[Glossary](/go/en/glossary/)**.
+
+## Why Go?
+
+Every language trades something away. Knowing what Go gave up is as useful as knowing what it bought.
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Goroutines | Concurrency cheap enough to use freely — each starts with about 2 KB of stack and grows on demand | A scheduler between you and the OS, and leaks that no compiler will catch for you |
+| Garbage collection | No manual memory management, no use-after-free | Pauses you do not control, and allocation costs that only a profiler reveals |
+| Static binaries | Deploy one file, no runtime to install | Larger artifacts than an interpreted language ships |
+| Implicit interface satisfaction | Packages compose without importing each other | The compiler cannot tell you what a type was *meant* to satisfy |
+| A small language | The whole spec fits in an afternoon; unfamiliar code stays readable | Verbosity where other languages would give you a shortcut |
+
+> 💡 Real-world example
+>
+> Kubernetes, Docker, Prometheus, etcd and Terraform are all written in Go. That is not a coincidence: each is a long-running networked service that has to ship as a single binary, handle many connections at once, and stay readable across a large contributor base — exactly the shape Go was designed for.

@@ -33,10 +33,10 @@ Field ที่ขึ้นต้นด้วยตัวพิมพ์ให�
 คุณสามารถสร้างค่า struct ได้สองแบบ:
 
 ```go
-// Positional — ต้องเรียงตามลำดับ field ที่ประกาศไว้
+// Positional — order must match the field declaration order
 p := Point{3, 4}
 
-// Named fields — ลำดับไม่สำคัญ; field ที่ไม่ได้กำหนดจะได้ zero value
+// Named fields — order does not matter; unset fields get zero values
 u := User{Name: "Alice", Email: "alice@example.com"}
 ```
 
@@ -47,8 +47,8 @@ u := User{Name: "Alice", Email: "alice@example.com"}
 ใช้จุด (dot) เพื่ออ่านหรือเขียน field:
 
 ```go
-fmt.Println(u.Name)   // อ่าน
-u.Age = 30            // เขียน
+fmt.Println(u.Name)   // read
+u.Age = 30            // write
 ```
 
 ## Anonymous structs
@@ -87,7 +87,7 @@ type Address struct {
 type Person struct {
     Name    string
     Age     int
-    Address          // embedded — City และ Country ถูก promote
+    Address          // embedded — City and Country are promoted
 }
 ```
 

@@ -87,6 +87,21 @@ func main() {
 
 `errors.New` creates a simple error value from a static string. The function returns `nil` as the error on the happy path and a non-nil error on the failure path. The caller checks `if err != nil` immediately after the call — this is the idiom you will write hundreds of times in Go.
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| explicit error handling | every failure point is visible in the code | more verbose than try/catch |
+| error as value (not exception) | composable, predictable control flow | caller must check the error every time |
+| generics (Go 1.18+) | type-safe reuse without `interface{}` | more compile time, more complex syntax |
+| panic/recover | aborts immediately when an invariant is violated | not a general error-handling mechanism |
+
+## Common Misconceptions
+
+- **Go's error handling is too verbose** — the verbosity is intentional: every failure path is visible in the code, with no hidden exceptions.
+- **panic is an exception that should replace returning an error** — panic is for programmer errors only, not expected failures.
+- **generics make code slower** — Go generics use GC-shape stenciling: types that share the same pointer/interface shape share a single instantiation and pass type info through a dictionary at runtime, so generics can even be **slower** than an interface in that case; value types (`int`, structs) get their own dedicated code per type and stay fast.
+
 export const quizErrorsGenericsOverview = [
   {
     q: "In Go, what does a function signal by returning a non-nil error?",

@@ -69,6 +69,29 @@ func main() {
 
 <Playground code={stdlibIndexCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| Batteries-included standard library | No external package install for basic tasks | Opinionated API — less flexible than third-party alternatives |
+| `encoding/json` (reflection-based) | No code generation step | Slower than a code-gen approach such as easyjson |
+| `fmt` uses reflection | Print any value | Slower than a structured logger in production |
+| `net/http` built in | Deploy an HTTP server with zero dependencies | `net/http` gained method + wildcard routing in 1.22 (`GET /items/{id}`) — third-party routers now mostly add value through their middleware ecosystem |
+
+## Common Misconceptions
+
+- **The standard library fits every use case** — some jobs still need a third party: `log/slog` has been in the standard library since 1.21, but zap/zerolog (alternative structured logging), chi/gin (advanced routing), and gorm (an ORM) remain third-party.
+- **fmt.Println is too slow for production** — fmt only becomes a problem when logging is on a hot path; benchmark before you optimize.
+- **encoding/json is the only option for JSON in Go** — jsoniter, easyjson, and sonic are 2-5x faster for high-throughput use cases.
+
+> 💡 Real-world example
+>
+> **Kubernetes** relies mainly on the standard library — `net/http` for the API server, `encoding/json` for resource serialization, `time` for leases and timeouts.
+>
+> **Docker** ships as a single binary with no runtime to install — possible because Go compiles a static binary with the standard library baked in.
+>
+> **Prometheus** uses `net/http` for its `/metrics` endpoint and `time` for the scrape interval — no external HTTP framework needed.
+
 <Callout title="Standard library documentation">
 Every package in the standard library is documented at **pkg.go.dev/std**. Each page shows the package synopsis, all exported identifiers, and runnable examples. Bookmark it — it is the fastest way to check a function signature or find the right constant.
 </Callout>

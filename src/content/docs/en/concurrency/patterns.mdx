@@ -127,6 +127,24 @@ func main() {
 
 The `wg` here counts *workers*, not jobs: `Add(numWorkers)` runs once before the workers start, and each worker calls `Done()` exactly once — when its `for j := range jobs` loop exits because `jobs` was closed. That is what makes a separate `go func() { wg.Wait(); close(results) }()` necessary: something has to wait for every worker to finish and then close `results`, and it cannot be `main` itself, because `main` is busy draining `results` with `for r := range results` at the same time. On Go 1.25+ each worker's `wg.Add`/`go`/`defer wg.Done()` triple could instead be written as `wg.Go(func() { ... })`; the playground keeps the classic `Add`/`Done` form because its in-browser runner predates that method. Because three workers race to write into `results`, the values arrive in whatever order the scheduler happens to finish them — the code sorts before printing so the output is deterministic despite that.
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| worker pool | caps goroutine count, reuses workers | must tune pool size, more complex than goroutine-per-task |
+| fan-out / fan-in | parallel processing, aggregated results | must handle error collection and cancellation |
+| pipeline | modular stages, easy backpressure | adds per-item latency (buffering overhead) |
+| semaphore (buffered channel) | simple rate limiting | must drain the channel on cancellation |
+
+## Common Misconceptions
+
+- **A worker pool is always faster than goroutine-per-request** — it depends on the workload; an I/O-bound one can be faster with goroutine-per-request
+- **A pipeline must have a fixed number of stages** — Go pipelines are flexible; stages can be added or removed dynamically
+- **Unlimited fan-out is best** — no limit means resource exhaustion under high load
+
+> 💡 Real-world example
+>
+> **k8s.io/client-go** uses this same worker-queue pattern as the core of its controller framework, in `util/workqueue/queue.go` — multiple workers pull from the same queue to bound concurrent reconciliation.
 
 <Callout title="Gotcha: goroutine leaks when nobody drains a channel">
 If a goroutine is blocked sending to a channel and the receiver exits without draining it, the goroutine is **leaked** — it lives forever in the runtime, wasting memory and a goroutine slot. The fix is always to ensure either: (a) the channel is buffered large enough to accept all sends, (b) a receiver always drains the channel to `close`, or (c) the sender also selects on `ctx.Done()` so it can exit when the work is abandoned. In production, run `go tool pprof` on the goroutine profile to detect leaks.

@@ -44,6 +44,8 @@ Every type in Go has a **zero value** — the value a variable holds before any 
 | `float32`, `float64` | `0.0` |
 | `string` | `""` |
 | `bool` | `false` |
+| `rune` (alias for `int32`) | `0` |
+| `byte` (alias for `uint8`) | `0` |
 | pointer, slice, map, channel, function | `nil` |
 
 This guarantee means you can always use a variable safely after declaration, even without an explicit initialiser.
@@ -67,7 +69,7 @@ var ok  bool    = true
 
 ## Constants and iota
 
-Constants are declared with `const` and evaluated at compile time. A `const` block with `iota` creates auto-incrementing integer sequences — the idiomatic Go way to define enumerations:
+Constants are declared with `const` and evaluated at compile time. Until a constant is used, it has no fixed type — it is an **untyped constant** that adapts to whatever numeric type the context requires, so the same `const Pi = 3.14159` can be assigned directly to a `float32` or a `float64` variable with no conversion needed. A `const` block with `iota` creates auto-incrementing integer sequences — the idiomatic Go way to define enumerations:
 
 ```go
 const Pi = 3.14159
@@ -96,6 +98,9 @@ var y float64 = 2.5
 sum := float64(x) + y   // explicit conversion: 9.5
 
 var n int = int(sum)     // truncates: 9
+
+s := strconv.Itoa(n)       // int → string
+back, _ := strconv.Atoi(s) // string → int (error ignored with _)
 ```
 
 export const variablesCode = `package main
@@ -145,6 +150,21 @@ func main() {
 }`;
 
 <Playground code={variablesCode} />
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------------|---------|------|
+| Static typing | The compiler catches type mismatches before runtime | More type annotations to write |
+| Zero values | No uninitialised variables, no null-dereference surprise | A nil pointer or nil map can still panic — the zero value is only safe for types designed to be immediately usable |
+| No implicit conversion | No hidden precision loss | You must write `float64(x)` every time you convert |
+| `iota` enums | Concise way to build enumerations | No built-in string representation — you must write a `String()` method yourself |
+
+## Common Misconceptions
+
+- **"`int` is always 32-bit."** The size of `int` depends on `GOARCH` (amd64/arm64 = 64-bit, 386/arm = 32-bit), not the OS. Use `int32` or `int64` if you need a fixed size.
+- **"`var x = y` and `x := y` are always the same."** `:=` only works at function scope — it cannot be used at package scope.
+- **"The zero value of a pointer is 0."** The zero value of a pointer, slice, map, channel, or function is `nil`, not the number 0.
 
 <Callout title="No implicit numeric conversions">
 Go will not silently convert between numeric types. An expression like `int(3) + float64(1.5)` is a **compile error** — mismatched types `int` and `float64`. You must write `float64(3) + 1.5` when you want a float64 result. Converting a numeric *constant* is checked even more strictly: `int(1.5)` is also a compile error (`cannot convert 1.5 (untyped float constant) to type int`), because the constant 1.5 has no exact integer representation. The same conversion on a *variable* is allowed and truncates instead — `f := 1.5; n := 3 + int(f)` compiles and gives `n == 4`. This is stricter than most languages, but it prevents entire classes of subtle precision and overflow bugs that occur when a language silently widens or narrows values for you.

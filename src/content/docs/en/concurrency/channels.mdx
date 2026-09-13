@@ -106,6 +106,39 @@ func main() {
 
 <Playground code={channelsCode} />
 
+## Mental Model
+
+```text
+Unbuffered channel — rendez-vous point:
+
+G1 ──send──→ [channel] ←──recv── G2
+             (block)   (block)
+             G1 and G2 must meet
+
+Buffered channel (cap=3):
+
+G1 ──send──→ [_][_][_] ←──recv── G2
+             (blocks when full)
+             (blocks when empty)
+             G1/G2 run more independently
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| unbuffered channel | strongest synchronization guarantee | sending G blocks until a receiving G is ready |
+| buffered channel | decouples sender/receiver timing | must size the buffer correctly, can hide backpressure |
+| channel direction (`chan<-`, `<-chan`) | compile-time safety | more verbose function signatures |
+| close + range | easy completion notification | sending after close panics |
+
+## Common Misconceptions
+
+- **Channels are always faster than mutexes** — a channel has more overhead than a mutex for a simple counter
+- **Buffered channels prevent deadlock** — not always; deadlock can still happen if the buffer is full and there is no receiver
+- **`close(ch)` discards data in the buffer** — no; a receiver can still drain the remaining buffered values after close
+- **The receiver can close the channel** — only the sender should close a channel
+
 <Callout title="Gotcha: send on a closed channel panics">
 Calling `close(ch)` and then sending to `ch` causes a runtime panic. Receiving from a closed channel never panics — it returns the zero value for the type, and the comma-ok second return value will be `false`. The rule of thumb: only the **sender** closes a channel, and only when it knows it will send nothing more. Never close a channel from the receiver side.
 </Callout>

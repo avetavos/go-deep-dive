@@ -186,6 +186,25 @@ go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
 `go test` also runs a small subset of `go vet` before every run; since Go 1.27 that subset includes `stdversion`, which fails the build when you call a standard-library API newer than the `go` line in your `go.mod` — so a module that says `go 1.25` cannot silently depend on a 1.27 function.
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Table-driven tests | Many cases in one function | A table that grows too long gets hard to read |
+| `t.Run()` subtests | Isolates failures, plays well with `-run` and parallelism | Nested output is harder to scan |
+| `t.Parallel()` | Runs tests concurrently, faster suite | Easy to race on shared state if you are not careful |
+| `-race` flag | Catches race conditions automatically | 2-10x slower — use it in CI, not every local run |
+
+## Common Misconceptions
+
+- **`t.Fatal()` and `t.Error()` are the same** — `t.Fatal()` stops the test immediately; `t.Error()` marks it failed but lets the remaining assertions run.
+- **`go test -cover` at 100% means the code is correct** — coverage only measures whether a line ran, not whether the behavior is correct — a test with no assertions can still reach 100%.
+- **Test files must live in a separate package** — Go supports both same-package tests (white-box) and a `_test` package suffix (black-box, e.g. `cache_test`) — pick whichever fits the case.
+- **`t.Helper()` is optional** — `t.Helper()` makes a failure report point at the caller instead of the helper function — call it in every helper.
+
+> 💡 Real-world example
+>
+> **Go standard library** — `strconv/number_test.go` stores its test cases in a `parseInt64Tests` table and iterates it in `TestParseInt`; adding a new edge case is one row. Open it at `$(go env GOROOT)/src/strconv/number_test.go` on any machine with Go installed.
 
 <Callout title="Table-driven tests are the idiomatic Go pattern">
 You will see table-driven tests in virtually every serious Go codebase and in the Go standard library itself. They keep test logic in one place, make it trivial to add new cases, and produce readable failure messages. When you catch a bug, add a new row to the table — the test becomes a regression guard automatically.

@@ -185,6 +185,20 @@ func main() {
 
 <Playground code={controlFlowCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------------|---------|------|
+| One `for` keyword | Less to learn, consistent code | You must remember the three forms (C-style, condition-only, infinite) |
+| `for range` | Reads cleanly, no manual index bookkeeping | `range` copies each element's value — mutating it in the loop body does not affect the original slice |
+| `switch` with no automatic fallthrough | Fewer bugs from a forgotten `break` | You must write `fallthrough` explicitly on the rare occasion you want it |
+| `if` init statement | The `err` variable's scope stays as narrow as possible | The syntax looks unusual to developers coming from other languages |
+
+## Common Misconceptions
+
+- **"`range` copies the whole slice."** `range` only copies the value of each element, not the whole slice — and the slice header itself is evaluated only once, at the start of the loop.
+- **"Go `for` loops always need semicolons like C."** `for i := 0; i < n; i++` uses semicolons, but `for range` and the condition-only loop do not.
+
 <Callout title="`for` is Go's only loop keyword">
 Go has no `while`, `do-while`, `until`, or `loop` keyword. Every iteration — whether bounded, conditional, or infinite — uses `for`. The three forms (C-style; condition-only; no-condition) cover every pattern. If you want a `while` loop, write `for condition` with the init and post omitted. This deliberate constraint keeps the language smaller and every loop form immediately recognisable.
 </Callout>

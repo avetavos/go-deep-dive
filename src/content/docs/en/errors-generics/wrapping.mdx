@@ -175,6 +175,22 @@ func main() {
 
 <Playground code={wrappingCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| fmt.Errorf("%w", err) | wraps with context, errors.Is/As work | more verbose than a bare `return err` |
+| errors.Is() through the chain | matches a sentinel at any depth | slower than `==` (has to traverse the chain) |
+| custom error type | carries structured context (field, code, status) | you must maintain the type and implement Error() |
+| %v vs %w in fmt.Errorf | %v shows the message as a string, %w preserves the chain | easy to confuse the two verbs |
+
+## Common Misconceptions
+
+- **wrapping an error at every layer always adds useful context** — wrapping too deeply makes the error message hard to read; only wrap when the caller actually needs that context.
+- **errors.Unwrap walks the whole chain for you** — actually `errors.Unwrap` strips off only **one** wrapper per call, and returns `nil` for an error whose method is `Unwrap() []error` rather than `Unwrap() error` — for example the result of `errors.Join` or an `fmt.Errorf` with more than one `%w`. To walk the whole chain or find a match, use `errors.Is`/`errors.As` instead.
+- **%w in fmt.Errorf only supports one error** — Go 1.20+ supports `fmt.Errorf("msg: %w and %w", e1, e2)` to wrap multiple errors.
+- **errors.Is compares the message string** — errors.Is checks identity (`==`), not the message string — sentinel errors must be package-level vars.
+
 <Callout title="Wrap to add context; use errors.Is/As to inspect">
 Use `%w` (not `%v`) when you want callers to be able to introspect the error chain. `errors.Is` checks identity (sentinel errors). `errors.As` checks type (structured errors with fields). Use `%v` only when you are discarding the original error type on purpose.
 </Callout>

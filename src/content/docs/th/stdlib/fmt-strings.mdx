@@ -12,11 +12,11 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## fmt — Formatted I/O
 
-Package `fmt` คือจุดเริ่มต้นของ output เกือบทั้งหมดใน Go มีสามฟังก์ชันหลักที่ครอบคลุมกรณีการใช้งานส่วนใหญ่:
+Package `fmt` คือจุดเริ่มต้นของ output เกือบทั้งหมดใน Go มีสาม function หลักที่ครอบคลุมกรณีการใช้งานส่วนใหญ่:
 
 - `fmt.Println(args...)` — พิมพ์แต่ละ argument คั่นด้วยช่องว่าง แล้วขึ้นบรรทัดใหม่
 - `fmt.Printf(format, args...)` — พิมพ์โดยใช้ format string ที่มี verb
-- `fmt.Sprintf(format, args...)` — คืนค่า string ที่ฟอร์แมตแล้วแทนที่จะพิมพ์
+- `fmt.Sprintf(format, args...)` — คืนค่า string ที่ format แล้วแทนที่จะพิมพ์
 
 ### Format verbs
 
@@ -42,7 +42,7 @@ fmt.Printf("%T\n",  p)   // main.Person
 
 ## strings — การจัดการข้อความ
 
-Package `strings` ให้บริการฟังก์ชันสำหรับการค้นหา แยก รวม และแปลง string ใน Go นั้น string เป็น immutable UTF-8 byte sequence ดังนั้นฟังก์ชันเหล่านี้จะคืนค่า string ใหม่แทนที่จะแก้ไข in-place
+Package `strings` ให้บริการ function สำหรับการค้นหา แยก รวม และแปลง string ใน Go นั้น string เป็น immutable UTF-8 byte sequence ดังนั้น function เหล่านี้จะคืนค่า string ใหม่แทนที่จะแก้ไข in-place
 
 ```go
 s := "hello, world"
@@ -72,15 +72,15 @@ result := strings.TrimSpace(b.String()) // "item0 item1 item2 item3 item4"
 helper สามกลุ่มที่มาในรุ่นหลัง ๆ แทนที่การคำนวณ index ไปได้เยอะ:
 
 ```go
-// Go 1.18: แยกที่ separator ตัวแรก
+// Go 1.18: split on the FIRST separator
 key, val, ok := strings.Cut("user=alice", "=")      // "user", "alice", true
 
-// Go 1.27: แยกที่ separator ตัวสุดท้าย — แทนการเล่นท่า strings.LastIndex
+// Go 1.27: split on the LAST separator — replaces strings.LastIndex dances
 dir, file, ok := strings.CutLast("a/b/c.txt", "/") // "a/b", "c.txt", true
 
-// Go 1.24: iterator แบบ lazy — ไม่ allocate []string ตรงกลาง
+// Go 1.24: lazy iterators — no intermediate []string allocation
 text := "a=1\nb=2\n"
-for line := range strings.Lines(text) { fmt.Print(line) }              // เก็บ "\n" ไว้
+for line := range strings.Lines(text) { fmt.Print(line) }              // keeps the "\n"
 for part := range strings.SplitSeq("a,b,c", ",") { fmt.Println(part) }
 for word := range strings.FieldsSeq("  a  b ") { fmt.Println(word) }
 ```
@@ -91,7 +91,7 @@ for word := range strings.FieldsSeq("  a  b ") { fmt.Println(word) }
 
 ## strconv — การแปลงระหว่าง string และตัวเลข
 
-`strconv` แปลงระหว่าง string และ numeric type ฟังก์ชันที่พบบ่อยที่สุด:
+`strconv` แปลงระหว่าง string และ numeric type function ที่พบบ่อยที่สุด:
 
 ```go
 n, err   := strconv.Atoi("42")          // string → int
@@ -218,7 +218,7 @@ export const quizFmtStrings = [
     answer: 1
   },
   {
-    q: "strconv.Atoi(\"42\") คืนค่าประเภทใด?",
+    q: "strconv.Atoi(\"42\") คืนค่า type ใด?",
     options: [
       "string, error",
       "float64, error",

@@ -100,6 +100,26 @@ func main() {
 
 <Playground code={methodsCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Value receiver | Cheap to reason about, callable on non-addressable values | Copies the struct on every call |
+| Pointer receiver | Can mutate, no copy | Needs a nil-check, receiver must be addressable |
+| Method on a non-struct type | Extends the behavior of any named type in your package | Cannot add a method to a type from another package |
+
+## Common Misconceptions
+
+- **Value and pointer receivers are interchangeable.** A value receiver works on a copy — it cannot mutate the caller's original value.
+- **You can add a method to a type from another package.** Go does not allow this; wrap the type in a local named type or use embedding instead.
+- **`T` and `*T` have the same method set.** `*T`'s method set is larger — it also includes the pointer-receiver methods, which affects interface satisfaction.
+
+> 💡 Real-world example
+>
+> `net/http`: `http.ResponseWriter` is an interface — every `Handler` accepts it instead of a concrete type, which makes handlers easy to test with a mock.
+>
+> `*bytes.Buffer` and `*http.Client` both use a pointer receiver on every method because they hold internal state that methods mutate (buffered bytes, a connection pool) — consistency of receiver kind matters here.
+
 <Callout title="Use a pointer receiver when you need to mutate — and be consistent">
 A value receiver always operates on a copy, so mutations are silently discarded. Use a pointer receiver whenever a method must change the receiver's state. Once you choose pointer receivers for any method on a type, use them for all methods on that type to keep the method set coherent and avoid surprising interface-satisfaction gaps.
 </Callout>

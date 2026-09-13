@@ -1,6 +1,6 @@
 ---
 title: The Go Toolchain
-description: "go run, go build, go fmt, go vet, go doc — คำสั่งประจำวันที่ทำให้ Go productive และปรัชญา no-config ของ gofmt"
+description: "go run, go build, go fmt, go vet, go fix, go doc — คำสั่งประจำวันที่ทำให้ Go productive, สิ่งที่เปลี่ยนใน Go 1.25–1.27, และปรัชญา no-config ของ gofmt"
 sidebar:
   order: 5
 ---
@@ -98,7 +98,7 @@ go fix -diff ./...      # ดูตัวอย่างการเขียน
 
 ```bash
 go doc fmt                    # ภาพรวม package
-go doc fmt.Println            # ฟังก์ชันเฉพาะ
+go doc fmt.Println            # function เฉพาะ
 go doc net/http.Request       # type ใน sub-package
 go doc -all net/http          # ทุก exported symbol ใน package
 go doc -ex strings.Cut        # พิมพ์ example ที่รันได้ (Go 1.27)
@@ -120,7 +120,7 @@ pipeline สี่คำสั่งนี้ตรวจจับ formatting dr
 
 ## ข้อแลกเปลี่ยน
 
-| Tool | Benefit | Cost |
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
 |------|---------|------|
 | `go vet` | ตรวจหา common mistakes ก่อน runtime | ไม่ครอบคลุม semantic bug ทั้งหมด — ต้องใช้ staticcheck เพิ่ม |
 | `go build -race` | ตรวจหา race condition ใน binary | binary ช้าลง 2-10x — ไม่เหมาะ production build |

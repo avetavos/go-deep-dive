@@ -22,7 +22,7 @@ type Named struct {
 func (n Named) Describe() string { return "Name: " + n.Name }
 
 type Employee struct {
-    Named              // embedded — ไม่มีชื่อ field
+    Named              // embedded — no field name
     Department string
 }
 ```

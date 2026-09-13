@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## panic คืออะไร?
 
-**panic** หยุดการทำงานปกติของ goroutine ปัจจุบัน goroutine หยุดรันฟังก์ชันปัจจุบันทันที เริ่มคลาย call stack และรัน deferred functions ที่พบระหว่างทาง ถ้าไม่มีอะไรดักจับ panic โปรแกรมจะ crash พร้อมพิมพ์ stack trace
+**panic** หยุดการทำงานปกติของ goroutine ปัจจุบัน goroutine หยุดรัน function ปัจจุบันทันที เริ่มคลาย call stack และรัน deferred functions ที่พบระหว่างทาง ถ้าไม่มีอะไรดักจับ panic โปรแกรมจะ crash พร้อมพิมพ์ stack trace
 
 panic เกิดขึ้นสองแบบ:
 
@@ -43,7 +43,7 @@ defer func() {
 }()
 ```
 
-เมื่อ deferred function เรียก `recover()` และ goroutine กำลัง panic อยู่ `recover()` จะหยุด panic คืนค่า panic และให้ deferred function ทำงานต่อได้ปกติ หลังจาก deferred function คืนค่า **ฟังก์ชันที่ panic จะคืนค่า** ไม่ใช่กลับไปที่จุดที่เรียก `panic` แต่คืนค่าไปยัง caller ของฟังก์ชันนั้น พร้อม zero values สำหรับ named return variables (ยกเว้นจะกำหนดใน deferred function)
+เมื่อ deferred function เรียก `recover()` และ goroutine กำลัง panic อยู่ `recover()` จะหยุด panic คืนค่า panic และให้ deferred function ทำงานต่อได้ปกติ หลังจาก deferred function คืนค่า **function ที่ panic จะคืนค่า** ไม่ใช่กลับไปที่จุดที่เรียก `panic` แต่คืนค่าไปยัง caller ของ function นั้น พร้อม zero values สำหรับ named return variables (ยกเว้นจะกำหนดใน deferred function)
 
 การใช้งานทั่วไปคือแปลง panic เป็น error ที่ package boundary:
 
@@ -169,7 +169,7 @@ export const quizPanicRecover = [
     q: "หลังจาก recover() ดักจับ panic ใน deferred function แล้ว จะเกิดอะไรขึ้น?",
     options: [
       "การทำงานกลับไปที่บรรทัดที่เรียก panic()",
-      "deferred function ทำงานจนจบ แล้วฟังก์ชันที่ panic คืนค่าปกติ",
+      "deferred function ทำงานจนจบ แล้ว function ที่ panic คืนค่าปกติ",
       "โปรแกรมออกด้วย status 1",
       "goroutine ถูกยกเลิกเงียบ ๆ"
     ],

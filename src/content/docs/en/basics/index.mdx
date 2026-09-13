@@ -12,9 +12,11 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Go's design philosophy
 
-Go was designed around three ideas that shape everything you write in it.
+Go was designed around four ideas that shape everything you write in it.
 
-**Simplicity over cleverness.** The language has a small spec. There is deliberately no overloading, no default arguments, no implicit conversions, and no inheritance. When you read Go code written by someone else, it looks almost exactly like code you would have written yourself — that is intentional.
+**Simplicity over cleverness.** The language has a small spec — just 25 keywords in total. There is deliberately no overloading, no default arguments, no implicit conversions, and no inheritance. When you read Go code written by someone else, it looks almost exactly like code you would have written yourself — that is intentional.
+
+**Fast compile.** Fast compilation was a founding design goal, not an afterthought — Go was created at Google specifically to fix the slow, multi-minute C++ build times its authors were living with. Compiling even a large codebase typically takes seconds, which keeps the edit-compile-run feedback loop short and makes iteration fast.
 
 **Explicit over implicit.** Type conversions and error handling are explicit — nothing happens behind the scenes that you have not written. Where a value lives, stack or heap, is decided by the compiler's escape analysis, not by anything visible at the call site — see Pointers. This makes the code easy to trace and audit.
 
@@ -82,6 +84,21 @@ func main() {
 }`;
 
 <Playground code={indexCode} />
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------------|---------|------|
+| Static typing | The compiler catches bugs before runtime | Slightly more code than a dynamic language |
+| Only 25 keywords | Fast to learn, easy to read other people's code | Some features (e.g. early generics support) need workarounds |
+| Fast compile | Short feedback loop, fast iteration | No fully-featured REPL |
+| Garbage collection | No manual memory management | Unpredictable GC pauses in latency-critical systems |
+
+## Common Misconceptions
+
+- **"Go is just a modern C."** Go has garbage collection, goroutines, interfaces, and a module system — all fundamentally different from C.
+- **"Go has no OOP."** Go has structs, methods, and interfaces that support composition, but it has no class hierarchy like Java.
+- **"Go is only for backend servers."** Go is also used for CLI tools, DevOps tooling, WebAssembly, embedded systems, and data pipelines.
 
 <Callout title="Explicit is better than implicit">
 Go never promotes or coerces types silently. Adding an `int` and a `float64` is a compile error until you write the conversion yourself — `float64(a) + b`. This feels strict at first but eliminates an entire class of precision bugs that are common in languages with implicit numeric widening.

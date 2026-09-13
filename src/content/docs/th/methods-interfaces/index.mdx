@@ -82,7 +82,7 @@ func main() {
 >
 > **Go standard library** ใช้ io.Reader และ io.Writer เป็น interface หลัก — os.File, bytes.Buffer, net.Conn, http.Body ล้วน implement สิ่งเดียวกัน ทำให้ compose ได้ทั่ว ecosystem
 >
-> **Kubernetes** ใช้ runtime.Object interface กับทุก Kubernetes resource — controller เขียนครั้งเดียวทำงานกับ Pod, Deployment, Service ได้ทุก type
+> **Kubernetes** ใช้ interface `runtime.Object` (`k8s.io/apimachinery/pkg/runtime`) กับทุก Kubernetes resource — controller เขียนครั้งเดียวทำงานกับ Pod, Deployment, Service ได้ทุก type
 
 <Callout title="ข้อคิดสำคัญ">
 `Rectangle` ไม่เคยพูดว่า `implements Sizer` — แค่มี method ที่ชื่อและ signature ถูกต้อง นั่นคือทั้งหมดที่ Go ต้องการ ถ้า method set ตรงกัน interface ก็ถูกตอบสนองโดยอัตโนมัติ ณ compile time

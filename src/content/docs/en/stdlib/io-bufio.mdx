@@ -130,6 +130,42 @@ func main() {
 
 <Playground code={ioBufioCode} />
 
+## Mental Model
+
+```text
+io.Reader interface:
+  Source → [Read(p []byte)] → buffer p → consumer
+
+Chaining readers:
+  os.File → bufio.NewReader → gzip.NewReader → json.NewDecoder
+  ↓          ↓                ↓                ↓
+  raw        buffered         decompressed     decoded
+
+bufio.Writer batching:
+  small writes → [buffer 4 KB] → one flush → os.File
+  many syscalls                  one syscall
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| bufio.Reader | Fewer syscalls (batches reads) | Extra memory for the buffer |
+| bufio.Writer | Fewer syscalls (batches writes) | Must call Flush() before close |
+| io.Reader chain | Composable, zero-copy pipeline | Error handling gets complex when the chain is long |
+| io.Copy | Efficient transfer between Reader and Writer | Cannot inspect the data in transit |
+
+## Common Misconceptions
+
+- **An unbuffered read is fast enough** — every `Read()` call with no buffer is one syscall — very slow for many small reads.
+- **bufio.Writer flushes automatically** — it does not; you must call `Flush()` yourself before closing or sending the response, or the data can be lost.
+- **io.Reader always reads exactly n bytes** — `Read()` may return fewer than `n` bytes; loop until you have what you need when you require an exact read.
+- **strings.NewReader and bytes.NewReader are the same** — `strings.NewReader` is for a string literal; `bytes.NewReader` is for a `[]byte` you already have.
+
+> 💡 Real-world example
+>
+> **Go HTTP servers**: `net/http` automatically wraps the TCP connection in a `bufio.Reader` — request parsing does not need a syscall per byte.
+
 <Callout title="Program to io.Reader and io.Writer, not to concrete types">
 Write your functions to accept `io.Reader` or `io.Writer` rather than `*os.File` or `*http.Request`. This single habit makes your code universally testable — pass a `strings.NewReader` in tests, a real file in production, and an HTTP body in handlers, all without touching the function. It also means your function participates in the entire ecosystem of Go I/O composition: `bufio.NewReader`, `io.MultiReader`, `io.LimitReader`, `gzip.NewReader`, and so on.
 </Callout>

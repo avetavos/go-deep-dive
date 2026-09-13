@@ -15,9 +15,9 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 **Channel** คือท่อส่งข้อมูลแบบ typed ที่ goroutines ใช้สื่อสาร การส่งค่าเข้า channel และรับจาก channel เป็นสองคำสั่งที่ถ่ายโอนทั้งข้อมูลและการ synchronize ในขั้นตอนเดียว
 
 ```go
-ch := make(chan int)   // unbuffered channel ของ int
-ch <- 42              // ส่ง (บล็อกจนกว่า receiver พร้อม)
-v  := <-ch            // รับ (บล็อกจนกว่า sender พร้อม)
+ch := make(chan int)   // unbuffered channel of int
+ch <- 42              // send  (blocks until a receiver is ready)
+v  := <-ch            // receive (blocks until a sender is ready)
 ```
 
 Type system บังคับสิ่งที่ไหลผ่าน channel `chan string` ไม่ยอมรับ `int`
@@ -50,7 +50,7 @@ Sender เรียก `close(ch)` เพื่อบอกว่าจะไม
 
 ```go
 close(ch)
-for v := range ch { // exit เมื่อ ch ถูกปิดและว่าง
+for v := range ch { // exits when ch is closed and empty
     fmt.Println(v)
 }
 ```
@@ -61,8 +61,8 @@ Receive expression สามารถ return boolean ตัวที่สอง
 
 ```go
 v, ok := <-ch
-// ok == true  → v เป็นค่าจริง
-// ok == false → channel ถูกปิดและดึงออกหมดแล้ว v เป็น zero value
+// ok == true  → v is a real value
+// ok == false → channel is closed and drained; v is the zero value
 ```
 
 export const channelsCode = `package main

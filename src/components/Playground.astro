@@ -15,13 +15,32 @@ const { code, lang = 'go' } = Astro.props;
     <a class="pg__run" data-open href="https://go.dev/play/" target="_blank" rel="noopener">Open in Playground</a>
   </div>
   <Code code={code} lang={lang} />
-  <p class="pg__hint" data-hint hidden>Compiling on go.dev (Go 1.27)… offline? an in-browser runtime (~8 MB, Go 1.26) is used instead</p>
+  <p class="pg__hint" data-hint hidden></p>
   <pre class="pg__err" data-err hidden><code></code></pre>
   <pre class="pg__out" data-out hidden><code></code></pre>
 </div>
 
 <script>
   import { runGo } from './go-runner';
+
+  const TH = document.documentElement.lang?.startsWith('th');
+  const T = TH
+    ? {
+        run: 'รัน ▸',
+        running: 'กำลังรัน…',
+        hint: 'กำลัง compile บน go.dev (Go 1.27)… ถ้าออฟไลน์ จะใช้ runtime ในเบราว์เซอร์แทน (~8 MB, Go 1.26)',
+        noOutput: '(ไม่มี output)',
+        failed: 'รันไม่สำเร็จ — ลองกด "Open in Playground"',
+        copied: 'คัดลอกแล้ว — วางในหน้า playground',
+      }
+    : {
+        run: 'Run ▸',
+        running: 'Running…',
+        hint: 'Compiling on go.dev (Go 1.27)… offline? an in-browser runtime (~8 MB, Go 1.26) is used instead',
+        noOutput: '(no output)',
+        failed: 'Run failed — try "Open in Playground".',
+        copied: 'Copied — paste it into the playground',
+      };
 
   document.querySelectorAll<HTMLElement>('.pg').forEach((pg) => {
     if (pg.dataset.wired) return;
@@ -33,12 +52,13 @@ const { code, lang = 'go' } = Astro.props;
     const hint = pg.querySelector<HTMLElement>('[data-hint]');
     const errBox = pg.querySelector<HTMLElement>('[data-err]');
     const outBox = pg.querySelector<HTMLElement>('[data-out]');
+    if (hint) hint.textContent = T.hint;
+    if (runBtn) runBtn.textContent = T.run;
 
     openBtn?.addEventListener('click', () => {
       navigator.clipboard?.writeText(code);
-      const th = document.documentElement.lang?.startsWith('th');
       const label = openBtn.textContent;
-      openBtn.textContent = th ? 'คัดลอกแล้ว — วางในหน้า playground' : 'Copied — paste it into the playground';
+      openBtn.textContent = T.copied;
       setTimeout(() => {
         openBtn.textContent = label;
       }, 2500);
@@ -46,7 +66,7 @@ const { code, lang = 'go' } = Astro.props;
 
     runBtn?.addEventListener('click', async () => {
       runBtn.disabled = true;
-      runBtn.textContent = 'Running…';
+      runBtn.textContent = T.running;
       if (hint) hint.hidden = false;
       if (errBox) errBox.hidden = true;
       if (outBox) outBox.hidden = true;
@@ -57,17 +77,17 @@ const { code, lang = 'go' } = Astro.props;
           errBox.hidden = false;
         }
         if (outBox) {
-          outBox.querySelector('code')!.textContent = (data.output ?? '') || '(no output)';
+          outBox.querySelector('code')!.textContent = (data.output ?? '') || T.noOutput;
           outBox.hidden = false;
         }
       } catch {
         if (errBox) {
-          errBox.querySelector('code')!.textContent = 'Run failed — try "Open in Playground".';
+          errBox.querySelector('code')!.textContent = T.failed;
           errBox.hidden = false;
         }
       } finally {
         runBtn.disabled = false;
-        runBtn.textContent = 'Run ▸';
+        runBtn.textContent = T.run;
         if (hint) hint.hidden = true;
       }
     });

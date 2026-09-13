@@ -1,0 +1,130 @@
+---
+title: Glossary
+description: 'Every term this course uses, in one place — runtime, memory, concurrency, types, errors, generics, iterators, stdlib, and tooling.'
+sidebar:
+  order: 99
+---
+
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+Go's vocabulary is small but precise, and several terms mean something narrower here than they do in other languages. When a lesson uses a word you are unsure about, look it up here.
+
+## Core runtime terms
+
+| Term | Meaning |
+|------|---------|
+| Goroutine | A unit of concurrent work, scheduled by the Go runtime rather than the operating system. |
+| Scheduler | The runtime component that maps goroutines onto OS threads. |
+| Runtime | The Go code linked into every binary that provides scheduling, memory management, and garbage collection. |
+| Stack | Memory for local variables and the call chain. Each goroutine starts with a small one and grows it on demand. |
+| Heap | Memory for values that escape their function's stack frame. Escape analysis decides what goes here — not the value's lifetime in any intuitive sense. |
+| Garbage collector (GC) | Reclaims unreachable heap memory concurrently with your program. |
+| Escape analysis | The compiler's decision about whether a value can stay on the stack or must be heap-allocated. |
+| Context switch | Swapping one goroutine for another on a thread. |
+| Preemption | Forcing a running goroutine to yield so others can run. |
+
+## Memory and allocation
+
+| Term | Meaning |
+|------|---------|
+| Memory allocation | Reserving memory for a value. |
+| Memory layout | How a value's parts are arranged in memory, including padding. |
+| Heap allocation | An allocation the garbage collector must later reclaim. |
+| Stack allocation | An allocation freed automatically when the function returns. |
+| Stack growth | The runtime copying a goroutine's stack to a larger one when it runs out. |
+| Pointer | A value holding the address of another value. Go has no pointer arithmetic. |
+| Work stealing | An idle processor taking queued goroutines from a busy one. |
+
+## Concurrency primitives
+
+| Term | Meaning |
+|------|---------|
+| Channel | A typed conduit that passes values between goroutines and synchronizes them. |
+| Mutex | A lock giving one goroutine at a time access to shared state. |
+| RWMutex | A lock allowing many concurrent readers or one writer. |
+| Atomic | An operation other goroutines observe as indivisible — never half-done. |
+| WaitGroup | A counter used to wait for a set of goroutines to finish. |
+| Select | Waits on several channel operations at once and proceeds with one that is ready. |
+| Deadlock | Goroutines waiting on each other such that none can proceed. |
+| Race condition | Two goroutines touching the same state concurrently with no synchronization, at least one of them writing. |
+| Context | A value carrying a deadline, a cancellation signal, and request-scoped values across API boundaries. |
+
+## The GMP model
+
+| Symbol | Meaning |
+|--------|---------|
+| G | Goroutine — the unit of work. |
+| M | Machine — an OS thread. |
+| P | Processor — the scheduling context that lets an M run Go code. `GOMAXPROCS` sets how many exist. |
+
+## Type system
+
+| Term | Meaning |
+|------|---------|
+| Interface | A named set of method signatures. |
+| Satisfy | A type has all of an interface's methods and can therefore be used as it — no declaration required. |
+| Type assertion | Extracting or testing the concrete type inside an interface value. Not a conversion. |
+| Method set | The methods bound to a type, which decides the interfaces it satisfies. Pointer and value receivers give different sets. |
+| Embedding | Including one type as an unnamed field of another so its fields and methods are promoted. |
+| Promote | An embedded type's field or method becoming callable directly on the outer type. |
+| Zero value | The value every type gets when declared without an initializer. |
+| Reflection | Inspecting types and values at runtime. |
+| Assembly | The assembly language the Go compiler emits. |
+| Compiler | Translates Go source into machine code. |
+| Linker | Combines compiled packages into a single executable. |
+
+## Errors
+
+| Term | Meaning |
+|------|---------|
+| Sentinel error | A predeclared error value callers compare against, such as `io.EOF`. |
+| Wrap / unwrap | Enclosing an error inside another with `%w` so the chain survives for `errors.Is` and `errors.As`. |
+| Error chain | The nested sequence of wrapped errors. |
+| Panic | Stopping normal execution and unwinding the call stack. |
+| Recover | Capturing a panic inside a deferred function so execution can continue. |
+
+## Generics
+
+| Term | Meaning |
+|------|---------|
+| Type parameter | A type variable declared in square brackets on a function or type. |
+| Constraint | An interface that limits what a type parameter may be. |
+| Type set | The set of types a constraint permits. |
+| Instantiate | Supplying concrete types to a generic function or type. |
+| Type inference | The compiler deducing type arguments from the values you pass. |
+
+## Iterators
+
+| Term | Meaning |
+|------|---------|
+| Iterator | A function `range` can loop over, matching `iter.Seq` or `iter.Seq2`. |
+| Yield | The callback an iterator calls to hand out each value. |
+| Push / pull | A push iterator drives the loop body; a pull iterator (`iter.Pull`) lets the caller ask for the next value. |
+
+## Standard library
+
+| Term | Meaning |
+|------|---------|
+| Marshal / unmarshal | Converting Go values to JSON and back. |
+| Struct tag | A string after a field that packages such as `encoding/json` read through reflection. |
+| Reader / Writer | The one-method interfaces the whole standard library composes around — `io.Reader` and `io.Writer`. |
+| Buffer | An in-memory staging area that reduces the number of system calls. |
+| Duration | A span of time as an `int64` count of nanoseconds, with its own type. |
+| Layout | The reference-time string Go uses instead of format specifiers, for example `2006-01-02`. |
+
+## Testing and tooling
+
+| Term | Meaning |
+|------|---------|
+| Table-driven test | Cases held in a slice of structs and run in a loop. |
+| Subtest | A nested test created with `t.Run`, separately named and separately runnable. |
+| Benchmark | A measurement of time and allocations per operation. |
+| Coverage | The share of statements a test run executed. |
+| Race detector | A runtime tool that reports data races that actually occurred during a run. |
+| Static analysis | Checking code without running it, as `go vet` and `staticcheck` do. |
+| Module | The unit of versioning and distribution, defined by one `go.mod`. |
+| Package | The unit of compilation and name scoping — one directory. |
+| Checksum | The hash in `go.sum` that proves a dependency was not modified. |
+| MVS | Minimal Version Selection — Go picks the lowest version satisfying every requirement. |
+
+<ProgressTracker client:visible id="en/glossary" />

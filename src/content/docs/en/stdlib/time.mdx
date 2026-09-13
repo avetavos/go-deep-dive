@@ -134,6 +134,28 @@ func main() {
 
 <Playground code={timeCode} />
 
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------|---------|------|
+| time.Time as a value type | Immutable, safe to copy and share | Every Time carries a timezone you must account for |
+| time.Duration (int64 nanoseconds) | Unambiguous arithmetic — `5*time.Second` | Must multiply by a named constant, not just write "5" |
+| Reference layout ("2006-01-02") | Self-documenting once you know the example | Different from other languages' YYYY/MM/DD — you have to memorize the magic numbers |
+
+## Common Misconceptions
+
+- **time.Now() always returns UTC** — it depends on the machine's local timezone; call `time.Now().UTC()` when you need UTC explicitly.
+- **time.Sleep(1 * time.Second) is precise** — the OS scheduler may sleep longer than requested, e.g. 1.05s — it is not hard real-time.
+- **time.Equal is the same as ==** — `time.Equal` compares the instant in time (ignoring timezone); `==` compares the entire memory layout, timezone included.
+
+> 💡 Real-world example
+>
+> **net/http.Server**: `http.Server{ReadHeaderTimeout: 5 * time.Second}` sets a timeout as a `time.Duration` to stop a slow-header client from holding a connection open.
+>
+> **context.WithTimeout**: creates a deadline that must propagate across function calls — for example, calling a downstream service and cancelling it automatically when time runs out.
+>
+> **net/http.TimeoutHandler**: derives a `context.WithTimeout` from `r.Context()` and selects on `ctx.Done()` to cut off a request when the handler runs too long.
+
 <Callout title="Go's reference time — Mon Jan 2 15:04:05 MST 2006">
 The reference moment is not arbitrary. Each component is a distinct number: month=1, day=2, hour=15 (3 PM), minute=4, second=5, year=2006. In 12-hour clock order: 1/2/3:4:5 PM '06. This makes the layout self-documenting — you write what you want the output to look like using those exact digits. A common mistake is using `YYYY` or `DD` from other languages; those are just the letters Y, M, D to Go and will appear literally in the output.
 </Callout>

@@ -148,6 +148,41 @@ func main() {
 
 <Playground code={pointersCode} />
 
+## Mental Model
+
+```text
+Stack                        Heap (GC-managed)
+─────────────────────        ────────────────────────
+x    [   42   ]  ←──┐
+p    [ 0xC001 ]─────┘
+                             ┌──────────────────────┐
+cfg  [ 0xC002 ]──────────────→  Config{Workers: 4}  │
+─────────────────────        └──────────────────────┘
+
+stack allocation: fast, the GC never touches it
+heap allocation:  the GC has to manage it, adding a little latency
+Escape analysis decides whether a variable lives on the stack or the heap
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|-------|---------|------|
+| pointer to large struct | avoids a copy — only 8 bytes (pointer size) cross the call | may escape to the heap → more GC pressure |
+| value receiver | clearly non-mutating, cache-friendly | copies the struct on every method call |
+| pointer receiver | can mutate, no copy | needs a nil check, can introduce aliasing bugs |
+| `*T = nil` as optional | represents "no value" without a sentinel | must nil-check before every dereference |
+
+## Common Misconceptions
+
+- **Pointers in Go are as dangerous as in C** — Go has no pointer arithmetic and the GC manages lifetime for you — use-after-free is impossible. But a pointer that still points at an old element after `append` reallocates the backing array is still a real bug (see [Slices](/go/en/types-data/slices/)).
+- **A pointer is always faster than a value** — a pointer can make a variable escape to the heap → more work for the GC → higher latency.
+- **A nil pointer is the same problem as a NullPointerException in Java** — Go's panic carries a clear stack trace, and nil is trivial to check for with `if p == nil`.
+
+> 💡 Real-world example
+>
+> The Go standard library uses pointer receivers for stateful types, e.g. `(*bytes.Buffer).Write()` — so it can maintain internal state across calls.
+
 <Callout title="Go has pointers but no pointer arithmetic">
 Go gives you full pointer capability — take addresses, dereference, pass pointers to functions — but deliberately removes pointer arithmetic. You cannot add an integer to a pointer to step through memory. No pointer arithmetic keeps pointers always pointing at a real Go value; the garbage collector rules out use-after-free and bounds checks rule out buffer overflows. If you need low-level memory operations, the `unsafe` package exists, but it should be reserved for FFI and runtime-level work.
 </Callout>

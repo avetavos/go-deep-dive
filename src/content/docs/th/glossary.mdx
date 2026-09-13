@@ -5,8 +5,9 @@ sidebar:
   order: 99
 ---
 
-import Callout from '../../../components/Callout.astro';
 import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+หน้านี้คือข้อตกลงเรื่องคำศัพท์ของทั้ง course เราคง term ภาษาอังกฤษไว้ตามที่ developer ไทยใช้จริงในการทำงาน และอธิบายความหมายเป็นภาษาไทย เวลาอ่านบทเรียนแล้วเจอคำที่ไม่คุ้น ให้กลับมาดูที่นี่
 
 ## Core Runtime Terms
 
@@ -16,9 +17,9 @@ import ProgressTracker from '../../../components/ProgressTracker.tsx';
 | Scheduler | scheduler | จัดสรร goroutine ลง OS thread |
 | Runtime | runtime | ระบบ runtime ของ Go |
 | Stack | stack | memory สำหรับ local variable และ function call |
-| Heap | heap | memory สำหรับ object ที่อายุยาว |
+| Heap | heap | memory สำหรับค่าที่ escape ออกจาก stack — ตัดสินโดย escape analysis ไม่ใช่ "ค่าที่อายุยาว" |
 | Garbage Collector | Garbage Collector / GC | ทำความสะอาด heap อัตโนมัติ |
-| Escape Analysis | Escape Analysis | ตัดสินใจว่า object อยู่ stack หรือ heap |
+| Escape Analysis | Escape Analysis | compiler ตัดสินว่าค่าอยู่ stack ได้หรือต้องไป heap |
 | Context Switch | context switch | สลับระหว่าง goroutine |
 | Preemption | preemption | บังคับหยุด goroutine เพื่อให้ตัวอื่นทำงาน |
 
@@ -41,11 +42,12 @@ import ProgressTracker from '../../../components/ProgressTracker.tsx';
 | Channel | channel | ท่อสื่อสารระหว่าง goroutine |
 | Mutex | mutex | lock สำหรับ mutual exclusion |
 | RWMutex | RWMutex | read/write mutex |
-| Atomic | atomic | operation ที่ไม่สามารถถูก interrupt ได้ |
+| Atomic | atomic | operation ที่ goroutine อื่นเห็นเป็นหน่วยเดียว แบ่งครึ่งไม่ได้ |
 | WaitGroup | WaitGroup | รอ goroutine หลายตัวให้เสร็จ |
-| Select | select | รับจาก channel หลายตัวพร้อมกัน |
+| Select | select | รอหลาย channel operation พร้อมกัน แล้วทำงานกับตัวที่พร้อมหนึ่งตัว |
 | Deadlock | deadlock | goroutine รอกันเองไม่มีที่สิ้นสุด |
-| Race Condition | race condition | goroutine หลายตัวเข้าถึง shared state พร้อมกัน |
+| Race Condition | race condition | goroutine หลายตัวเข้าถึง shared state พร้อมกันโดยไม่มีการ synchronize |
+| Context | context | ค่าที่พก deadline, cancellation และ request-scoped value ข้าม function |
 
 ## GMP Model
 
@@ -59,12 +61,71 @@ import ProgressTracker from '../../../components/ProgressTracker.tsx';
 
 | English | Thai Style | หมายเหตุ |
 |---------|-----------|---------|
-| Interface | interface | ชุด method signatures |
+| Interface | interface | ชุดของ method signature ที่มีชื่อ |
+| Satisfy | satisfy / ตอบสนอง | type มี method ครบตามที่ interface กำหนด จึงใช้แทนกันได้ โดยไม่ต้องประกาศ |
 | Type Assertion | type assertion | ดึงหรือตรวจ concrete type ที่อยู่ใน interface value (ไม่ใช่ conversion) |
+| Method Set | method set | ชุด method ที่ผูกกับ type หนึ่ง ตัดสินว่า type นั้น satisfy interface ไหน |
+| Embedding | embedding | ใส่ type หนึ่งเป็น field ไม่มีชื่อในอีก type เพื่อ promote field และ method |
+| Promote | promote | field หรือ method ของ embedded type ถูกเรียกผ่าน outer type ได้โดยตรง |
+| Zero Value | zero value | ค่าเริ่มต้นของทุก type เมื่อประกาศโดยไม่กำหนดค่า |
 | Reflection | reflection | ตรวจสอบ type ณ runtime |
 | Assembly | assembly | ภาษา assembly ที่ Go compiler ผลิต |
 | Compiler | compiler | แปลง Go source เป็น binary |
 | Linker | linker | รวม object files เข้าด้วยกัน |
+
+## Errors
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Sentinel Error | sentinel error | error ค่าคงที่ที่ประกาศไว้ให้ caller เทียบ เช่น `io.EOF` |
+| Wrap / Unwrap | wrap / unwrap | ห่อ error เดิมไว้ข้างในด้วย `%w` เพื่อเก็บ chain ไว้ให้ `errors.Is`/`errors.As` |
+| Error Chain | error chain | ลำดับ error ที่ถูก wrap ซ้อนกัน |
+| Panic | panic | หยุดการทำงานปกติแล้วคลาย call stack |
+| Recover | recover | รับค่าจาก panic ใน deferred function เพื่อกลับสู่การทำงานปกติ |
+
+## Generics
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Type Parameter | type parameter | ตัวแปร type ที่ประกาศในวงเล็บเหลี่ยมของ function หรือ type |
+| Constraint | constraint | interface ที่จำกัดว่า type parameter เป็นอะไรได้บ้าง |
+| Type Set | type set | เซตของ type ที่ constraint หนึ่งอนุญาต |
+| Instantiate | instantiate | ระบุ type จริงให้ generic type หรือ function |
+| Type Inference | type inference | compiler เดา type argument ให้จาก argument ที่ส่งเข้าไป |
+
+## Iterators
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Iterator | iterator | function ที่ `range` วนได้ ตาม signature `iter.Seq` หรือ `iter.Seq2` |
+| Yield | yield | callback ที่ iterator เรียกเพื่อส่งค่าออกมาแต่ละรอบ |
+| Push / Pull | push / pull | push iterator ส่งค่าให้ body; pull iterator (`iter.Pull`) ให้ caller ดึงค่าเอง |
+
+## Standard Library
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Marshal / Unmarshal | marshal / unmarshal | แปลงค่า Go เป็น JSON และแปลงกลับ |
+| Struct Tag | struct tag | string หลัง field ที่ package อย่าง `encoding/json` อ่านผ่าน reflection |
+| Reader / Writer | Reader / Writer | interface หนึ่ง method ที่ทั้ง stdlib ใช้ร่วมกัน (`io.Reader`, `io.Writer`) |
+| Buffer | buffer | ที่พักข้อมูลชั่วคราวเพื่อลดจำนวน syscall |
+| Duration | Duration | ช่วงเวลาเป็น `int64` นาโนวินาที มี type ของตัวเอง |
+| Layout | layout | string ตัวอย่างเวลาที่ Go ใช้แทน format specifier เช่น `2006-01-02` |
+
+## Testing & Tooling
+
+| English | Thai Style | หมายเหตุ |
+|---------|-----------|---------|
+| Table-Driven Test | table-driven test | เก็บ case เป็น slice ของ struct แล้ววนรันทีละ case |
+| Subtest | subtest | test ย่อยที่สร้างด้วย `t.Run` ตั้งชื่อและรันแยกได้ |
+| Benchmark | benchmark | วัดเวลาและ allocation ต่อ operation |
+| Coverage | coverage | สัดส่วน statement ที่ test แตะถึง |
+| Race Detector | race detector | เครื่องมือ runtime ที่รายงาน data race ที่เกิดขึ้นจริงระหว่างรัน |
+| Static Analysis | static analysis | ตรวจ code โดยไม่รัน เช่น `go vet`, `staticcheck` |
+| Module | module | หน่วยของการ version และ distribute code มี `go.mod` หนึ่งไฟล์ |
+| Package | package | หน่วยของการ compile และ scope ชื่อ เท่ากับหนึ่ง directory |
+| Checksum | checksum | ค่า hash ใน `go.sum` ที่ยืนยันว่า dependency ไม่ถูกแก้ |
+| MVS | MVS | Minimal Version Selection — Go เลือก version ต่ำสุดที่ทุก requirement ยอมรับ |
 
 ## เมื่อ **ไม่** ควรใช้ literal Thai translation
 
@@ -78,5 +139,11 @@ import ProgressTracker from '../../../components/ProgressTracker.tsx';
 | หน่วยความจำแบบกองซ้อน | stack |
 | หน่วยความจำแบบฮีป | heap |
 | ตัวจัดกำหนดการ | scheduler |
+| ฟังก์ชัน | function |
+| ประเภทข้อมูล | type |
+| ผู้เรียก | caller |
+| ยกระดับ | promote |
+| ฟอร์แมต | format |
+| ตอบสนอง (นอกบริบท interface) | satisfy |
 
 <ProgressTracker client:visible id="th/glossary" />

@@ -79,11 +79,11 @@ func sum(nums ...int) int {
     return total
 }
 
-sum(1, 2, 3)       // ส่งแต่ละตัว
-sum(1, 2, 3, 4, 5) // จำนวนเท่าไรก็ได้
+sum(1, 2, 3)       // individual args
+sum(1, 2, 3, 4, 5) // any number of args works
 
 existing := []int{1, 2, 3}
-sum(existing...)   // spread slice ด้วย ...
+sum(existing...)   // spread a slice with ...
 ```
 
 ## defer
@@ -96,32 +96,33 @@ func readFile(path string) error {
     if err != nil {
         return err
     }
-    defer f.Close()   // จะถูกเรียกเมื่อ readFile return ไม่ว่าจะ return ปกติหรือ error
-    // ... ใช้ f
+    defer f.Close() // runs when readFile returns
+
+    // ... work with f ...
 }
 ```
+
+หลาย `defer` ใน function เดียวจะ execute แบบ LIFO (last in, first out)
 
 **Arguments ของ deferred call ถูก evaluate ทันที** ณ จุดที่ `defer` statement ถูก execute ไม่ใช่ตอน call จริง:
 
 ```go
 i := 0
-defer fmt.Println(i)   // บันทึกค่า 0 ณ ตรงนี้
+defer fmt.Println(i) // captures i's value (0) right now
 i = 100
-// เมื่อ function return จะ print "0" ไม่ใช่ "100"
+// when the function returns, this prints "0", not "100"
 ```
-
-หลาย `defer` ในฟังก์ชันเดียวจะ execute แบบ LIFO (last in, first out)
 
 ## Closures และ First-Class Functions
 
 Functions ใน Go เป็น first-class values — สามารถ assign ให้ตัวแปร, ส่งเป็น argument, หรือ return จาก function ได้:
 
 ```go
-// Function เป็น value ใน variable
+// Function as a value in a variable
 double := func(x int) int { return x * 2 }
 fmt.Println(double(5)) // 10
 
-// Function เป็น parameter
+// Function as a parameter
 apply := func(f func(int) int, x int) int { return f(x) }
 fmt.Println(apply(double, 3)) // 6
 ```
@@ -132,14 +133,14 @@ fmt.Println(apply(double, 3)) // 6
 func makeCounter() func() int {
     count := 0
     return func() int {
-        count++      // capture ตัวแปร count จาก makeCounter
+        count++ // captures count from makeCounter
         return count
     }
 }
 
 counter := makeCounter()
 fmt.Println(counter()) // 1
-fmt.Println(counter()) // 2 — state ถูกเก็บไว้ใน closure
+fmt.Println(counter()) // 2 — state is preserved inside the closure
 ```
 
 export const functionsCode = `package main

@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ทำไมต้องมี iterator?
 
-ก่อน Go 1.23 ฟังก์ชันที่ผลิตลำดับข้อมูลมีทางเลือกที่ไม่สวยอยู่สามทาง: สร้างแล้วคืน slice ทั้งก้อน (allocate ทุกอย่างตั้งแต่แรก), ส่ง channel ออกมา (ต้องเปิด goroutine และช้า) หรือคิด type `Next()` ของตัวเองที่ `range` ไม่รู้จัก Go 1.23 เพิ่ม **range-over-func**: `for` วนซ้ำบนฟังก์ชันที่มีรูปแบบเฉพาะได้ และ standard library ได้ package `iter` มาตั้งชื่อรูปแบบเหล่านั้น
+ก่อน Go 1.23 function ที่ผลิตลำดับข้อมูลมีทางเลือกที่ไม่สวยอยู่สามทาง: สร้างแล้วคืน slice ทั้งก้อน (allocate ทุกอย่างตั้งแต่แรก), ส่ง channel ออกมา (ต้องเปิด goroutine และช้า) หรือคิด type `Next()` ของตัวเองที่ `range` ไม่รู้จัก Go 1.23 เพิ่ม **range-over-func**: `for` วนซ้ำบน function ที่มีรูปแบบเฉพาะได้ และ standard library ได้ package `iter` มาตั้งชื่อรูปแบบเหล่านั้น
 
 ผลลัพธ์คือลำดับข้อมูลแบบ lazy ที่ไม่ allocate และใช้กับ syntax ของ loop ที่คุณรู้จักอยู่แล้ว
 
@@ -27,7 +27,7 @@ type Seq[V any] func(yield func(V) bool)
 type Seq2[K, V any] func(yield func(K, V) bool)
 ```
 
-iterator คือฟังก์ชันที่รับ callback ชื่อ `yield` มันเรียก `yield` หนึ่งครั้งต่อ element; `yield` คืน `false` เมื่อผู้ใช้ต้องการหยุด และ iterator **ต้อง** return ทันทีในกรณีนั้น `Seq2` yield เป็นคู่ — index กับ value หรือ key กับ value — ล้อกับ `range` แบบสองตัวแปร
+iterator คือ function ที่รับ callback ชื่อ `yield` มันเรียก `yield` หนึ่งครั้งต่อ element; `yield` คืน `false` เมื่อผู้ใช้ต้องการหยุด และ iterator **ต้อง** return ทันทีในกรณีนั้น `Seq2` yield เป็นคู่ — index กับ value หรือ key กับ value — ล้อกับ `range` แบบสองตัวแปร
 
 ## การเขียน push iterator
 
@@ -52,7 +52,7 @@ for v := range Count(5) {
 }
 ```
 
-`break`, `return` และ `continue` ใน loop body ทำงานตามที่คาดทุกอย่าง: compiler แปลง body ให้เป็นฟังก์ชัน `yield` และแปลง control flow ให้เอง iterator เห็นแค่ `yield` คืน `false`
+`break`, `return` และ `continue` ใน loop body ทำงานตามที่คาดทุกอย่าง: compiler แปลง body ให้เป็น function `yield` และแปลง control flow ให้เอง iterator เห็นแค่ `yield` คืน `false`
 
 เพราะลำดับถูกผลิตตามความต้องการ `Count(1_000_000_000)` จึงไม่มีต้นทุนจนกว่าจะเริ่มวน — และถ้าหยุดหลังสามตัว ก็ผลิตแค่สามตัว
 
@@ -78,7 +78,7 @@ for i, v := range list.All() {
 }
 ```
 
-ผู้เรียกไม่ต้องแตะ backing slice และคุณเปลี่ยน representation ทีหลังได้อิสระ — linked list, database cursor, HTTP API แบบแบ่งหน้า — โดย loop ไม่ต้องเปลี่ยนเลย
+caller ไม่ต้องแตะ backing slice และคุณเปลี่ยน representation ทีหลังได้อิสระ — linked list, database cursor, HTTP API แบบแบ่งหน้า — โดย loop ไม่ต้องเปลี่ยนเลย
 
 ## Standard library พูดภาษา iterator
 
@@ -135,7 +135,7 @@ v, ok := next() // 0, true
 - **คืน iterator** เมื่อลำดับมีขนาดใหญ่ ไม่มีที่สิ้นสุด ผลิตแพง มี I/O อยู่ข้างหลัง หรือเมื่อต้องการซ่อน representation
 - **เคารพ `yield == false` เสมอ** iterator ที่ยังเรียก `yield` ต่อหลังจากมันคืน `false` จะ panic
 - **ตั้งชื่อ accessor ว่า `All`, `Keys`, `Values`, `Backward`** ให้ตรงกับ standard library
-- iterator เป็นฟังก์ชันธรรมดา: ไม่ได้ปลอดภัยต่อ goroutine โดยอัตโนมัติ และถือทุกอย่างที่ closure จับไว้
+- iterator เป็น function ธรรมดา: ไม่ได้ปลอดภัยต่อ goroutine โดยอัตโนมัติ และถือทุกอย่างที่ closure จับไว้
 
 ## ลองรันดู
 
@@ -205,7 +205,7 @@ func main() {
 \tfmt.Println(slices.Sorted(maps.Keys(m)))
 }`;
 
-<Callout title="Iterator คือฟังก์ชันที่เรียก yield">
+<Callout title="Iterator คือ function ที่เรียก yield">
 `iter.Seq[V]` คือ `func(yield func(V) bool)` loop `for v := range seq` กลายเป็น callback `yield`; `break` ทำให้ `yield` คืน `false` และ iterator ต้อง return ตอนนั้น `slices.Collect`, `slices.Sorted`, `maps.Keys`, `strings.Lines` และ `strings.SplitSeq` ช่วยให้ผสมลำดับแบบ lazy กับ slice และ map ธรรมดาได้โดยไม่ allocate สิ่งที่ไม่ได้ใช้
 </Callout>
 

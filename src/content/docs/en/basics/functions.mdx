@@ -102,7 +102,16 @@ func readFile(name string) error {
 }
 ```
 
-Multiple deferred calls execute in **LIFO order** (last deferred, first to run). Arguments to the deferred function are evaluated immediately at the `defer` statement, not when the call runs.
+Multiple deferred calls execute in **LIFO order** (last deferred, first to run).
+
+**Arguments to a deferred call are evaluated immediately, at the `defer` statement** — not when the deferred call actually runs:
+
+```go
+i := 0
+defer fmt.Println(i) // captures i's value (0) right now
+i = 100
+// when the function returns, this prints "0", not "100"
+```
 
 ## Closures and first-class functions
 
@@ -111,6 +120,10 @@ Functions are first-class values in Go. You can assign them to variables, pass t
 ```go
 double := func(n int) int { return n * 2 }
 fmt.Println(double(5)) // 10
+
+// Function as a parameter
+apply := func(f func(int) int, x int) int { return f(x) }
+fmt.Println(apply(double, 3)) // 6
 ```
 
 A **closure** is a function that captures variables from its enclosing scope. The captured variable is shared — the closure sees mutations to it:
@@ -200,6 +213,22 @@ func main() {
 }`;
 
 <Playground code={functionsCode} />
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---------------|---------|------|
+| Multiple return values | Explicit error handling, no hidden exceptions | The caller must check every error — more verbose than try/catch |
+| Named return values | Documents intent in the signature, enables bare return | A bare return in a long function makes it harder to read |
+| `defer` | Cleanup code sits right next to resource acquisition | Arguments are evaluated immediately, and LIFO order can surprise you |
+| Closures | Encapsulate state concisely | Captured variables are often allocated on the heap (escape analysis) |
+
+## Common Misconceptions
+
+- **"`defer` is slow."** `defer` has very low overhead (nanosecond range) — it is safe to use in production code for cleanup.
+- **"Multiple return values hurt performance."** Go returns multiple values directly via registers or the stack, with no heap allocation — the performance impact is negligible.
+- **"Every closure escapes to the heap."** The compiler performs escape analysis and may allocate a closure on the stack if it never escapes its scope.
+- **"Functions in Go are not first-class."** Functions in Go are first-class values — you can assign them, pass them as arguments, or return them from other functions.
 
 <Callout title="Deferred calls run LIFO at return">
 Multiple `defer` statements in the same function execute in **last-in, first-out** order when the function returns. This mirrors a stack: the last thing you deferred is the first thing that runs on the way out. Importantly, **arguments are evaluated at the defer site**, not when the deferred call actually executes — so `defer fmt.Println(x)` captures the current value of `x`, even if `x` changes before the function returns.
