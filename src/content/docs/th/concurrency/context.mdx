@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## context.Context คืออะไร?
 
-`context.Context` เป็น standard interface ที่ carry:
+`context.Context` เป็น standard interface ที่ส่งต่อ:
 
 - **Cancellation signal** — goroutine สามารถตรวจสอบ `ctx.Done()` เพื่อรู้ว่าควรหยุดทำงาน
 - **Deadline หรือ timeout** ที่เป็น optional — งานถูก cancel อัตโนมัติเมื่อถึงเวลา
@@ -40,6 +40,11 @@ Derived contexts สร้าง tree การ cancel parent จะ cancel ล�
 
 เมื่อเรียก `context.WithCancel` หรือ `context.WithTimeout` คุณได้รับสองค่า: derived context และ `cancel` function คุณ **ต้อง** เรียก `cancel()` เมื่องานเสร็จ — แม้ context จะหมดอายุตามธรรมชาติ ถ้าไม่เรียก parent context จะถือ reference ถึง child context จนกว่าจะ cancel parent ด้วย ซึ่งทำให้ leak ทรัพยากร
 
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel() // always
+```
+
 ## ฟัง Cancellation
 
 ใน goroutine `ctx.Done()` return channel ที่ถูกปิดเมื่อ context ถูก cancel หรือ timeout ใช้ `select` เพื่อรวมกับงานจริง:
@@ -51,6 +56,17 @@ case result := <-workCh:
 case <-ctx.Done():
     return "", ctx.Err() // context.Canceled หรือ context.DeadlineExceeded
 }
+```
+
+## context.WithValue
+
+`context.WithValue` แนบคู่ key/value เข้ากับ context ใช้เฉพาะกับข้อมูลที่เป็น request-scoped และข้ามขอบเขต API เท่านั้น (request ID, auth token) **อย่า**ใช้มันเป็นกลไกทั่วไปสำหรับส่งผ่าน parameter — ค่าพวกนั้นควรอยู่ใน function argument แทน
+
+เพื่อหลีกเลี่ยง key ชนกับ package อื่น ให้ใช้ type ที่เป็น unexported และเป็นของ package ตัวเองเป็น key เสมอ:
+
+```go
+type contextKey string
+const requestIDKey contextKey = "requestID"
 ```
 
 export const contextCode = `package main
@@ -72,7 +88,7 @@ func fetchData(ctx context.Context, id int) (string, error) {
 type ctxKey string
 
 func main() {
-\t// WithCancel: fetch ปกติสำเร็จ
+\t// WithCancel: normal fetch succeeds
 \tctx, cancel := context.WithCancel(context.Background())
 \tdefer cancel()
 
@@ -83,7 +99,7 @@ func main() {
 \t\tfmt.Println("got:", result)
 \t}
 
-\t// Cancel แล้วลองอีกครั้ง — context เป็น done แล้ว
+\t// Cancel, then try again — now the context is done
 \tcancel()
 \tresult2, err2 := fetchData(ctx, 2)
 \tif err2 != nil {
@@ -92,7 +108,7 @@ func main() {
 \t\tfmt.Println("got:", result2)
 \t}
 
-\t// WithValue: แนบ request-scoped metadata
+\t// WithValue: attach request-scoped metadata
 \tctx3 := context.WithValue(context.Background(), ctxKey("requestID"), "abc-123")
 \trid := ctx3.Value(ctxKey("requestID")).(string)
 \tfmt.Println("requestID:", rid)
@@ -115,16 +131,8 @@ func main() {
 - **cancel() ทำให้ goroutine หยุดทันที** — cancel() ส่ง signal ผ่าน channel — goroutine ต้องตรวจสอบ ctx.Done() เอง
 - **context ส่ง value ได้ทุก type** — context.Value() คืน any ต้องใช้ type assertion และอาจ nil
 
-> 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** ส่ง context จาก API server → controller → goroutine ทุกตัว เพื่อ graceful shutdown
->
-> **net/http** ทุก HTTP request มี context — client disconnect ยกเลิก context ทำให้ handler cleanup ได้
->
-> **gRPC** propagate deadline ผ่าน context ข้าม service boundary อัตโนมัติ
-
 <Callout title="defer cancel() เสมอเพื่อหลีกเลี่ยง context leak">
-ทุกการเรียก `context.WithCancel`, `context.WithTimeout`, หรือ `context.WithDeadline` ต้องมีการเรียก `cancel` function คู่กัน ถ้าไม่เรียก `cancel` parent context จะถือ internal reference ถึง child context จนกว่าจะ cancel parent เองใน server ที่รันนาน ๆ สิ่งนี้สะสมเป็น goroutine และ memory leak Pattern idiomatic เสมอ: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`
+ทุกการเรียก `context.WithCancel`, `context.WithTimeout`, หรือ `context.WithDeadline` ต้องมีการเรียก `cancel` function คู่กัน ถ้าลืมเรียก child จะยังค้างขึ้นทะเบียนอยู่กับ parent จนกว่า parent เองจะจบ — เป็น memory leak และ `go vet` (analyzer `lostcancel`) จับกรณีที่ชัดเจนที่สุดได้ตั้งแต่ compile time เรียก `cancel()` แม้ timeout จะยิงเองอยู่แล้วก็ตาม เพราะมันปล่อย timer ข้างในทันทีแทนที่จะรอให้หมดเวลาเอง Pattern idiomatic เสมอ: `ctx, cancel := context.WithTimeout(parent, d); defer cancel()`
 </Callout>
 
 export const quizContext = [
@@ -144,7 +152,7 @@ export const quizContext = [
       "chan struct{} ที่ถูกปิดเมื่อ context ถูก cancel หรือ deadline ผ่านไป",
       "chan error ที่รับ cancellation reason",
       "chan bool ที่รับ true เมื่อ timeout และ false เมื่อ cancel",
-      "nil ยกเว้นเมื่อเรียก context.WithDeadline"
+      "channel ที่ถูกปิดเฉพาะเมื่อ parent context ถูก cancel เท่านั้น ไม่ปิดเมื่อ timeout"
     ],
     answer: 0
   },

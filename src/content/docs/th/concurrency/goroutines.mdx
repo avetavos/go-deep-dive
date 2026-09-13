@@ -18,9 +18,9 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 go f(args)
 ```
 
-นั่นคือ syntax ทั้งหมด `go` จัดตาราง `f` ให้รัน concurrent แล้ว goroutine ที่เรียกก็ดำเนินต่อทันทีโดยไม่รอให้ `f` return
+นั่นคือ syntax ทั้งหมด scheduler จัดคิว `f` ให้รันแบบ concurrent แล้ว goroutine ที่เรียกก็ดำเนินต่อทันทีโดยไม่รอให้ `f` return
 
-## ทำไม Goroutines ถึงถูก
+## ทำไม goroutine ถึงต้นทุนต่ำ
 
 OS thread โดยทั่วไปเริ่มต้นด้วย stack ขนาดคงที่ 1–8 MB แต่ goroutine เริ่มต้นด้วย stack ขนาดประมาณ **2–8 KB** ที่ขยายและหดตัวได้อัตโนมัติตามต้องการ Go runtime จัดสรร goroutines ลง OS threads โดยใช้ **M:N scheduler** (M goroutines บน N threads) Context switch ระหว่าง goroutines เกิดขึ้นใน user-space และถูกกว่า kernel thread switch หลายเท่า
 
@@ -32,11 +32,11 @@ Scheduler ทำงานบนสามแนวคิด:
 
 | สัญลักษณ์ | ความหมาย |
 |--------|---------|
-| **G** | Goroutine — หน่วยงาน concurrent |
+| **G** | Goroutine — หน่วยของงาน concurrent |
 | **M** | Machine — OS thread |
 | **P** | Processor — scheduling context (มี GOMAXPROCS ตัว) |
 
-แต่ละ P มี run queue ของ Gs M ต้องถือ P ถึงจะรัน G ได้ เมื่อ G บล็อกบน I/O M ที่รันอยู่จะปล่อย P เพื่อให้ M อื่นรับช่วงต่อ
+แต่ละ P มี run queue ของ Gs M ต้องถือ P ถึงจะรัน G ได้ เมื่อ goroutine block บน network I/O, netpoller จะ park goroutine นั้นไว้และ M ยังถือ P ต่อไป แต่เมื่อ goroutine block ใน *system call* (file I/O, cgo), M จะส่งต่อ P ให้ thread อื่นเพื่อให้ goroutine อื่นทำงานต่อได้
 
 ## รอด้วย sync.WaitGroup
 
@@ -145,17 +145,9 @@ Work stealing:
 ## ความเข้าใจผิดที่พบบ่อย
 
 - **goroutine = OS thread** — goroutine stack เริ่มต้น 2-8 KB, OS thread 1-8 MB
-- **สร้าง goroutine ฟรีทั้งหมด** — มี ~4 KB allocation + scheduler bookkeeping ต่อ goroutine
+- **สร้าง goroutine ฟรีทั้งหมด** — เริ่มต้นมี stack allocation ~2 KB + scheduler bookkeeping ต่อ goroutine
 - **GOMAXPROCS มากขึ้น = เร็วขึ้นเสมอ** — I/O-bound workload ได้ประโยชน์น้อยกว่า CPU-bound
 - **goroutine leak ไม่เป็นปัญหา** — goroutine ที่ไม่มีทางออกคือ memory leak
-
-> 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** controller manager มี goroutine ต่อ resource type (Pod, Service, Deployment ฯลฯ)
->
-> **etcd** ใช้ goroutine ต่อ peer connection สำหรับ raft consensus algorithm
->
-> **Prometheus** เปิด goroutine ต่อ scrape job — scrape หลักพัน target พร้อมกัน
 
 <Callout title="ข้อควรระวัง: goroutines ที่เริ่มใน main อาจไม่รันถ้า main return ก่อน">
 ถ้า `main` return ก่อนที่ goroutine จะมีโอกาสรัน goroutine นั้นจะถูกยกเลิกอย่างเงียบ ๆ Go runtime exit ทันทีที่ `main` goroutine return — ไม่รอ background goroutines ใช้ `sync.WaitGroup`, channel, หรือ synchronization mechanism อื่น ๆ เพื่อให้ `main` มีชีวิตนานพอให้ goroutines เสร็จสิ้น
@@ -196,7 +188,7 @@ export const quizGoroutines = [
     q: "GOMAXPROCS ควบคุมอะไร?",
     options: [
       "จำนวนสูงสุดของ goroutines ที่สร้างได้",
-      "จำนวน OS threads (Ps) ที่สามารถรัน Go code พร้อมกันได้",
+      "จำนวน goroutines ที่รัน Go code พร้อมกันได้ในเวลาเดียวกัน (คือจำนวน Ps)",
       "ขนาด stack สูงสุดของ goroutine",
       "จำนวน CPU cores ที่ OS กำหนดให้ process"
     ],

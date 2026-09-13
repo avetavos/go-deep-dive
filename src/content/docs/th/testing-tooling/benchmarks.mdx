@@ -50,7 +50,26 @@ func BenchmarkFib(b *testing.B) {
 
 ## Setup ภายนอก loop
 
-หาก benchmark ต้องการ setup ที่ซับซ้อน (เปิดไฟล์, สร้าง slice ขนาดใหญ่) ให้ทำก่อน loop และเรียก `b.ResetTimer()` เพื่อไม่ให้เวลา setup ถูกนับ:
+หาก benchmark ต้องการ setup ที่ใช้เวลามาก (เปิดไฟล์, สร้าง slice ขนาดใหญ่) ให้ทำก่อน loop รูปแบบ classic `b.N` ต้องเรียก `b.ResetTimer()` เองเพื่อไม่ให้เวลา setup ถูกนับ:
+
+```go
+// รูปแบบ classic b.N — ต้องเรียก ResetTimer เอง
+func BenchmarkIsPrimeListClassic(b *testing.B) {
+    numbers := make([]int, 1000)
+    for i := range numbers {
+        numbers[i] = i + 2
+    }
+    b.ResetTimer() // เริ่มวัดจากจุดนี้
+
+    for i := 0; i < b.N; i++ {
+        for _, n := range numbers {
+            IsPrime(n)
+        }
+    }
+}
+```
+
+`b.Loop()` reset timer ให้เองตอนถูกเรียกครั้งแรก (`go doc testing.B.Loop`) รูปแบบ modern ที่เทียบเท่าจึงข้าม `b.ResetTimer()` ไปเลย:
 
 ```go
 func BenchmarkIsPrimeList(b *testing.B) {
@@ -58,7 +77,6 @@ func BenchmarkIsPrimeList(b *testing.B) {
     for i := range numbers {
         numbers[i] = i + 2
     }
-    b.ResetTimer() // เริ่มวัดจากจุดนี้
 
     for b.Loop() {
         for _, n := range numbers {
@@ -67,6 +85,8 @@ func BenchmarkIsPrimeList(b *testing.B) {
     }
 }
 ```
+
+`b.Loop` ยังทำให้ผลลัพธ์ของ loop ถูก keep alive อยู่ ทำให้ compiler ไม่สามารถ optimize โค้ดที่ต้องการวัดทิ้งได้ — นี่คือเหตุผลหลักที่ควรเลือกใช้แทน `b.N` ไม่ใช่แค่เรื่อง reset timer อัตโนมัติ
 
 ## การรัน benchmarks
 
@@ -85,20 +105,22 @@ go test -bench=. -benchtime=5s ./...
 
 ## การอ่านผลลัพธ์
 
+วัดจริงในเครื่องด้วย `go test -bench=. -benchmem` (Go 1.26.5, Apple M3 Pro) กับ benchmark `Fibonacci(20)` ด้านบน:
+
 ```
-BenchmarkFib-8        5000000      234 ns/op
-BenchmarkFibClassic-8 5000000      236 ns/op     0 B/op    0 allocs/op
+BenchmarkFibClassic-11    60018    19425 ns/op    0 B/op    0 allocs/op
+BenchmarkFib-11           58771    20169 ns/op    0 B/op    0 allocs/op
 ```
 
 | คอลัมน์ | ความหมาย |
 |--------|---------|
-| suffix `-8` | ค่า GOMAXPROCS (8 logical CPUs) |
-| `5000000` | จำนวน iterations ที่ `b.N` รัน |
-| `234 ns/op` | nanoseconds ต่อ operation |
+| suffix `-11` | ค่า GOMAXPROCS (logical CPUs ของเครื่องที่รัน — เครื่องคุณอาจต่างออกไป) |
+| `60018` | จำนวน iterations ที่ benchmark รัน |
+| `19425 ns/op` | nanoseconds ต่อ operation (ขึ้นกับ hardware ด้วย — อย่าเทียบข้ามเครื่อง) |
 | `0 B/op` | bytes ที่ allocate ต่อ operation (ต้องใช้ `-benchmem`) |
 | `0 allocs/op` | heap allocations ต่อ operation (ต้องใช้ `-benchmem`) |
 
-`Fibonacci` ไม่ allocate อะไรเลยเพราะใช้แค่ stack variables — นั่นคือเหตุผลที่ทั้งสองคอลัมน์ alloc เป็นศูนย์ ฟังก์ชันที่สร้าง `[]string` จะแสดงค่าที่ไม่ใช่ศูนย์
+`Fibonacci` ไม่ allocate อะไรเลยเพราะใช้แค่ stack variables — นั่นคือเหตุผลที่ทั้งสองคอลัมน์ alloc เป็นศูนย์ทั้งสองแถว ฟังก์ชันที่สร้าง `[]string` จะแสดงค่าที่ไม่ใช่ศูนย์
 
 ## ข้อแลกเปลี่ยน
 
@@ -116,16 +138,8 @@ BenchmarkFibClassic-8 5000000      236 ns/op     0 B/op    0 allocs/op
 - **`allocs/op = 0` หมายถึง optimal เสมอ** — zero allocation ดี แต่ถ้า CPU work เพิ่มขึ้นแทน อาจไม่ได้ดีกว่า
 - **benchmark สำหรับ micro-optimization เท่านั้น** — benchmark ช่วย validate architectural decision ได้ด้วย เช่น channel vs mutex, slice vs map
 
-> 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** ใช้ benchmark สำหรับ JSON marshaling ของ API object และ etcd client latency — ป้องกัน performance regression ระหว่าง release
->
-> **Go standard library** เพิ่ม benchmark ทุก PR ที่แตะ hot path เช่น `encoding/json`, `strings`, `bytes`
->
-> **Prometheus** benchmark metric registration และ observation ใน hot path — ต้องรองรับ millions of observations per second
-
-<Callout title="ให้ b.N เป็นตัวกำหนด iterations — อย่ากำหนดเอง">
-benchmark framework ควบคุม `b.N` เพื่อให้ได้การวัดที่เสถียรทางสถิติ หากคุณกำหนด `b.N` โดยตรงหรือใช้ loop count ที่ตายตัว ผลลัพธ์จะไม่น่าเชื่อถือ นอกจากนี้ให้ใช้ `-benchmem` เป็นนิสัย: แม้แต่ฟังก์ชันที่ดูเหมือนไม่ allocate บางครั้งก็ทำให้คุณประหลาดใจ และการตรวจพบ heap allocations ที่ไม่จำเป็นตั้งแต่เนิ่นๆ ถูกกว่าการ profile ใน production มาก
+<Callout title="ให้ framework เป็นตัวกำหนด iterations — อย่ากำหนดเอง">
+benchmark framework ควบคุมจำนวน iteration (`b.N` เบื้องหลัง) เพื่อให้ได้การวัดที่เสถียรทางสถิติ หากคุณกำหนด `b.N` โดยตรงหรือใช้ loop count ที่ตายตัว ผลลัพธ์จะไม่น่าเชื่อถือ นอกจากนี้ให้ใช้ `-benchmem` เป็นนิสัย: แม้แต่ฟังก์ชันที่ดูเหมือนไม่ allocate บางครั้งก็ทำให้คุณประหลาดใจ และการตรวจพบ heap allocations ที่ไม่จำเป็นตั้งแต่เนิ่นๆ ถูกกว่าการ profile ใน production มาก
 </Callout>
 
 export const quizBenchmarks = [
@@ -150,14 +164,14 @@ export const quizBenchmarks = [
     answer: 1
   },
   {
-    q: "ควรเรียก b.ResetTimer() เมื่อใดใน benchmark?",
+    q: "เหตุผลหลักที่ควรใช้ for b.Loop() แทนรูปแบบ classic for i := 0; i < b.N; i++ คืออะไร?",
     options: [
-      "ที่จุดเริ่มต้นของทุก benchmark function",
-      "หลังจาก for b.Loop() block สิ้นสุด",
-      "หลัง setup ที่ซับซ้อนซึ่งไม่ควรนับในการวัด",
-      "ก่อนเรียก b.N"
+      "รัน benchmark บน CPU core ได้มากกว่า",
+      "keep input และผลลัพธ์ของ loop ให้ alive ทำให้ compiler optimize โค้ดที่วัดทิ้งไม่ได้",
+      "เป็นรูปแบบเดียวที่ใช้กับ -benchmem ได้",
+      "ไม่ต้องมีไฟล์ _test.go"
     ],
-    answer: 2
+    answer: 1
   },
   {
     q: "รูปแบบ benchmark loop ที่แนะนำใน Go 1.24+ คืออะไร?",

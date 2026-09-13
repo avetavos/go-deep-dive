@@ -53,7 +53,13 @@ The import path is a string that identifies the package. Standard library packag
 Occasionally you import a package solely for its side effects — typically to register a driver or handler during `init()`. In that case, use the blank identifier `_` to suppress the "imported and not used" compile error:
 
 ```go
-import _ "database/sql/driver" // registers a driver; name not used directly
+import _ "github.com/lib/pq" // the driver's init() calls sql.Register("postgres", ...)
+```
+
+Another common case is wiring up debug endpoints without calling anything from the package directly:
+
+```go
+import _ "net/http/pprof" // registers /debug/pprof/ handlers on the default mux
 ```
 
 ## Exported vs unexported identifiers

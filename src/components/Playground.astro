@@ -36,6 +36,12 @@ const { code, lang = 'go' } = Astro.props;
 
     openBtn?.addEventListener('click', () => {
       navigator.clipboard?.writeText(code);
+      const th = document.documentElement.lang?.startsWith('th');
+      const label = openBtn.textContent;
+      openBtn.textContent = th ? 'คัดลอกแล้ว — วางในหน้า playground' : 'Copied — paste it into the playground';
+      setTimeout(() => {
+        openBtn.textContent = label;
+      }, 2500);
     });
 
     runBtn?.addEventListener('click', async () => {

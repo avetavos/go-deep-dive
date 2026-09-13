@@ -158,9 +158,7 @@ func main() {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Kubernetes** ใช้ struct ลึกหลายชั้น เช่น `PodSpec` embed `Container`, `Volume`, `Affinity` — struct tags ควบคุม JSON serialization ทั้งหมด
->
-> **gorm** (Go ORM) ใช้ struct tags เพื่อ map struct field ไปยัง database column — `gorm:"primaryKey"` กำหนด behavior ตอน runtime
+> **`bufio.ReadWriter`** (stdlib) เป็น struct ที่ embed `*Reader` และ `*Writer` เข้าด้วยกัน — ได้ method ของทั้งสองมาโดยไม่ต้อง implement เอง และ satisfy `io.ReadWriter` ทันที
 
 <Callout title="Struct เป็น value type — การ assign จะ copy">
 การเขียน `p2 := p1` จะสร้าง copy ของ struct ที่เป็นอิสระอย่างสมบูรณ์ ทุก field ถูก copy การแก้ไข `p2.Name` ไม่กระทบ `p1` เลย นี่แตกต่างจาก slice และ map ที่การ assign จะ copy เฉพาะ header เท่านั้น ทำให้ตัวแปรทั้งสองแชร์ข้อมูลชุดเดียวกัน หากต้องการแชร์ struct ข้ามหลาย goroutine หรือหลีกเลี่ยงการ copy struct ขนาดใหญ่ ให้ใช้ pointer (`*Person`)

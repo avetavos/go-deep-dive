@@ -55,7 +55,13 @@ Go compiler จะ error ทันทีถ้าคุณ import package แล
 หากต้องการ import package เพื่อ side effect เท่านั้น (เช่น `init()` ของ package นั้น) ใช้ blank identifier:
 
 ```go
-import _ "net/http/pprof"
+import _ "github.com/lib/pq" // init() ของ driver เรียก sql.Register("postgres", ...)
+```
+
+อีกตัวอย่างที่พบบ่อยคือเปิด debug endpoint โดยไม่ได้เรียกอะไรจาก package นั้นตรง ๆ:
+
+```go
+import _ "net/http/pprof" // register handler ใต้ /debug/pprof/ บน default mux
 ```
 
 ## Exported vs Unexported
@@ -135,9 +141,9 @@ func main() {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Kubernetes** จัดระเบียบ codebase หลายล้านบรรทัดด้วย package structure ที่ชัดเจน — แต่ละ package มีความรับผิดชอบเดียว ทำให้ team ขนาดใหญ่ทำงานร่วมกันได้
+> `database/sql` ใช้ blank import ให้ driver เช่น `github.com/lib/pq` register ตัวเองผ่าน `init()` ที่เรียก `sql.Register("postgres", ...)`
 >
-> **Go standard library** เช่น `net/http` ใช้ blank import ให้ `database/sql` driver register ตัวเองผ่าน `init()` — ทำให้ code ของ user สะอาดและไม่ต้อง explicit register
+> `net/http/pprof` ก็ใช้กลไกเดียวกัน — `import _ "net/http/pprof"` register handler debug ใต้ `/debug/pprof/` ผ่าน `init()` โดยไม่ต้องเรียกอะไรจาก package นั้นตรง ๆ
 
 <Callout title="ตัวพิมพ์ใหญ่ควบคุม Visibility">
 identifier ที่ขึ้นต้นด้วยตัวพิมพ์ใหญ่ (เช่น `fmt.Println`, `strings.ToUpper`) สามารถใช้จาก package อื่นได้ ส่วนที่ขึ้นต้นด้วยตัวพิมพ์เล็กจะเป็น private ภายใน package นั้น compiler จะ enforce กฎนี้ทันที — ไม่ใช่แค่ convention

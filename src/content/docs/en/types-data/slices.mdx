@@ -86,6 +86,8 @@ dst[0] = 0
 fmt.Println(fresh[0], dst[0]) // 10 0 — independent
 ```
 
+`slices.Clone(a)` and `append([]int(nil), a...)` give you the same result as `copy` into a fresh slice — all three produce an independent backing array.
+
 ## `min`, `max`, `clear`, and the `slices` package
 
 Go 1.21 added three builtins and a generic `slices` package, so most hand-written helper loops are gone from modern code:
@@ -181,12 +183,13 @@ export const quizSlices = [
   {
     q: "What is the idiomatic way to ensure two slices do NOT share a backing array?",
     options: [
-      "Use `a[low:high:max]` with a max-cap parameter",
+      "Use `b := a[:]`",
       "Use `copy(dst, src)` to copy elements into a freshly allocated slice",
       "Assign the slice to a new variable: `b := a`",
-      "Use `append([]int{}, a...)` — but this is not standard"
+      "Use `slices.Clone(a)` — but it only copies the header"
     ],
-    answer: 1
+    answer: 1,
+    explain: "`a[:]` and `b := a` both copy only the slice header — the backing array is still shared. `copy(dst, src)`, `slices.Clone(a)`, and `append([]T(nil), a...)` are all correct ways to get an independent backing array; option D's claim about `slices.Clone` is false, which is why it is wrong here."
   }
 ];
 

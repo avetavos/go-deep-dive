@@ -19,7 +19,8 @@ func add(a int, b int) int {
     return a + b
 }
 
-// Consecutive parameters of the same type can share a type annotation
+// Consecutive parameters of the same type can share a type annotation.
+// This is a second, equivalent spelling of the same function — pick one style per function.
 func add(a, b int) int {
     return a + b
 }
@@ -49,19 +50,21 @@ fmt.Println(result)
 Return values can be named. Named returns pre-declare variables and allow a **bare return** (a `return` with no arguments that returns the current values of the named variables). Use them sparingly — they are clearest in short functions where the names genuinely document the result:
 
 ```go
-func minMax(nums []int) (min, max int) {
-    min, max = nums[0], nums[0]
+func bounds(nums []int) (lo, hi int) {
+    lo, hi = nums[0], nums[0]
     for _, v := range nums[1:] {
-        if v < min {
-            min = v
+        if v < lo {
+            lo = v
         }
-        if v > max {
-            max = v
+        if v > hi {
+            hi = v
         }
     }
-    return // bare return: returns current min, max
+    return // bare return: returns current lo, hi
 }
 ```
+
+Naming named results `min` and `max` would also compile — Go 1.21's built-in `min`/`max` functions can be shadowed by a local name — but it is a smell: it hides the built-ins from the rest of the function body for no benefit.
 
 ## Variadic functions
 
@@ -208,7 +211,7 @@ export const quizFunctions = [
     options: [
       "Return a single value and panic on error",
       "Return (result, error) as two values; the caller checks the error",
-      "Return nil on success and a non-nil value on error",
+      "Set a package-level `lastError` variable the caller inspects",
       "Throw an exception using the throw keyword"
     ],
     answer: 1

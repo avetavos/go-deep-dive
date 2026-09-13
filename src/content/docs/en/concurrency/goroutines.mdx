@@ -36,7 +36,7 @@ The scheduler operates on three concepts:
 | **M** | Machine — an OS thread |
 | **P** | Processor — a scheduling context (GOMAXPROCS of these exist) |
 
-Each P holds a run queue of Gs. An M must hold a P to run Gs. When a G blocks on I/O, its M releases the P so another M can pick it up — this is how the scheduler achieves concurrency without burning threads on blocked goroutines.
+Each P holds a run queue of Gs. An M must hold a P to run Gs. When a goroutine blocks on network I/O, the netpoller parks it and the M keeps its P. When it blocks in a *system call* (file I/O, cgo), the M hands its P to another thread so other goroutines keep running.
 
 ## Waiting with sync.WaitGroup
 
@@ -151,7 +151,7 @@ export const quizGoroutines = [
     q: "What does GOMAXPROCS control?",
     options: [
       "The maximum number of goroutines that can be created",
-      "The number of OS threads (Ps) that can run Go code simultaneously",
+      "How many goroutines can execute Go code at the same time (the number of Ps)",
       "The maximum goroutine stack size",
       "The number of CPU cores the OS assigns to the process"
     ],

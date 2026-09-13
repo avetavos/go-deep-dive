@@ -79,7 +79,10 @@ type Person struct {
     Age  *int // optional
 }
 
-p := Person{Name: "Ada", Age: new(36)}          // *int pointing to 36
+yearsSince := func(y int) int { return 2026 - y }
+born := 1990
+
+p := Person{Name: "Ada", Age: new(36)}               // *int pointing to 36
 q := Person{Name: "Bob", Age: new(yearsSince(born))} // any expression works
 ```
 
@@ -146,7 +149,7 @@ func main() {
 <Playground code={pointersCode} />
 
 <Callout title="Go has pointers but no pointer arithmetic">
-Go gives you full pointer capability — take addresses, dereference, pass pointers to functions — but deliberately removes pointer arithmetic. You cannot add an integer to a pointer to step through memory. This single design decision eliminates buffer overflows, off-by-one memory walks, and use-after-free bugs at the language level. If you need low-level memory operations, the `unsafe` package exists, but it should be reserved for FFI and runtime-level work.
+Go gives you full pointer capability — take addresses, dereference, pass pointers to functions — but deliberately removes pointer arithmetic. You cannot add an integer to a pointer to step through memory. No pointer arithmetic keeps pointers always pointing at a real Go value; the garbage collector rules out use-after-free and bounds checks rule out buffer overflows. If you need low-level memory operations, the `unsafe` package exists, but it should be reserved for FFI and runtime-level work.
 </Callout>
 
 export const quizPointers = [

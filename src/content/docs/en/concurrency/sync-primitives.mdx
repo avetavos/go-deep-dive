@@ -55,7 +55,7 @@ func getConfig() *Config {
 
 The `sync/atomic` package provides lock-free operations on integer and pointer types using CPU hardware instructions. For simple counters or flags, atomics are faster than a mutex because there is no lock contention or context switching.
 
-Key operations: `atomic.AddInt64`, `atomic.LoadInt64`, `atomic.StoreInt64`, `atomic.CompareAndSwapInt64`.
+Since Go 1.19, prefer the typed API: a `var hits atomic.Int64` gives you `hits.Add(1)`, `hits.Load()`, `hits.Store(n)`, and `hits.CompareAndSwap(old, new)` as methods, with no address-of operator to get wrong. The same family covers `atomic.Bool` and `atomic.Pointer[T]` for flags and lock-free pointer swaps. The older function form, `atomic.AddInt64(&counter, 1)`, still works and is what you will read in existing code, but it requires the `int64`/`uint64` it operates on to be 8-byte aligned — a real trap on 32-bit platforms where a struct field can end up misaligned. The typed API sidesteps that alignment requirement entirely, which is the main reason to reach for it in new code.
 
 ## sync.WaitGroup.Go (Go 1.25+)
 
@@ -69,7 +69,7 @@ for _, url := range urls {
 wg.Wait()
 ```
 
-Reach for `wg.Go` in new code — it cannot get the `Add` placement wrong — and let `go fix` (the `waitgroupgo` modernizer, Go 1.26+) rewrite the old triple in existing code.
+Reach for `wg.Go` in new code — it cannot get the `Add` placement wrong — and let `go fix` rewrite the old triple in existing code: the modernizer that does this was named `waitgroup` in Go 1.26 and renamed `waitgroupgo` in Go 1.27 (to avoid clashing with `go vet`'s own `waitgroup` analyzer, which checks for WaitGroup misuse rather than rewriting code).
 
 ## Channels vs mutexes — a practical guide
 
@@ -126,17 +126,17 @@ func main() {
 \t\t})
 \t}
 
-\t// sync/atomic: 50 goroutines each add 1 -> 50
-\tvar atomicCount int64
+\t// sync/atomic: typed API, 50 goroutines each add 1 -> 50
+\tvar hits atomic.Int64
 \tfor i := 0; i < 50; i++ {
 \t\twg.Add(1)
 \t\tgo func() {
 \t\t\tdefer wg.Done()
-\t\t\tatomic.AddInt64(&atomicCount, 1)
+\t\t\thits.Add(1)
 \t\t}()
 \t}
 \twg.Wait()
-\tfmt.Println("atomic count:", atomic.LoadInt64(&atomicCount)) // 50
+\tfmt.Println("atomic count:", hits.Load()) // 50
 }`;
 
 <Playground code={syncCode} />

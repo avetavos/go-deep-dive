@@ -96,12 +96,6 @@ func main() {
 - **coverage 100% = code ปลอดภัย** — coverage วัดว่า line ถูกรันหรือไม่ ไม่ได้วัด correctness — test ที่ไม่มี assertion ก็ทำให้ coverage 100% ได้
 - **`go test` ช้า** — `go test` cache ผลลัพธ์ — ถ้าไม่มีไฟล์เปลี่ยน จะ return cached result ทันที
 
-> 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** ใช้ `go test ./...` ทั้งหมด ไม่ใช้ external testing framework — standard library เพียงพอสำหรับ codebase ระดับ enterprise
->
-> **Docker** enforce `-race` flag ใน CI pipeline ทุก PR เพื่อตรวจจับ concurrent bug ก่อน merge
-
 <Callout title="ทำไม pure function จึงเป็นจุดเริ่มต้นที่ดีที่สุดสำหรับ testing">
 Pure function — ฟังก์ชันที่ขึ้นอยู่กับ argument เท่านั้นและคืนค่าเดิมเสมอสำหรับ input เดิม — คือจุดเริ่มต้นที่เหมาะที่สุดสำหรับ testing ไม่มี database ที่ต้อง mock ไม่มี HTTP server ที่ต้องตั้งค่า และไม่มี shared state ที่ต้อง reset ระหว่าง runs `Fibonacci` และ `IsPrime` ทั้งคู่มีคุณสมบัตินี้: เรียกพันครั้งด้วย input เดิมก็ได้ผลลัพธ์เดิม บทเรียนถัดไปแสดงให้เห็นว่า `testing` package ของ Go ทำให้การเขียน test เหล่านี้แทบไม่ต้องใช้ความพยายามเลย
 </Callout>

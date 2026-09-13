@@ -19,7 +19,7 @@ func add(x int, y int) int {
     return x + y
 }
 
-// Parameters ที่มี type เดียวกันสามารถเขียนรวมได้
+// Two equivalent spellings of the same function — pick one style per function.
 func add(x, y int) int {
     return x + y
 }
@@ -50,21 +50,21 @@ Pattern `(value, error)` ถือเป็น idiomatic Go — แทบทุ�
 Return values สามารถตั้งชื่อได้ ทำให้สามารถใช้ **bare return** ได้:
 
 ```go
-func minMax(nums []int) (min, max int) {
-    min, max = nums[0], nums[0]
+func bounds(nums []int) (lo, hi int) {
+    lo, hi = nums[0], nums[0]
     for _, n := range nums[1:] {
-        if n < min {
-            min = n
+        if n < lo {
+            lo = n
         }
-        if n > max {
-            max = n
+        if n > hi {
+            hi = n
         }
     }
-    return   // return min, max โดยไม่ต้องระบุ
+    return   // bare return: returns current lo, hi
 }
 ```
 
-ใช้ named returns เพื่อความชัดเจนใน function สั้น ๆ หลีกเลี่ยงใน function ยาวเพราะทำให้อ่านสับสน
+ใช้ named returns เพื่อความชัดเจนใน function สั้น ๆ หลีกเลี่ยงใน function ยาวเพราะทำให้อ่านสับสน การตั้งชื่อ named result เป็น `min`/`max` ก็ compile ผ่านเช่นกัน — แต่ Go 1.21 เพิ่ม built-in `min`/`max` เข้ามาแล้ว local name แบบนี้จะ shadow built-in ไปตลอด function นั้น ถือเป็น smell ที่ควรเลี่ยง
 
 ## Variadic Functions
 
@@ -222,15 +222,10 @@ func main() {
 
 ## ความเข้าใจผิดที่พบบ่อย
 
+- **"`defer` ช้า"** — `defer` มี overhead น้อยมาก (nanosecond range) ใช้ได้สบายใน production code สำหรับ cleanup
 - **"multiple return values ทำให้ performance แย่ลง"** — Go return multiple values ผ่าน register หรือ stack โดยตรง ไม่มี heap allocation; แทบไม่มีผลต่อ performance
 - **"closure ทุกตัว escape ไปที่ heap"** — compiler ทำ Escape Analysis และอาจ allocate closure บน stack ถ้าไม่ออกนอก scope
 - **"function ใน Go ไม่ใช่ first-class"** — function ใน Go เป็น first-class value สามารถ assign, ส่งเป็น argument, หรือ return จาก function อื่นได้
-
-> 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** ใช้ pattern `(result, error)` ทุกที่ใน API server — caller บังคับตรวจ error ทำให้ระบบ resilient
->
-> **etcd** ใช้ closure ใน Raft consensus implementation เพื่อ capture election state โดยไม่ต้องใช้ global variable
 
 <Callout title="Deferred calls ทำงานแบบ LIFO เมื่อ return">
 หลาย `defer` statement จะทำงานในลำดับ last-in first-out เมื่อ function ที่ครอบคลุมอยู่ return arguments จะถูก evaluate ทันที ณ จุดที่ `defer` ไม่ใช่ตอน call จริง จึงต้องระวังเมื่อ defer function ที่ใช้ตัวแปรที่อาจเปลี่ยนค่า
@@ -242,7 +237,7 @@ export const quizFunctions = [
     options: [
       "Return ค่าเดียวและ panic เมื่อ error",
       "Return (result, error) สองค่า; caller ตรวจ error",
-      "Return nil เมื่อสำเร็จและ non-nil เมื่อ error",
+      "ตั้งค่า package-level variable `lastError` ให้ caller ไปตรวจสอบเอง",
       "โยน exception ด้วย keyword throw"
     ],
     answer: 1
@@ -250,10 +245,10 @@ export const quizFunctions = [
   {
     q: "ถ้าประกาศ defer สามครั้งในลำดับ A, B, C จะ execute ในลำดับใด?",
     options: [
-      "A, B, C (FIFO — ลำดับที่ประกาศ)",
-      "C, B, A (LIFO — ย้อนกลับ)",
-      "B, A, C (สุ่ม)",
-      "ทั้งสามพร้อมกัน"
+      "A, B, C",
+      "C, B, A",
+      "B, A, C",
+      "ลำดับไม่แน่นอน"
     ],
     answer: 1
   },

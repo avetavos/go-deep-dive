@@ -29,11 +29,13 @@ convention แบบ idiomatic ของ Go คือการคืนค่า
 ```go
 result, err := riskyOperation()
 if err != nil {
-    // ห้ามใช้ result — ไม่มีความหมาย
-    return fmt.Errorf("riskyOperation: %v", err)
+    // do not use result — it is meaningless
+    return fmt.Errorf("riskyOperation: %w", err)
 }
-// err เป็น nil: result ถูกต้องใช้ได้
+// err is nil: result is valid
 ```
+
+`%w` รักษา chain ไว้ให้ caller ยังตรวจสอบ error เดิมด้วย `errors.Is`/`errors.As` ได้ — จะกล่าวถึงในบทเรียนถัดไป
 
 การคืนค่า error ให้ caller เป็นบรรทัดฐาน การกลืน error อย่างเงียบ ๆ — ละเว้น `err` ด้วย `_` — ควรทำอย่างตั้งใจและเกิดขึ้นน้อยมาก ใช้เฉพาะในกรณีที่ความล้มเหลวไม่มีผลจริง ๆ (เช่น การปิดไฟล์แบบ read-only หลังจากอ่านข้อมูลทั้งหมดสำเร็จแล้ว)
 
@@ -68,7 +70,7 @@ var ErrPermission = errors.New("permission denied")
 
 ```go
 if errors.Is(err, ErrNotFound) {
-    // จัดการกรณี not-found
+    // handle the not-found case
 }
 ```
 
@@ -130,7 +132,7 @@ func main() {
 |---------|---------|------|
 | error interface (1 method) | implement ง่าย, compose ได้ | ไม่มี stack trace โดยตรง |
 | errors.Is() | match sentinel ใน chain ลึกแค่ไหนก็ได้ | ต้อง wrap error ด้วย %w ให้ถูกต้องก่อน |
-| errors.As() | extract concrete error type พร้อม field | ต้อง type assertion ใน chain |
+| errors.As() | extract concrete error type พร้อม field | target ต้องเป็น pointer ไปยัง type ของ error (`&ve` เมื่อ `ve *VErr`) ถ้าไม่ใช่ panic ตอน runtime |
 | sentinel errors | เปรียบเทียบง่าย, self-documenting | เป็น public API — refactor ยากถ้า name ต้องเปลี่ยน |
 
 ## ความเข้าใจผิดที่พบบ่อย
@@ -141,8 +143,6 @@ func main() {
 - **panic ดีกว่า return error สำหรับ critical error** — ใช้ panic เฉพาะสำหรับ programming error ที่ should not happen, ไม่ใช่ expected failure
 
 > 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** คืน error chain ที่ wrap context ของทุก layer — apiserver error → controller error → client error — ทำให้ log มี context ครบ
 >
 > **net/http**: `http.ErrServerClosed` เป็น sentinel error สำหรับ graceful shutdown — caller ตรวจด้วย `errors.Is(err, http.ErrServerClosed)`
 >

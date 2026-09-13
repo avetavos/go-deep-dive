@@ -46,7 +46,7 @@ type Number interface {
 }
 ```
 
-The `~` prefix means "any type whose underlying type is `int` or `~float64`." This is the **tilde operator**: without it, only the exact named type matches; with it, custom types like `type Celsius float64` also satisfy `~float64`. This makes constraints work naturally with domain-specific type aliases.
+The `~` prefix means "any type whose underlying type is `int` or `float64`." This is the **tilde operator**: without it, only the exact named type matches; with it, custom types like `type Celsius float64` also satisfy `~float64`. This makes constraints work naturally with defined (named) types such as `type Celsius float64` — a true alias, `type C = float64`, is already the same type as `float64` and never needs `~`.
 
 ## Built-in constraints from cmp
 
@@ -186,59 +186,64 @@ Two rules to remember: **interface methods cannot declare type parameters**, and
 
 ## Function type inference, generalized (Go 1.27)
 
-Assigning a generic function to a variable — or converting it — to a matching function type now infers the type arguments in every such context, not only in calls:
+Inference for a generic function was originally limited to call sites. Two other contexts now infer the type arguments too, added in two separate releases:
+
+- **Assignment to a variable of a matching function type** — this has worked since **Go 1.21**.
+- **An explicit conversion to a matching function type** — this is the **Go 1.27** addition.
 
 ```go
 func Max[T cmp.Ordered](a, b T) T { /* ... */ }
 
-var maxInt func(int, int) int = Max   // T inferred as int (Go 1.27)
-sortBy := (func(string, string) string)(Max)
+var maxInt func(int, int) int = Max          // T inferred as int (Go 1.21+)
+sortBy := (func(string, string) string)(Max) // T inferred as string (Go 1.27)
 ```
+
+The assignment form compiles today on this course's Go 1.26.5 toolchain (with `go 1.21` or later in `go.mod`). The conversion form does not: on 1.26.5 the compiler reports `cannot use generic function Max without instantiation`. It is confirmed working on Go 1.27 via the [go.dev playground](https://go.dev/doc/go1.27) — the code above only runs there.
 
 export const genericsCode = `package main
 
 import "fmt"
 
 type Number interface {
-	~int | ~float64
+\t~int | ~float64
 }
 
 func Max[T Number](a, b T) T {
-	if a > b {
-		return a
-	}
-	return b
+\tif a > b {
+\t\treturn a
+\t}
+\treturn b
 }
 
 func Map[T, U any](slice []T, f func(T) U) []U {
-	result := make([]U, len(slice))
-	for i, v := range slice {
-		result[i] = f(v)
-	}
-	return result
+\tresult := make([]U, len(slice))
+\tfor i, v := range slice {
+\t\tresult[i] = f(v)
+\t}
+\treturn result
 }
 
 func Filter[T any](slice []T, pred func(T) bool) []T {
-	var result []T
-	for _, v := range slice {
-		if pred(v) {
-			result = append(result, v)
-		}
-	}
-	return result
+\tvar result []T
+\tfor _, v := range slice {
+\t\tif pred(v) {
+\t\t\tresult = append(result, v)
+\t\t}
+\t}
+\treturn result
 }
 
 func main() {
-	fmt.Println(Max(3, 7))
-	fmt.Println(Max[float64](3.14, 2.71))
+\tfmt.Println(Max(3, 7))
+\tfmt.Println(Max[float64](3.14, 2.71))
 
-	nums := []int{1, 2, 3, 4, 5}
-	doubled := Map(nums, func(n int) int { return n * 2 })
-	fmt.Println(doubled)
+\tnums := []int{1, 2, 3, 4, 5}
+\tdoubled := Map(nums, func(n int) int { return n * 2 })
+\tfmt.Println(doubled)
 
-	words := []string{"go", "generics", "fun", "code"}
-	long := Filter(words, func(s string) bool { return len(s) > 3 })
-	fmt.Println(long)
+\twords := []string{"go", "generics", "fun", "code"}
+\tlong := Filter(words, func(s string) bool { return len(s) > 3 })
+\tfmt.Println(long)
 }`;
 
 <Playground code={genericsCode} />

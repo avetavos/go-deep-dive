@@ -33,13 +33,41 @@ export default defineConfig({
       ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/avetavos/go-deep-dive' }],
       sidebar: [
-        { label: 'Basics & Syntax', items: [{ autogenerate: { directory: 'basics' } }] },
-        { label: 'Types & Data', items: [{ autogenerate: { directory: 'types-data' } }] },
-        { label: 'Methods & Interfaces', items: [{ autogenerate: { directory: 'methods-interfaces' } }] },
-        { label: 'Concurrency', items: [{ autogenerate: { directory: 'concurrency' } }] },
-        { label: 'Errors & Generics', items: [{ autogenerate: { directory: 'errors-generics' } }] },
-        { label: 'Standard Library', items: [{ autogenerate: { directory: 'stdlib' } }] },
-        { label: 'Testing & Tooling', items: [{ autogenerate: { directory: 'testing-tooling' } }] },
+        {
+          label: 'Basics & Syntax',
+          translations: { th: 'พื้นฐานและ Syntax' },
+          items: [{ autogenerate: { directory: 'basics' } }],
+        },
+        {
+          label: 'Types & Data',
+          translations: { th: 'Type และข้อมูล' },
+          items: [{ autogenerate: { directory: 'types-data' } }],
+        },
+        {
+          label: 'Methods & Interfaces',
+          translations: { th: 'Method และ Interface' },
+          items: [{ autogenerate: { directory: 'methods-interfaces' } }],
+        },
+        {
+          label: 'Concurrency',
+          translations: { th: 'Concurrency' },
+          items: [{ autogenerate: { directory: 'concurrency' } }],
+        },
+        {
+          label: 'Errors & Generics',
+          translations: { th: 'Error และ Generics' },
+          items: [{ autogenerate: { directory: 'errors-generics' } }],
+        },
+        {
+          label: 'Standard Library',
+          translations: { th: 'Standard Library' },
+          items: [{ autogenerate: { directory: 'stdlib' } }],
+        },
+        {
+          label: 'Testing & Tooling',
+          translations: { th: 'Testing และ Tooling' },
+          items: [{ autogenerate: { directory: 'testing-tooling' } }],
+        },
       ],
       }), preact()],
 });

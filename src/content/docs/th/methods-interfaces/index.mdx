@@ -14,13 +14,13 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ภาษาเชิงวัตถุส่วนใหญ่ผูก polymorphism ไว้กับลำดับชั้นของ class: คุณต้องประกาศว่า type หนึ่ง *implements* interface ใด, ต้อง *extends* base class, และ compiler จะบังคับโครงสร้างสายเลือดนั้น Go ตัดทิ้งลำดับชั้นทั้งหมด
 
-ใน Go **named type ใดก็ตามสามารถมี method ได้** และ **type ใดที่มี method ถูกต้องก็ตอบสนอง interface โดยอัตโนมัติ** — ไม่ต้องประกาศ นี่คือ *implicit interface satisfaction* และเป็นการตัดสินใจออกแบบที่สำคัญที่สุดของภาษา
+ใน Go **named type ใดก็ตามสามารถมี method ได้** (ยกเว้น pointer types และ interface types) และ **type ใดที่มี method ถูกต้องก็ตอบสนอง interface โดยอัตโนมัติ** — ไม่ต้องประกาศ นี่คือ *implicit interface satisfaction* และเป็นการตัดสินใจออกแบบที่สำคัญที่สุดของภาษา
 
 การผสม methods และ interfaces ให้คุณได้:
 
 - **Polymorphism** โดยไม่มีต้นไม้ inheritance
 - **Dependency inversion** โดยไม่ต้องพึ่ง framework — รับ interface, คืน struct
-- **Composition** โดยไม่ต้องใช้ `extends` — embed types เพื่อยกระดับ fields และ methods
+- **Composition** โดยไม่ต้องใช้ `extends` — embed types เพื่อ promote fields และ methods
 
 ## แผนที่โมดูล
 
@@ -104,7 +104,7 @@ export const quizMethodsInterfaces = [
     options: [
       "เฉพาะ structs เท่านั้น",
       "เฉพาะ pointer types เท่านั้น",
-      "named type ใด ๆ ที่นิยามใน package เดียวกัน",
+      "named type ใด ๆ ที่นิยามใน package เดียวกัน ยกเว้น pointer types และ interface types",
       "เฉพาะ types ที่ implement อย่างน้อยหนึ่ง interface"
     ],
     answer: 2

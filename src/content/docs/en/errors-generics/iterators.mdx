@@ -82,7 +82,7 @@ Callers never touch the backing slice, and you are free to change the representa
 
 ## The standard library speaks iterators
 
-Since Go 1.23 the `slices`, `maps`, and `strings` packages both **produce** and **consume** iterators:
+Since Go 1.23 the `slices` and `maps` packages (and `strings`/`bytes` since Go 1.24) both **produce** and **consume** iterators:
 
 ```go
 import ("maps"; "slices"; "strings")

@@ -5,6 +5,7 @@ sidebar:
   order: 1
 ---
 
+import Playground from '../../../../components/Playground.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
@@ -20,9 +21,9 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 ```go
 result, err := doSomething()
 if err != nil {
-    // จัดการความล้มเหลว — return, log, wrap, หรือ recover
+    // handle the failure — return, log, wrap, or recover
 }
-// err เป็น nil: ใช้ result ได้อย่างปลอดภัย
+// err is nil: safe to use result
 ```
 
 `nil` หมายถึงสำเร็จ error ที่ไม่ใช่ nil หมายถึงมีบางอย่างผิดพลาดและไม่ควรเชื่อถือ `result`
@@ -46,7 +47,7 @@ type ใดก็ตามที่ implement `Error() string` จะ satisfy in
 | หน้านี้ | ภาพรวมแนวคิดและตัวอย่างแรกที่รันได้ |
 | Error Values | `errors.New`, `fmt.Errorf`, sentinel errors, `errors.Is` |
 | Wrapping & Custom Errors | `%w`, `errors.As`, custom error types |
-| Panic & Recover | เมื่อไหรควร panic, `recover`, การ defer cleanup |
+| Panic & Recover | เมื่อไหร่ควร panic, `recover`, การ defer cleanup |
 | Generics | Type parameters, constraints, `~T`, union types, generic method (Go 1.27) |
 | Iterators | `iter.Seq`, range-over-func, helper แบบ iterator ใน `slices`/`maps` (Go 1.23+) |
 
@@ -54,35 +55,35 @@ type ใดก็ตามที่ implement `Error() string` จะ satisfy in
 
 ฟังก์ชันเล็ก ๆ ที่คืนค่า `(string, error)` เพื่อแสดงรูปแบบพื้นฐานของการจัดการ error ใน Go:
 
-```go
-package main
+export const firstLookCode = `package main
 
 import (
-    "errors"
-    "fmt"
+\t"errors"
+\t"fmt"
 )
 
 func greet(name string) (string, error) {
-    if name == "" {
-        return "", errors.New("name must not be empty")
-    }
-    return fmt.Sprintf("Hello, %s!", name), nil
+\tif name == "" {
+\t\treturn "", errors.New("name must not be empty")
+\t}
+\treturn fmt.Sprintf("Hello, %s!", name), nil
 }
 
 func main() {
-    msg, err := greet("Gopher")
-    if err != nil {
-        fmt.Println("error:", err)
-        return
-    }
-    fmt.Println(msg) // Hello, Gopher!
+\tmsg, err := greet("Gopher")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t\treturn
+\t}
+\tfmt.Println(msg) // Hello, Gopher!
 
-    _, err = greet("")
-    if err != nil {
-        fmt.Println("error:", err) // error: name must not be empty
-    }
-}
-```
+\t_, err = greet("")
+\tif err != nil {
+\t\tfmt.Println("error:", err) // error: name must not be empty
+\t}
+}`;
+
+<Playground code={firstLookCode} />
 
 `errors.New` สร้าง error value ธรรมดาจาก string คงที่ ฟังก์ชันคืนค่า `nil` เป็น error ในเส้นทางปกติ และคืนค่า error ที่ไม่ใช่ nil ในเส้นทางที่ล้มเหลว caller ตรวจสอบ `if err != nil` ทันทีหลังการเรียก — นี่คือ idiom ที่คุณจะเขียนนับร้อยครั้งใน Go
 
@@ -99,13 +100,7 @@ func main() {
 
 - **error handling ใน Go verbose เกินไป** — verbosity นี้ตั้งใจ: ทุก failure path มองเห็นได้ในโค้ด ไม่มี hidden exception
 - **panic = exception ที่ควรใช้แทน return error** — panic ใช้สำหรับ programmer error เท่านั้น ไม่ใช่ expected failure
-- **generics ทำ code ช้าลง** — Go generics ใช้ GC-shape stenciling — overhead น้อยมากสำหรับ pointer types
-
-> 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** ใช้ Go's error model ทั่วทั้ง codebase — ทุก function ที่อาจล้มเหลวคืน `(T, error)` อย่างชัดเจน
->
-> **Docker** และ **etcd** ใช้ error wrapping เพื่อให้ log มี context ครบทุก layer ของ call stack
+- **generics ทำ code ช้าลง** — Go generics ใช้ GC-shape stenciling: type ที่มี pointer/interface shape เดียวกันแชร์ instantiation เดียวกันและใช้ dictionary ส่ง type info ตอน runtime กรณีนี้ generics อาจ**ช้ากว่า** interface ด้วยซ้ำ; ส่วน value type (`int`, struct) ได้ code เฉพาะของตัวเองต่อ type จึงเร็ว
 
 export const quizErrorsGenericsOverview = [
   {

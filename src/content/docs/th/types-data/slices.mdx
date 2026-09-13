@@ -37,7 +37,7 @@ export const sliceHeaderDiagram = `flowchart LR
   end
   P --> A0`;
 
-<Mermaid code={sliceHeaderDiagram} title="A slice header points into a backing array; len=3 is visible, cap=5 reaches the end" />
+<Mermaid code={sliceHeaderDiagram} title="slice header ชี้เข้าไปใน backing array; len=3 คือส่วนที่มองเห็น, cap=5 คือระยะไปจนสุด array" />
 
 - **`len`** — จำนวน element ที่เข้าถึงได้ผ่าน slice ในขณะนี้
 - **`cap`** — จำนวน element จากจุดเริ่มต้นของ slice ไปจนถึงท้ายของ backing array
@@ -47,7 +47,7 @@ export const sliceHeaderDiagram = `flowchart LR
 ```go
 s := make([]int, 3, 5)      // len=3, cap=5, ทุกค่าเป็น zero
 t := []int{1, 2, 3}         // len=3, cap=3
-u := arr[1:3]               // len=2, cap=2, หน้าต่างเข้าสู่ arr
+u := arr[1:3]               // len=2, cap=2, มุมมองย่อยของ arr
 ```
 
 ## `append` และการเติบโต
@@ -85,6 +85,8 @@ copy(dst, fresh)
 dst[0] = 0
 fmt.Println(fresh[0], dst[0]) // 10 0 — เป็นอิสระต่อกัน
 ```
+
+`slices.Clone(a)` และ `append([]int(nil), a...)` ให้ผลเดียวกับการ `copy` ลง slice ใหม่ — ทั้งสามวิธีได้ backing array ที่เป็นอิสระ
 
 ## `min`, `max`, `clear` และ package `slices`
 
@@ -175,14 +177,8 @@ append เกิน cap:
 - **`len` และ `cap` เหมือนกัน** — len คือจำนวน element ที่เข้าถึงได้ตอนนี้, cap คือขนาดสูงสุดก่อน reallocation
 - **`copy(dst, src)` ทำ deep copy** — copy ถ่ายโอน values แต่ถ้า element เป็น pointer หรือ interface ยัง share underlying data เดิม
 
-> 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes** ใช้ `make([]Pod, 0, capacity)` เพื่อ pre-allocate pod list และลด GC pressure ใน reconcile loop
->
-> **Prometheus** เก็บ metric sample ใน slice พร้อม pre-allocated capacity — ช่วยลด reallocation ในระหว่าง high-frequency scrape
-
-<Callout title="append อาจ allocate หรือไม่ก็ได้; slice แชร์ backing array">
-มีกฎสำคัญสองข้อที่ต้องจำ ข้อแรก: `append` คืน slice header ใหม่เสมอ — ถ้าเกิดการ reallocation คุณจะได้ backing array ใหม่ทั้งหมด อย่าเพิกเฉยต่อค่าที่คืนมา ข้อสอง: `a[low:high]` ไม่ได้ copy ข้อมูล ทั้งสอง slice แชร์ backing array เดียวกัน การเขียนผ่านตัวหนึ่งจะมองเห็นได้จากอีกตัวด้วย ใช้ `copy` เมื่อต้องการ slice ที่เป็นอิสระจริงๆ
+<Callout title="append คืน slice header ใหม่เสมอ แต่จะได้ backing array ใหม่เฉพาะเมื่อเกิน cap">
+มีกฎสำคัญสองข้อที่ต้องจำ ข้อแรก: `append` คืน slice header ใหม่เสมอ แต่จะได้ backing array ใหม่จริง ๆ ก็ต่อเมื่อ `len == cap` และเกิด reallocation เท่านั้น — ถ้ายังไม่เกิน cap `append` เขียนต่อท้าย backing array เดิม อย่าเพิกเฉยต่อค่าที่คืนมาไม่ว่ากรณีใด ข้อสอง: `a[low:high]` ไม่ได้ copy ข้อมูล ทั้งสอง slice แชร์ backing array เดียวกัน การเขียนผ่านตัวหนึ่งจะมองเห็นได้จากอีกตัวด้วย ใช้ `copy` เมื่อต้องการ slice ที่เป็นอิสระจริง ๆ
 </Callout>
 
 export const quizSlices = [
@@ -219,12 +215,13 @@ export const quizSlices = [
   {
     q: "วิธี idiomatic ที่ทำให้ slice สองตัวไม่แชร์ backing array คืออะไร?",
     options: [
-      "ใช้ `a[low:high:max]` พร้อม max-cap parameter",
+      "ใช้ `b := a[:]`",
       "ใช้ `copy(dst, src)` เพื่อ copy element ลงใน slice ที่ allocate ใหม่",
       "Assign slice ไปยังตัวแปรใหม่: `b := a`",
-      "ใช้ `append([]int{}, a...)` — แต่ไม่ใช่มาตรฐาน"
+      "ใช้ `slices.Clone(a)` — แต่เป็นการ copy แค่ header เท่านั้น"
     ],
-    answer: 1
+    answer: 1,
+    explain: "`a[:]` และ `b := a` copy แค่ slice header — backing array ยังแชร์กันอยู่ ส่วน `copy(dst, src)`, `slices.Clone(a)`, และ `append([]T(nil), a...)` ล้วนเป็นวิธีที่ถูกต้องในการได้ backing array ที่เป็นอิสระ — ตัวเลือก D ผิดเพราะคำอธิบายเกี่ยวกับ `slices.Clone` ไม่ตรงกับความจริง (มันไม่ได้ copy แค่ header)"
   }
 ];
 

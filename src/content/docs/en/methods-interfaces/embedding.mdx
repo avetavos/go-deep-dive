@@ -37,7 +37,22 @@ fmt.Println(e.Describe()) // promoted method
 
 ## How promotion works
 
-When you access `e.Name`, Go looks for a field or method named `Name` directly on `Employee` first. If none is found, it descends into each embedded type in order. This lookup is purely syntactic sugar — the long form `e.Named.Name` is always valid too.
+When you access `e.Name`, Go looks for a field or method named `Name` directly on `Employee` first. If none is found, the compiler searches by **depth**: a field or method at a shallower embedding level wins. Two candidates at the same depth are ambiguous, and using that selector is a compile error:
+
+```go
+type A struct{ Name string }
+type B struct{ Name string }
+
+type E struct {
+    A
+    B
+}
+
+e := E{A{"a"}, B{"b"}}
+e.Name // compile error: ambiguous selector e.Name
+```
+
+Promotion is resolved at compile time, and promoted methods join the outer type's method set — that is why `Employee` satisfies `Describer` below. The long form `e.Named.Name` is always valid too, even when the short form would be ambiguous.
 
 You can **override** a promoted method by declaring a method with the same name on the outer type:
 
@@ -72,7 +87,7 @@ A critical distinction:
 
 | Inheritance (Java/C++) | Embedding (Go) |
 |------------------------|----------------|
-| Virtual dispatch: method call on outer type can dispatch to inner's override | No virtual dispatch: calling the inner method always calls *that* method, regardless of what is on the outer type |
+| Virtual dispatch: calling a method through the base type dispatches to the derived override | No virtual dispatch: calling the inner method always calls *that* method, regardless of what is on the outer type |
 | `instanceof` / type hierarchy | No hierarchy — types are unrelated |
 | Base class can reference derived class via virtual methods | Embedded type has no knowledge of the outer type |
 
@@ -86,13 +101,23 @@ type Named struct {
 \tName string
 }
 
+func (n Named) String() string {
+\treturn "Named(" + n.Name + ")"
+}
+
 func (n Named) Describe() string {
-\treturn "Name: " + n.Name
+\t// Describe calls String on itself — always Named's String, never an outer override
+\treturn "Name: " + n.String()
 }
 
 type Employee struct {
 \tNamed
 \tDepartment string
+}
+
+// Employee's own String — NOT used by Named.Describe() above
+func (e Employee) String() string {
+\treturn fmt.Sprintf("%s (Dept: %s)", e.Name, e.Department)
 }
 
 // Interface embedding
@@ -105,13 +130,9 @@ type Describer interface {
 \tDescribe() string
 }
 
-func (e Employee) String() string {
-\treturn fmt.Sprintf("%s (Dept: %s)", e.Name, e.Department)
-}
-
 func print(d Describer) {
-\tfmt.Println(d.String())
-\tfmt.Println(d.Describe())
+\tfmt.Println(d.String())   // Employee's own String, reached through the interface
+\tfmt.Println(d.Describe()) // promoted Describe still calls Named's String, not Employee's
 }
 
 func main() {
@@ -120,15 +141,15 @@ func main() {
 \t\tDepartment: "Engineering",
 \t}
 \t// promoted field and method
-\tfmt.Println(e.Name)
-\tfmt.Println(e.Describe())
+\tfmt.Println(e.Name)       // Alice
+\tfmt.Println(e.Describe()) // Name: Named(Alice) — Named's own String, not Employee's override
 \tprint(e)
 }`;
 
 <Playground code={embeddingCode} />
 
 <Callout title="Embedding is composition, not inheritance">
-There is no virtual dispatch on the outer type. If `Employee` embeds `Named` and you call `e.Named.Describe()`, you always call `Named`'s `Describe` — the compiler does not look at `Employee` for an override. This is intentional: Go's embedding is a code-reuse mechanism, not a polymorphism mechanism. For polymorphism, define an interface and let both types satisfy it independently.
+There is no virtual dispatch on the outer type. `Named.Describe()` calls `n.String()` on itself, so it always resolves to `Named`'s own `String` — even when the concrete value is an `Employee` with its own `String()` override, and even when `Describe` is called through the `Describer` interface. Compare that to `d.String()` called directly on the interface: it dispatches to `Employee`'s override, because that call does not go through `Named` at all. This is intentional: Go's embedding is a code-reuse mechanism, not a polymorphism mechanism. For polymorphism, define an interface and let both types satisfy it independently.
 </Callout>
 
 export const quizEmbedding = [

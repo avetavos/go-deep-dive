@@ -25,7 +25,7 @@ scores := map[string]int{
 }
 ```
 
-The key type must be **comparable** (supports `==`). Valid key types include `string`, `int`, all numeric types, booleans, pointers, and structs whose fields are all comparable. Slices, maps, and functions cannot be used as keys.
+The key type must be **comparable** (supports `==`). Valid key types include `string`, `int`, all numeric types, booleans, pointers, arrays, channels, interfaces, and structs whose fields are all comparable. An interface key compiles fine but panics at runtime if the dynamic type it holds turns out to be incomparable (for example a slice); a pointer key compares by address, not by what it points to. Slices, maps, and functions cannot be used as keys.
 
 ## Set, get, delete
 
@@ -69,7 +69,7 @@ fmt.Println(a["x"]) // 99 — a and b share the same map
 
 ## Iteration order is randomized
 
-Go deliberately randomizes map iteration order on every run to prevent code from depending on an undefined order. To print map entries deterministically, sort the keys first:
+The spec leaves iteration order unspecified, and the runtime deliberately randomizes the starting point of every `range` loop — two loops in the same run differ. To print map entries deterministically, sort the keys first:
 
 ```go
 import "sort"

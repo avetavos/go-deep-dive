@@ -33,6 +33,8 @@ mu.Unlock()
 
 `sync.RWMutex` คือ variant ที่ optimize สำหรับกรณีที่อ่านบ่อย goroutines หลายตัวสามารถถือ **read lock** พร้อมกันได้ด้วย `RLock/RUnlock` **Write lock** (`Lock/Unlock`) เป็น exclusive — รอให้ reader ทั้งหมดเสร็จก่อน แล้วบล็อก reader ใหม่จนกว่า writer เสร็จ
 
+ใช้เมื่ออ่านบ่อยกว่าเขียนมาก (เช่น in-memory cache)
+
 ## sync.Once
 
 `sync.Once` รัน function ได้ครั้งเดียว ไม่ว่าจะมี goroutines กี่ตัวเรียก `Do` พร้อมกัน use case มาตรฐานคือ lazy, thread-safe initialization:
@@ -53,6 +55,8 @@ func getConfig() *Config {
 
 Package `sync/atomic` มี lock-free operations บน integer และ pointer types โดยใช้ CPU hardware instructions สำหรับ counter หรือ flag ง่าย ๆ atomics เร็วกว่า mutex เพราะไม่มี lock contention
 
+ตั้งแต่ Go 1.19 ให้ใช้ typed API เป็นหลัก: `var hits atomic.Int64` แล้วเรียก `hits.Add(1)`, `hits.Load()`, `hits.Store(n)`, และ `hits.CompareAndSwap(old, new)` เป็น method ตรง ๆ ไม่ต้องใช้ `&` เลย ตระกูลเดียวกันนี้ยังมี `atomic.Bool` และ `atomic.Pointer[T]` สำหรับ flag และ pointer swap แบบ lock-free รูปแบบ function เก่าอย่าง `atomic.AddInt64(&counter, 1)` ยังใช้ได้และเป็นสิ่งที่เจอในโค้ดเก่า แต่ต้องการให้ `int64`/`uint64` ที่ทำงานด้วย align 8 byte เอง ซึ่งเป็นกับดักจริงบน 32-bit platform ที่ field ใน struct อาจ misalign ได้ — typed API ตัดปัญหา alignment นี้ไปเลย นี่คือเหตุผลหลักที่ควรใช้ในโค้ดใหม่
+
 ## sync.WaitGroup.Go (Go 1.25+)
 
 `WaitGroup` คือ primitive ที่คุณหยิบใช้บ่อยที่สุด และตั้งแต่ Go 1.25 มีทางลัด: `wg.Go(f)` ทำ `Add(1)` เริ่ม `f` ใน goroutine ใหม่ และเรียก `Done()` เมื่อ `f` return
@@ -65,7 +69,15 @@ for _, url := range urls {
 wg.Wait()
 ```
 
-ในโค้ดใหม่ให้ใช้ `wg.Go` — วาง `Add` ผิดที่ไม่ได้เลย — และปล่อยให้ `go fix` (modernizer `waitgroupgo`, Go 1.26+) เขียนสามบรรทัดแบบเก่าในโค้ดเดิมให้ใหม่
+ในโค้ดใหม่ให้ใช้ `wg.Go` — วาง `Add` ผิดที่ไม่ได้เลย — และปล่อยให้ `go fix` เขียนสามบรรทัดแบบเก่าในโค้ดเดิมให้ใหม่: modernizer ตัวนี้ชื่อ `waitgroup` ใน Go 1.26 แล้วเปลี่ยนชื่อเป็น `waitgroupgo` ใน Go 1.27 (เพื่อไม่ให้ชนกับ analyzer `waitgroup` ของ `go vet` เอง ซึ่งตรวจการใช้ WaitGroup ผิด ไม่ใช่เขียนโค้ดใหม่ให้)
+
+## Channels vs mutexes — คู่มือใช้งานจริง
+
+| ใช้ channel เมื่อ... | ใช้ mutex เมื่อ... |
+|----------------------|---------------------|
+| ถ่ายโอน ownership ของข้อมูล | ป้องกัน cache หรือ struct ที่แชร์กัน |
+| ประสาน lifecycle ของ goroutine | จัดการ counter หรือ flag ง่าย ๆ |
+| Pipeline และ fan-out pattern | ข้อมูลที่อ่านบ่อยด้วย sync.RWMutex |
 
 export const syncCode = `package main
 
@@ -93,7 +105,7 @@ func (c *SafeCounter) Value() int {
 }
 
 func main() {
-\t// sync.Mutex: 100 goroutines increment ทีละ 1 -> 100
+\t// sync.Mutex: 100 goroutines each increment once -> 100
 \tvar wg sync.WaitGroup
 \tc := &SafeCounter{}
 \tfor i := 0; i < 100; i++ {
@@ -106,7 +118,7 @@ func main() {
 \twg.Wait()
 \tfmt.Println("counter:", c.Value()) // 100
 
-\t// sync.Once: function รันครั้งเดียวแม้เรียก 3 ครั้ง
+\t// sync.Once: function runs exactly once despite 3 calls
 \tvar once sync.Once
 \tfor i := 0; i < 3; i++ {
 \t\tonce.Do(func() {
@@ -114,17 +126,17 @@ func main() {
 \t\t})
 \t}
 
-\t// sync/atomic: 50 goroutines add 1 -> 50
-\tvar atomicCount int64
+\t// sync/atomic: typed API, 50 goroutines each add 1 -> 50
+\tvar hits atomic.Int64
 \tfor i := 0; i < 50; i++ {
 \t\twg.Add(1)
 \t\tgo func() {
 \t\t\tdefer wg.Done()
-\t\t\tatomic.AddInt64(&atomicCount, 1)
+\t\t\thits.Add(1)
 \t\t}()
 \t}
 \twg.Wait()
-\tfmt.Println("atomic count:", atomic.LoadInt64(&atomicCount)) // 50
+\tfmt.Println("atomic count:", hits.Load()) // 50
 }`;
 
 <Playground code={syncCode} />
@@ -143,19 +155,15 @@ func main() {
 
 - **mutex ช้ากว่า channel เสมอ** — mutex เร็วกว่า channel สำหรับ protect simple counter
 - **sync.Map แทน map+mutex ได้เสมอ** — sync.Map เหมาะกับ read-heavy, append-only ไม่ใช่ general map
-- **atomic.AddInt64 ใช้งานได้โดยไม่มีข้อกังวล** — ต้องระวัง 64-bit alignment บน 32-bit platform
+- **typed atomic.Int64 กับ atomic.AddInt64 แบบเก่าเหมือนกันทุกประการ** — รูป function เก่าต้องการให้ตัวแปรที่ใช้ align 8 byte เอง (พังได้จริงบน 32-bit platform) ส่วน typed API (`atomic.Int64`, `atomic.Bool`, `atomic.Pointer[T]`) จัดการ alignment ให้อัตโนมัติ จึงควรใช้ตัวหลังในโค้ดใหม่เสมอ
 - **defer mu.Unlock() ช้ากว่า explicit unlock** — defer มี overhead น้อยมาก ใช้เพื่อ safety เสมอ
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Kubernetes** ใช้ sync.RWMutex protect in-memory object cache — หลาย reader, writer น้อย เหมาะกับ RWMutex
->
-> **Prometheus** ใช้ atomic counter สำหรับ metric increment — lock-free, ไม่เสีย throughput
->
-> **etcd** ใช้ sync.Once สำหรับ singleton initialization ของ raft state machine
+> **Prometheus client_golang** ใช้ `atomic.AddUint64` เพิ่มค่า counter metric แบบ lock-free ใน `prometheus/counter.go` — hot path ที่ถูกเรียกทุกครั้งที่ metric เปลี่ยนค่า จึงหลีกเลี่ยง lock contention ด้วย atomic แทน mutex
 
 <Callout title="Data races: ตรวจหาด้วย go run -race">
-Data race เกิดขึ้นเมื่อ goroutines สองตัวเข้าถึง variable เดียวกันพร้อมกันและอย่างน้อยหนึ่งเป็นการเขียน โดยไม่มี synchronization ผลลัพธ์คือ undefined behaviour Go มี race detector ในตัว: รัน `go run -race main.go` หรือ `go test -race ./...` เพื่อ instrument binary ของคุณ Detector เพิ่ม overhead ประมาณ 2–20x และไม่เหมาะสำหรับ production แต่ต้องใช้ใน CI
+Data race เกิดขึ้นเมื่อ goroutines สองตัวเข้าถึง variable เดียวกันพร้อมกันและอย่างน้อยหนึ่งเป็นการเขียน โดยไม่มี synchronization ผลลัพธ์คือ undefined behaviour Go มี race detector ในตัว: รัน `go run -race main.go` หรือ `go test -race ./...` เพื่อ instrument binary ของคุณ Detector เพิ่ม overhead ประมาณ 2–20x และไม่เหมาะสำหรับ production แต่ต้องใช้ใน CI Mutex, channel, และ atomic ล้วนกำจัด race ได้
 </Callout>
 
 export const quizSync = [

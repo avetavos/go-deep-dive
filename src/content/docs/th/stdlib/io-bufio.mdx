@@ -85,6 +85,7 @@ import (
 \t"bytes"
 \t"fmt"
 \t"io"
+\t"os"
 \t"strings"
 )
 
@@ -93,6 +94,9 @@ func printLines(r io.Reader) {
 \tscanner := bufio.NewScanner(r)
 \tfor scanner.Scan() {
 \t\tfmt.Println(">", scanner.Text())
+\t}
+\tif err := scanner.Err(); err != nil {
+\t\tfmt.Println("scan error:", err)
 \t}
 }
 
@@ -112,8 +116,8 @@ func main() {
 \tr1 := strings.NewReader("hello ")
 \tr2 := strings.NewReader("world\\n")
 \tcombined := io.MultiReader(r1, r2)
-\tio.Copy(io.Discard, combined)
-\tfmt.Println("MultiReader composed two readers")
+\tfmt.Print("MultiReader output: ")
+\tio.Copy(os.Stdout, combined)
 
 \t// bufio.Scanner over in-memory CSV
 \tcsv := "alice,30\\nbob,25\\ncharlie,35"
@@ -159,10 +163,6 @@ bufio.Writer batching:
 - **strings.NewReader กับ bytes.NewReader เหมือนกัน** — strings.NewReader สำหรับ string literal, bytes.NewReader สำหรับ []byte ที่มีอยู่แล้ว
 
 > 💡 ตัวอย่างจากของจริง
->
-> **Kubernetes**: etcd client ใช้ bufio สำหรับ gRPC message buffering — ลด syscall overhead เมื่อรับ stream ของ events
->
-> **Docker**: container image layer copying ใช้ io.Copy เพื่อ transfer data จาก registry ไปยัง local storage อย่าง efficient
 >
 > **Go HTTP server**: net/http ห่อ TCP connection ด้วย bufio.Reader โดยอัตโนมัติ — request parsing ไม่ต้อง syscall ทุก byte
 

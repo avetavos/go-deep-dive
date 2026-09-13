@@ -17,7 +17,7 @@ Every value in Go has a static type known at compile time. Go divides its types 
 
 **Value types** — variables hold the data directly. Assigning one variable to another copies the data. The primitive value types are booleans, numeric types (`int`, `int64`, `float64`, `uint8`, …), and `string`. Composite value types are **arrays** and **structs**.
 
-**Reference-like types** — the variable holds a small header that points to a backing data structure allocated elsewhere. **Slices**, **maps**, **channels**, **functions**, and **pointers** all fall into this family. Assigning copies the header, not the underlying data, so two variables can observe the same data.
+**Reference-like types** — the variable holds a small handle that points to data allocated elsewhere: assigning always copies the handle itself, not the underlying data — that part is a plain, correct copy, just like copying any other value. **Slices** (a pointer + len + cap header), **maps** and **channels** (a single pointer), **functions**, and **pointers** (one word) all work this way, and because both copies of the handle still point at the same backing data, mutation through one is visible through the other. **Strings** are built the same way internally — a pointer + len header — but behave like a value type from the outside: string data is immutable, so sharing the header never produces the shared-mutation surprise that slices and maps can.
 
 export const typeTaxonomyDiagram = `flowchart TD
   Root["Go Type Taxonomy"]
