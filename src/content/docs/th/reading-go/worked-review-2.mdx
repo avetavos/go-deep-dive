@@ -220,45 +220,45 @@ bug ที่ 1 คือสิ่งที่ควรจำไว้: `time.Sl
 
 export const quizWorkedReview2 = [
   {
-    q: "Three separate runs of the buggy program reported '2 of 5', '3 of 5', and '3 of 5' files processed. What does this variation, by itself, tell you about the bug?",
+    q: "รันโปรแกรมที่มี bug แยกกันสามครั้ง ได้ผลลัพธ์ '2 of 5', '3 of 5', และ '3 of 5' ไฟล์ที่ประมวลผล ความแตกต่างนี้เพียงอย่างเดียวบอกอะไรเกี่ยวกับ bug บ้าง?",
     options: [
-      "Nothing — the program has a compile error that only sometimes triggers",
-      "At least one bug depends on goroutine scheduling timing rather than being a fixed, deterministic outcome",
-      "The files themselves are corrupted",
-      "os.ReadFile is nondeterministic by design"
+      "ไม่บอกอะไรเลย — โปรแกรมมี compile error ที่บางครั้งถึงจะเกิด",
+      "อย่างน้อยหนึ่ง bug ขึ้นอยู่กับ timing ของ goroutine scheduling ไม่ใช่ผลลัพธ์ที่ตายตัวแบบ deterministic",
+      "ตัวไฟล์เองเสียหาย",
+      "os.ReadFile ถูกออกแบบมาให้ nondeterministic"
     ],
     answer: 1,
     explain: "bug ที่ทำให้อาการเปลี่ยนไปในแต่ละครั้งที่รัน binary เดียวกันด้วย input เดียวกัน คือ bug ที่ขึ้นกับ timing — ในที่นี้คือ Sleep 150ms ตายตัวที่แข่งกับการทำงานจริงของ goroutine ซึ่งไม่มี latency คงที่โดยธรรมชาติ"
   },
   {
-    q: "After ProcessAll returns, `runtime.NumGoroutine()` shows 2 more goroutines running than before the call. What are those goroutines doing?",
+    q: "หลังจาก ProcessAll return `runtime.NumGoroutine()` แสดงว่ามี goroutine ทำงานอยู่มากกว่าก่อนเรียก 2 ตัว goroutine เหล่านั้นกำลังทำอะไรอยู่?",
     options: [
-      "They already finished and are being garbage collected",
-      "They are blocked forever inside `for p := range jobs`, because jobs is never closed",
-      "They are retrying failed file reads",
-      "They are duplicates created by the race detector"
+      "ทำงานเสร็จไปแล้วและกำลังถูก garbage collect",
+      "ถูก block อยู่ตลอดกาลข้างใน `for p := range jobs` เพราะ jobs ไม่เคยถูกปิดเลย",
+      "กำลัง retry การอ่านไฟล์ที่ล้มเหลว",
+      "เป็นตัวซ้ำที่ race detector สร้างขึ้นมา"
     ],
     answer: 1,
     explain: "range บน channel จะจบก็ต่อเมื่อ channel ถูกปิดเท่านั้น เนื่องจาก ProcessAll ไม่เคยเรียก close(jobs) loop range ของแต่ละ worker จึง block ตลอดไป รอค่าที่จะไม่มีวันมาถึง — goroutine leak"
   },
   {
-    q: "Why does `go run` on the buggy version typically complete without crashing, even though `results = append(results, r)` is a genuine data race?",
+    q: "ทำไม `go run` บนเวอร์ชันที่มี bug มักจะจบโดยไม่ crash ทั้งที่ `results = append(results, r)` เป็น data race จริงๆ?",
     options: [
-      "It is not actually a race — the compiler would reject it if it were",
-      "The race detector is always on by default in `go run`",
-      "Without the `-race` flag, Go does not instrument memory accesses to detect concurrent access — the race exists in the program regardless of whether that specific run happens to crash or corrupt visibly",
-      "Maps and slices in Go are always safe for concurrent access"
+      "จริงๆ แล้วไม่ใช่ race — ถ้าเป็น compiler จะปฏิเสธมันไปแล้ว",
+      "race detector เปิดอยู่โดย default ใน `go run` เสมอ",
+      "ถ้าไม่มี flag `-race` Go จะไม่ใส่ instrumentation ให้ memory access เพื่อตรวจจับการเข้าถึงพร้อมกัน — race มีอยู่ในโปรแกรมไม่ว่าการรันครั้งนั้นจะบังเอิญ crash หรือ corrupt ให้เห็นหรือไม่ก็ตาม",
+      "map และ slice ใน Go ปลอดภัยสำหรับการเข้าถึงพร้อมกันเสมอ"
     ],
     answer: 2,
     explain: "race detector ทำงานเฉพาะตอนมี -race เท่านั้น ถ้าไม่มี race อาจรันไปนานโดยไม่มีอาการที่เห็นได้จากภายนอกเลย — การไม่มี crash ที่เห็นได้ไม่ใช่หลักฐานว่าโค้ดถูกต้อง เป็นแค่หลักฐานว่า run ครั้งนั้นบังเอิญไม่เจอ interleaving ที่แย่"
   },
   {
-    q: "The fixed version uses a `resultsCh` channel plus a single collector goroutine (`for r := range resultsCh { results = append(...) }`) instead of a mutex around the shared slice. Why does this avoid the race without any explicit lock?",
+    q: "เวอร์ชันที่แก้แล้วใช้ channel `resultsCh` บวกกับ collector goroutine ตัวเดียว (`for r := range resultsCh { results = append(...) }`) แทนที่จะใช้ mutex ล้อมรอบ slice ที่ใช้ร่วมกัน ทำไมวิธีนี้ถึงเลี่ยง race ได้โดยไม่ต้องมี lock เลย?",
     options: [
-      "Channels are just mutexes with a different name",
-      "Only one goroutine (the collector) ever touches `results`, so there is no concurrent access to synchronize — the channel serializes the values into that single goroutine",
-      "resultsCh automatically deduplicates concurrent writes",
-      "It doesn't avoid the race — the fixed version still needs a mutex"
+      "channel ก็แค่ mutex ที่เปลี่ยนชื่อเรียก",
+      "มีแค่ goroutine เดียว (collector) เท่านั้นที่แตะ `results` เลยไม่มีการเข้าถึงพร้อมกันให้ต้อง synchronize — channel เรียงลำดับค่าทั้งหมดส่งเข้า goroutine ตัวเดียวนั้น",
+      "resultsCh ตัดข้อมูลซ้ำจากการเขียนพร้อมกันให้อัตโนมัติ",
+      "มันไม่ได้เลี่ยง race เลย — เวอร์ชันที่แก้แล้วยังต้องใช้ mutex อยู่ดี"
     ],
     answer: 1,
     explain: "race ในเวอร์ชันที่มี bug มาจากหลาย worker goroutine เขียนลง slice เดียวกันพร้อมกัน การส่งทุก result ผ่าน channel ไปยัง collector goroutine ตัวเดียวที่กำหนดไว้ แปลว่า results ถูกแตะโดย goroutine ตัวนั้นตัวเดียวเท่านั้น — 'อย่าสื่อสารด้วยการแชร์ memory จงแชร์ memory ด้วยการสื่อสาร' กำจัด race ได้โดยโครงสร้างเลย"

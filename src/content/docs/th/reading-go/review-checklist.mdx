@@ -63,45 +63,45 @@ import Mermaid from '../../../../components/Mermaid.astro';
 
 export const quizReviewChecklist = [
   {
-    q: "Which group does 'does every http.Client set Timeout' belong to, and why that group rather than 'API contract'?",
+    q: "'ทุก http.Client set Timeout หรือเปล่า' จัดอยู่กลุ่มไหน และทำไมถึงเป็นกลุ่มนั้นแทนที่จะเป็น 'API contract'?",
     options: [
-      "API contract — it is about what a caller can expect from a response",
-      "Resources — a Client with no Timeout can hold a connection (a resource) open indefinitely",
-      "Types — http.Client is a struct type",
-      "Tooling & style — it is a matter of code style, not correctness"
+      "API contract — เพราะเป็นเรื่องว่า caller คาดหวังอะไรจาก response ได้บ้าง",
+      "Resources — Client ที่ไม่มี Timeout อาจถือ connection (ซึ่งเป็น resource) ค้างไว้ไม่มีที่สิ้นสุด",
+      "Types — http.Client เป็น struct type",
+      "Tooling & style — เป็นเรื่อง code style ไม่ใช่ correctness"
     ],
     answer: 1,
     explain: "checklist นี้จัดกลุ่มตามสิ่งที่ล้มเหลว ไม่ใช่ตาม package ที่เกี่ยวข้อง: Timeout ที่ไม่จำกัดคือปัญหา resource-lifetime (connection ถูกถือค้างไว้ตลอดกาล) คนละเรื่องกับว่า status code หรือรูปร่างของ body เคารพ contract หรือเปล่า"
   },
   {
-    q: "Why does the checklist tell you to check 'is recover() called directly inside the deferred function' rather than just 'does the code call recover() somewhere'?",
+    q: "ทำไม checklist ถึงบอกให้เช็ก 'recover() ถูกเรียกตรงข้างในตัว deferred function เลยหรือเปล่า' แทนที่จะเช็กแค่ 'โค้ดเรียก recover() ที่ไหนสักแห่งหรือเปล่า'?",
     options: [
-      "recover() only stops a panic when called directly by a deferred function — one level of indirection through a helper makes it silently ineffective",
-      "recover() is deprecated in modern Go",
-      "recover() must be called before defer, not after",
-      "There is no difference — both phrasings check the same thing"
+      "recover() จะหยุด panic ได้ก็ต่อเมื่อถูกเรียกตรงจาก deferred function เท่านั้น — ถ้ามี helper คั่นอีกชั้นเดียว มันจะไม่ทำงานแบบเงียบๆ",
+      "recover() ถูก deprecate ไปแล้วใน Go เวอร์ชันปัจจุบัน",
+      "recover() ต้องถูกเรียกก่อน defer ไม่ใช่หลัง",
+      "ไม่มีความต่างกันเลย — สองแบบนี้เช็กสิ่งเดียวกัน"
     ],
     answer: 0,
     explain: "recover() ที่ถูกเรียกผ่าน function call เพิ่มอีกชั้น (defer wrapper(); func wrapper() { recover() }) ไม่หยุด panic — spec ของภาษากำหนดว่า recover ต้องถูกเรียกตรงจาก deferred function เอง"
   },
   {
-    q: "The checklist says to check the go.mod `go` directive for loop-variable capture bugs. Why does the directive matter here?",
+    q: "checklist บอกให้เช็ก `go` directive ใน go.mod สำหรับ bug เรื่อง loop-variable capture ทำไม directive ถึงสำคัญตรงนี้?",
     options: [
-      "It doesn't — this bug is identical on every Go version",
-      "Go 1.22 changed for-loop variables to be scoped per iteration, so the same capturing code is a bug pre-1.22 and correct at 1.22+",
-      "The go directive only affects which stdlib version is available",
-      "Older go directives disable goroutines entirely"
+      "ไม่สำคัญเลย — bug นี้เหมือนกันทุก Go version",
+      "Go 1.22 เปลี่ยนให้ตัวแปรใน for-loop มี scope แยกต่อ iteration ดังนั้นโค้ด capture แบบเดียวกันเป็น bug ก่อน 1.22 แต่ถูกต้องตั้งแต่ 1.22 ขึ้นไป",
+      "go directive มีผลแค่กับว่า stdlib version ไหนใช้ได้เท่านั้น",
+      "go directive เก่าๆ จะปิดการใช้งาน goroutine ไปเลย"
     ],
     answer: 1,
     explain: "`go func(){ use(v) }()` ข้างใน range loop เป็น bug หรือไม่ขึ้นกับว่า go.mod ประกาศ go 1.22 ขึ้นไปหรือเปล่าล้วนๆ — source text เดียวกันมี semantics ต่างกันตาม version"
   },
   {
-    q: "Why is 'does a new interface have more than one real implementation' on this checklist at all, given no linter can check it?",
+    q: "ทำไม 'interface ใหม่มี implementation จริงมากกว่าหนึ่งตัวหรือเปล่า' ถึงอยู่ใน checklist นี้ด้วย ทั้งที่ไม่มี linter ตัวไหนเช็กเรื่องนี้ได้เลย?",
     options: [
-      "It shouldn't be — checklists should only contain things a tool can verify",
-      "A checklist is exactly for judgment calls no tool makes; that is the gap human review exists to fill",
-      "golangci-lint can check this if you enable enough linters",
-      "Interfaces with one implementation are always a compile error"
+      "ไม่ควรอยู่เลย — checklist ควรมีแค่สิ่งที่เครื่องมือ verify ได้เท่านั้น",
+      "checklist มีไว้เพื่อการตัดสินใจที่ไม่มีเครื่องมือไหนทำได้พอดี — นั่นคือช่องว่างที่ human review มีไว้เติมเต็ม",
+      "golangci-lint เช็กเรื่องนี้ได้ถ้าเปิด linter มากพอ",
+      "interface ที่มี implementation แค่ตัวเดียวถือเป็น compile error เสมอ"
     ],
     answer: 1,
     explain: "ประเด็นหลักของโมดูลนี้คือประมาณครึ่งหนึ่งของ pattern ที่มันครอบคลุมไม่มี automated check เลย — checklist มีไว้เพื่อบรรจุการตัดสินใจที่ tooling ทำไม่ได้ ไม่ใช่แค่ส่วนที่มันทำได้"

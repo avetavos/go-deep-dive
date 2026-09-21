@@ -189,45 +189,45 @@ golangci-lint รันทั้งกล่องซ้ายบน (go vet + s
 
 export const quizVerificationTools = [
   {
-    q: "A CI pipeline runs `golangci-lint run` and it passes with 0 issues. Which of these is still possible?",
+    q: "CI pipeline รัน `golangci-lint run` แล้วผ่านโดยไม่มี issue เลย ข้อไหนต่อไปนี้ยังเป็นไปได้อยู่?",
     options: [
-      "Nothing — a clean golangci-lint run guarantees the code has no bugs",
-      "A goroutine leak, a missing http.Client Timeout, or a data race that didn't occur during that particular run",
-      "Only style issues, never a correctness bug",
-      "golangci-lint always finds every bug go vet and staticcheck could find, so a clean run is complete"
+      "ไม่มีเลย — การรัน golangci-lint แบบสะอาดรับประกันว่าโค้ดไม่มี bug",
+      "goroutine leak, http.Client ที่ไม่มี Timeout, หรือ data race ที่บังเอิญไม่เกิดขึ้นระหว่างการรันครั้งนั้น",
+      "มีแค่ปัญหาเรื่อง style เท่านั้น ไม่มีทางเป็น correctness bug",
+      "golangci-lint หา bug ทุกตัวที่ go vet กับ staticcheck หาเจอได้เสมอ ดังนั้นการรันที่สะอาดถือว่าครบถ้วน"
     ],
     answer: 1,
     explain: "linter มาตรฐานของ golangci-lint ล้วนเป็น static analyzer บน source text ทั้งหมด leak, timeout ที่หายไป, และ race ที่บังเอิญไม่เกิดขึ้น ล้วนเป็นคุณสมบัติตอน runtime ที่ static tool ในชุดนั้นไม่มีทางเห็น"
   },
   {
-    q: "Why did staticcheck fail with 'package requires newer Go version go1.27' against a module whose code uses no Go 1.27-specific syntax?",
+    q: "ทำไม staticcheck ถึง fail ด้วย 'package requires newer Go version go1.27' กับ module ที่โค้ดไม่ได้ใช้ syntax เฉพาะของ Go 1.27 เลย?",
     options: [
-      "The code actually does use a 1.27 feature, even if it looks simple",
-      "staticcheck's own binary was built with an older Go toolchain than the one the target module's go.mod declares, and it cannot type-check against a newer stdlib than it was built with",
-      "staticcheck never supports go.mod files with a go directive above 1.20",
-      "This error means the code has a syntax error"
+      "จริงๆ แล้วโค้ดใช้ feature ของ 1.27 อยู่ ถึงจะดูเรียบง่ายก็ตาม",
+      "ตัว binary ของ staticcheck เองถูก build ด้วย Go toolchain ที่เก่ากว่าที่ go.mod ของ module เป้าหมายประกาศไว้ และมัน type-check กับ stdlib ที่ใหม่กว่าที่มันถูก build มาไม่ได้",
+      "staticcheck ไม่รองรับไฟล์ go.mod ที่มี go directive สูงกว่า 1.20 เลย",
+      "error นี้แปลว่าโค้ดมี syntax error"
     ],
     answer: 1,
     explain: "staticcheck (เหมือน govulncheck) ต้องถูก build ด้วย Go toolchain ที่ใหม่อย่างน้อยเท่ากับ module ที่มันวิเคราะห์ ถ้า go.mod ของมันเองตรึง Go เวอร์ชันเก่าไว้และ go install ใช้อันนั้น มันจะประมวลผล stdlib ของ module เป้าหมายที่ใหม่กว่าไม่ได้ — เป็นปัญหาความเข้ากันได้ของเครื่องมือ ไม่ใช่ปัญหาของโค้ด"
   },
   {
-    q: "gopls reported both an errors.As misuse and 'nil dereference in field selection' two lines later in the same file. What does the second diagnostic depend on?",
+    q: "gopls รายงานทั้งการใช้ errors.As ผิดและ 'nil dereference in field selection' อีกสองบรรทัดถัดมาในไฟล์เดียวกัน diagnostic ตัวที่สองขึ้นอยู่กับอะไร?",
     options: [
-      "Nothing — it is an unrelated, independent finding",
-      "gopls's nilness analysis traced that because the errors.As call will fail, the target variable stays nil, making the next line's field access a guaranteed nil dereference",
-      "It is a false positive that should be ignored",
-      "It only appears because -race was also enabled"
+      "ไม่ขึ้นกับอะไรเลย — เป็น finding ที่ไม่เกี่ยวข้องกัน แยกจากกันโดยสิ้นเชิง",
+      "nilness analysis ของ gopls ตามรอยว่า เพราะ errors.As call จะ fail ตัวแปร target จึงยังเป็น nil อยู่ ทำให้การเข้าถึง field ในบรรทัดถัดไปเป็น nil dereference ที่เกิดขึ้นแน่นอน",
+      "เป็น false positive ที่ควรมองข้าม",
+      "มันปรากฏขึ้นเพราะเปิด -race ไว้ด้วยเท่านั้น"
     ],
     answer: 1,
     explain: "diagnostic ทั้งสองเชื่อมกัน: nilness analyzer ของ gopls ตาม consequence ของ bug แรก (errors.As fail เสมอ) ต่อไปถึง nil dereference ที่เกิดแน่นอนบนบรรทัดถัดไป — การเชื่อมโยงที่ go vet กับ staticcheck ไม่ได้ทำใน catalog นี้"
   },
   {
-    q: "A file has 100% test coverage. What does that guarantee?",
+    q: "ไฟล์หนึ่งมี test coverage 100% นั่นรับประกันอะไร?",
     options: [
-      "The code has no bugs",
-      "Every statement executed at least once across the test suite — nothing about whether the assertions or inputs were the right ones",
-      "The code is safe for concurrent use",
-      "go vet and staticcheck have nothing left to find"
+      "โค้ดไม่มี bug",
+      "ทุก statement ถูก execute อย่างน้อยหนึ่งครั้งตลอด test suite — ไม่ได้รับประกันอะไรเลยว่า assertion หรือ input ที่ใช้นั้นถูกต้องหรือเปล่า",
+      "โค้ดปลอดภัยสำหรับใช้งานแบบ concurrent",
+      "go vet กับ staticcheck ไม่มีอะไรเหลือให้หาแล้ว"
     ],
     answer: 1,
     explain: "coverage วัดว่าอะไรถูกรัน ไม่ใช่ว่าอะไรถูก verify ว่าถูกต้อง test อาจ execute บรรทัดที่มี bug แล้วยังผ่านอยู่ดี เพราะมันไม่เคยเช็กค่าหรือ path เฉพาะที่ bug นั้นส่งผล"

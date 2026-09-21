@@ -228,45 +228,45 @@ bug ที่ 1 อย่างเดียวก็อธิบายได้�
 
 export const quizWorkedReview1 = [
   {
-    q: "In the buggy version, both POST requests return `{\"id\":1,...}`. What is the direct cause?",
+    q: "ในเวอร์ชันที่มี bug ทั้งสอง POST request คืนค่า `{\"id\":1,...}` เหมือนกัน สาเหตุโดยตรงคืออะไร?",
     options: [
-      "The Store's map has a maximum size of 1",
-      "Add has a value receiver, so `s.nextID++` increments a copy of nextID that is discarded when Add returns",
-      "The httptest server caches the first response",
-      "JSON encoding always resets numeric fields to 1"
+      "map ของ Store มีขนาดสูงสุดแค่ 1",
+      "Add เป็น value receiver ดังนั้น `s.nextID++` เพิ่มค่าใน copy ของ nextID ที่ถูกทิ้งไปตอน Add return",
+      "httptest server cache response แรกไว้",
+      "JSON encoding รีเซ็ต numeric field เป็น 1 เสมอ"
     ],
     answer: 1,
     explain: "Add(text string) Task ที่เป็น value receiver copy Store ทั้งชุดทุกครั้งที่เรียก การเขียน map รอดอยู่ (map เป็น reference type) แต่ field nextID เป็น int ธรรมดา — เพิ่มค่าใน copy ไม่มีผลกับ nextID ตัวจริงใน Store เดิม"
   },
   {
-    q: "Why does the buggy handler's client always see `status=200` instead of `201`, even though the code calls `w.WriteHeader(http.StatusCreated)`?",
+    q: "ทำไม client ของ handler ที่มี bug ถึงเห็น `status=200` เสมอแทนที่จะเป็น `201` ทั้งที่โค้ดเรียก `w.WriteHeader(http.StatusCreated)` อยู่?",
     options: [
-      "http.StatusCreated is actually the same value as 200",
-      "WriteHeader is called after Encode has already triggered an implicit 200 on the first Write",
-      "httptest.NewServer overrides all status codes to 200",
-      "The client library ignores status codes above 200"
+      "http.StatusCreated จริงๆ แล้วมีค่าเดียวกับ 200",
+      "WriteHeader ถูกเรียกหลังจาก Encode ทำให้เกิด 200 โดยปริยายไปแล้วตอน Write ครั้งแรก",
+      "httptest.NewServer เขียนทับ status code ทุกตัวให้เป็น 200",
+      "client library มองข้าม status code ที่มากกว่า 200"
     ],
     answer: 1,
     explain: "การเรียก ResponseWriter.Write ครั้งแรก (ที่ json.Encoder.Encode เรียกข้างในตัวมันเอง) ส่ง status 200 โดยปริยายถ้า WriteHeader ยังไม่รัน การเรียก WriteHeader หลังจากนั้นไม่มีผลอะไร แค่ log 'superfluous response.WriteHeader call'"
   },
   {
-    q: "`GET /tasks/999` (a task that does not exist) returns 404 with body `{\"id\":0,\"text\":\"\"}` in the buggy version. What single missing keyword causes the body to be sent at all?",
+    q: "`GET /tasks/999` (task ที่ไม่มีอยู่จริง) คืน 404 พร้อม body `{\"id\":0,\"text\":\"\"}` ในเวอร์ชันที่มี bug keyword ตัวเดียวที่หายไปซึ่งทำให้ body ถูกส่งออกมาด้วยคืออะไร?",
     options: [
-      "return — without it, execution falls through to the Encode call after WriteHeader(404)",
-      "break — the handler needs a labeled break",
-      "continue — the loop needs to skip an iteration",
-      "defer — the encode call should have been deferred"
+      "return — ถ้าไม่มี execution จะไหลต่อไปถึง Encode call หลัง WriteHeader(404)",
+      "break — handler ต้องการ labeled break",
+      "continue — loop ต้องข้าม iteration",
+      "defer — encode call ควรถูก defer ไว้"
     ],
     answer: 0,
     explain: "if !ok { w.WriteHeader(http.StatusNotFound) } ไม่มี return statement ดังนั้น handler เดินหน้าไปที่ json.NewEncoder(w).Encode(t) ด้านล่างแบบไม่มีเงื่อนไข ไม่ว่าจะเจอ task หรือไม่ก็ตาม"
   },
   {
-    q: "The fixed version adds a sync.Mutex to Store even though this demo's sequential requests never actually raced. Why add it anyway?",
+    q: "เวอร์ชันที่แก้แล้วเพิ่ม sync.Mutex เข้าไปใน Store ทั้งที่ request แบบ sequential ของ demo นี้ไม่เคยเกิด race จริงๆ เลย ทำไมถึงยังเพิ่มเข้าไป?",
     options: [
-      "It is required by the Go compiler for any struct with a map field",
-      "A real HTTP server handles requests concurrently; without a mutex, concurrent POST/GET calls would race on the shared map and nextID field even after the receiver bug is fixed",
-      "It has no real benefit — it was added only for symmetry with the AI Bug Catalog",
-      "sync.Mutex makes JSON encoding faster"
+      "Go compiler บังคับให้ struct ที่มี map field ต้องมีมันด้วย",
+      "HTTP server จริงจัดการ request แบบ concurrent; ถ้าไม่มี mutex การเรียก POST/GET พร้อมกันจะ race กันบน map ที่ใช้ร่วมกันและ field nextID แม้จะแก้ bug เรื่อง receiver ไปแล้วก็ตาม",
+      "ไม่มีประโยชน์จริงเลย — ใส่เข้ามาแค่เพื่อความสมมาตรกับ AI Bug Catalog",
+      "sync.Mutex ทำให้ JSON encoding เร็วขึ้น"
     ],
     answer: 1,
     explain: "net/http เรียกแต่ละ handler ใน goroutine ของตัวเองต่อ request demo นี้บังเอิญยิง request ทีละตัว แต่ traffic จริงไม่เป็นแบบนั้น — mutex จำเป็นสำหรับความถูกต้องภายใต้ load แบบ concurrent จริง ไม่ใช่แค่เพื่อ output ของ demo นี้โดยเฉพาะ"

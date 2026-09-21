@@ -165,45 +165,45 @@ bug ที่ 3 คุ้มค่าที่จะครุ่นคิดต�
 
 export const quizWorkedReview3 = [
   {
-    q: "The buggy program's very first fetch times out immediately, before any of the 30ms simulated work could finish. What causes that?",
+    q: "fetch แรกสุดของโปรแกรมที่มี bug timeout ทันที ก่อนที่งานจำลอง 30ms ใดๆ จะทำเสร็จเลยด้วยซ้ำ สาเหตุคืออะไร?",
     options: [
-      "The network is simulated to always fail",
-      "context.WithTimeout(context.Background(), 2) passes the untyped constant 2 as a time.Duration directly — 2 nanoseconds, not 2 seconds",
-      "signal.NotifyContext always cancels immediately when stop is discarded",
-      "fetch has a bug that always returns ctx.Err()"
+      "network ถูกจำลองให้ fail เสมอ",
+      "context.WithTimeout(context.Background(), 2) ส่งค่าคงที่ untyped 2 เป็น time.Duration ตรงๆ — กลายเป็น 2 nanosecond ไม่ใช่ 2 วินาที",
+      "signal.NotifyContext จะ cancel ทันทีเสมอเมื่อ stop ถูกทิ้งไป",
+      "fetch มี bug ที่ทำให้ return ctx.Err() เสมอ"
     ],
     answer: 1,
     explain: "time.Duration คือ int64 นับ nanosecond การส่งจำนวนเต็มเปล่าๆ 2 (แทนที่จะเป็น 2 * time.Second) สร้าง context ที่มี deadline อยู่ 2 nanosecond ข้างหน้า — หมดอายุไปแล้วตั้งแต่ select ตัวแรกยังไม่ทันรัน"
   },
   {
-    q: "`go vet` flags `ctx, _ := context.WithTimeout(...)` with a lostcancel warning, but says nothing about `ctx, cancel := context.WithTimeout(...); _ = cancel`. Both leak identically. What does this gap tell you about the lostcancel analyzer?",
+    q: "`go vet` ขึ้น warning lostcancel ให้กับ `ctx, _ := context.WithTimeout(...)` แต่ไม่พูดอะไรเลยกับ `ctx, cancel := context.WithTimeout(...); _ = cancel` ทั้งที่ทั้งคู่ leak เหมือนกันเป๊ะ ช่องว่างนี้บอกอะไรเกี่ยวกับ analyzer lostcancel?",
     options: [
-      "The second spelling doesn't actually leak — vet is correct to stay silent",
-      "lostcancel's heuristic checks whether the cancel variable is referenced at all, not whether it is ever actually called — `_ = cancel` counts as a reference and silences the warning even though the function is never invoked",
-      "go vet only checks the first ten lines of a file",
-      "lostcancel was removed in Go 1.27"
+      "การเขียนแบบที่สองไม่ได้ leak จริง — vet เงียบถูกต้องแล้ว",
+      "heuristic ของ lostcancel เช็กแค่ว่าตัวแปร cancel ถูก reference บ้างไหม ไม่ได้เช็กว่ามันถูกเรียกจริงหรือเปล่า — `_ = cancel` นับเป็น reference แล้วทำให้ warning เงียบไป ทั้งที่ function นั้นไม่เคยถูกเรียกเลย",
+      "go vet เช็กแค่สิบบรรทัดแรกของไฟล์เท่านั้น",
+      "lostcancel ถูกลบออกไปแล้วใน Go 1.27"
     ],
     answer: 1,
     explain: "การสะกดทั้งสองแบบทำให้ cancel function ไม่เคยถูกเรียกเหมือนกัน ซึ่งคือ leak จริง แต่ check ง่ายๆ ของ analyzer ที่แค่ดูว่า 'ตัวแปรนี้ถูกใช้ที่ไหนไหม' ก็พอใจกับ `_ = cancel` แล้ว ทั้งที่ 'ใช้' ตรงนี้แปลว่าแค่ทำให้ compiler ไม่บ่นเรื่อง unused variable เท่านั้น — เป็นข้อจำกัดจริงที่ควรรู้ไว้ ไม่ใช่เชื่อไปเฉยๆ"
   },
   {
-    q: "What does discarding the `stop` function returned by `signal.NotifyContext` actually cost, according to its documentation and the verified demo in this lesson?",
+    q: "การทิ้ง function `stop` ที่ `signal.NotifyContext` คืนมา มีต้นทุนอะไรจริงๆ ตามที่ documentation ของมันบอกและ demo ที่ verify แล้วในบทนี้แสดงให้เห็น?",
     options: [
-      "Nothing measurable — it is a purely theoretical concern",
-      "It permanently prevents the process from exiting via the default Ctrl+C behavior for any signal received after that point, not just a memory leak",
-      "It causes the program to exit immediately",
-      "It only matters if the program never receives any signals at all"
+      "ไม่มีอะไรวัดได้เลย — เป็นแค่ความกังวลทางทฤษฎีล้วนๆ",
+      "มันทำให้ process ไม่สามารถ exit ผ่านพฤติกรรม Ctrl+C แบบ default ได้อีกเลยสำหรับ signal ใดๆ ที่ได้รับหลังจากจุดนั้น ไม่ใช่แค่ memory leak เฉยๆ",
+      "มันทำให้โปรแกรม exit ทันที",
+      "มันสำคัญก็ต่อเมื่อโปรแกรมไม่เคยได้รับ signal เลยเท่านั้น"
     ],
     answer: 1,
     explain: "documentation ของ signal.NotifyContext เองระบุว่า interrupt ในอนาคตจะไม่ trigger พฤติกรรม exit แบบ default จนกว่า stop จะถูกเรียก demo ที่ verify แล้วยืนยันตรงนี้: SIGINT จริงที่ส่งไปยัง process ที่ทิ้ง stop ไม่ทำให้มัน terminate ในขณะที่ signal เดียวกันทำให้ process ที่ไม่มี signal handling เลย terminate ทันที"
   },
   {
-    q: "In the buggy version, the line `(background: fetch for users finished anyway, nobody was waiting)` prints *after* `error: timed out fetching users: ...`. What does that ordering prove?",
+    q: "ในเวอร์ชันที่มี bug บรรทัด `(background: fetch for users finished anyway, nobody was waiting)` พิมพ์ออกมา *หลัง* `error: timed out fetching users: ...` ลำดับนี้พิสูจน์อะไร?",
     options: [
-      "fmt.Println is asynchronous and prints in a random order",
-      "The background goroutine inside fetch never checked ctx.Done(), so it kept running its full simulated delay even after the caller had already given up and returned an error",
-      "The program actually succeeded and the error message is misleading",
-      "context.WithTimeout retries the fetch automatically"
+      "fmt.Println เป็น asynchronous และพิมพ์แบบสุ่มลำดับ",
+      "goroutine ที่ทำงานอยู่เบื้องหลังข้างใน fetch ไม่เคยเช็ก ctx.Done() เลย มันจึงรันงานจำลองที่ delay ไว้จนครบ แม้ว่า caller จะยอมแพ้และ return error ไปแล้วก็ตาม",
+      "โปรแกรมสำเร็จจริงๆ และ error message แค่ทำให้เข้าใจผิด",
+      "context.WithTimeout retry fetch ให้อัตโนมัติ"
     ],
     answer: 1,
     explain: "error return ทันทีที่ ctx.Done() fire (เกือบจะทันที เพราะ bug 2ns) แต่ goroutine ที่ spawn ขึ้นมาเช็กแค่ time.Sleep เปล่าๆ ไม่มี select บน ctx เลย — มันจึงรันจนจบไม่ว่าจะยังมีใครรออยู่หรือเปล่า พิสูจน์ว่า cancellation ไม่เคยไปถึงงานที่กำลังทำอยู่จริงๆ"

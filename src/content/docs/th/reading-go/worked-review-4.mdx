@@ -195,45 +195,45 @@ func main() {
 
 export const quizWorkedReview4 = [
   {
-    q: "`Get` calls `delete(c.data, key)` when an entry has expired, so the entry really is removed from the map. Why does the buggy version still report the value as found?",
+    q: "`Get` เรียก `delete(c.data, key)` เมื่อ entry หมดอายุ ดังนั้น entry นั้นถูกลบออกจาก map จริงๆ ทำไมเวอร์ชันที่มี bug ถึงยังรายงานว่าเจอค่าอยู่?",
     options: [
-      "delete() doesn't actually work on generic map types",
-      "The function falls through to the unconditional `return e.value, true` after the delete, instead of returning the zero value and false on the expired path",
-      "time.Now().After(e.exp) always returns false",
-      "The value is cached a second time somewhere else"
+      "delete() ใช้ไม่ได้จริงกับ generic map type",
+      "function ไหลต่อไปถึง `return e.value, true` แบบไม่มีเงื่อนไขหลังจาก delete แทนที่จะ return zero value กับ false บน path ที่หมดอายุ",
+      "time.Now().After(e.exp) return false เสมอ",
+      "ค่าถูก cache ไว้อีกรอบที่อื่น"
     ],
     answer: 1,
     explain: "การลบ entry ออกจาก map กับการรายงานว่าเจอมันหรือเปล่า เป็นสองเรื่องที่ function นี้ต้องทำให้ถูกต้องแยกกัน โค้ดทำอย่างแรกได้ถูก แต่ไม่ได้ทำอย่างที่สอง — ไม่มี early return หลังจาก delete เลย control จึงตกไปที่ return แบบเดียวกับที่ใช้กับ entry ที่ valid และยังไม่หมดอายุ"
   },
   {
-    q: "Four goroutines call Set/Get on the same unsynchronized Cache concurrently. What actually happens, verified on this exact program?",
+    q: "goroutine สี่ตัวเรียก Set/Get บน Cache ตัวเดียวกันที่ไม่มีการ sync พร้อมกัน เกิดอะไรขึ้นจริงๆ ตามที่ verify แล้วบนโปรแกรมนี้เป๊ะๆ?",
     options: [
-      "Nothing — Go maps handle concurrent access safely by default",
-      "A `fatal error: concurrent map writes` crash — not just a -race warning, an unrecoverable runtime crash even without the race detector",
-      "The program silently returns wrong values but never crashes",
-      "It only fails if the map has more than 1000 entries"
+      "ไม่มีอะไรเกิดขึ้น — Go map จัดการการเข้าถึงพร้อมกันได้อย่างปลอดภัยโดย default",
+      "crash ด้วย `fatal error: concurrent map writes` — ไม่ใช่แค่ warning จาก -race แต่เป็น runtime crash ที่ recover ไม่ได้ แม้จะไม่มี race detector ก็ตาม",
+      "โปรแกรม return ค่าผิดแบบเงียบๆ แต่ไม่ crash เลย",
+      "จะ fail ก็ต่อเมื่อ map มี entry มากกว่า 1000 ตัวเท่านั้น"
     ],
     answer: 1,
     explain: "Go map implementation ตรวจจับการเขียนพร้อมกันแบบไม่ sync ตอน runtime อย่างจริงจัง แล้วเรียก fatal() ซึ่ง recover() กู้คืนไม่ได้ และจบ process ทันที — นี่เป็น failure ที่แรงกว่าและทันทีกว่า data race ธรรมดา และไม่ต้องมี flag -race ก็เกิดได้"
   },
   {
-    q: "In the buggy version, `c2 := c` followed by `c2.Set(...)` is visible through `c` too. Why does this surprise a reader more than the same thing happening with, say, `*MyStruct`?",
+    q: "ในเวอร์ชันที่มี bug `c2 := c` ตามด้วย `c2.Set(...)` ทำให้เห็นการเปลี่ยนแปลงผ่าน `c` ด้วย ทำไมเรื่องนี้ถึงทำให้ผู้อ่านแปลกใจมากกว่าเรื่องเดียวกันที่เกิดกับ เช่น `*MyStruct`?",
     options: [
-      "It shouldn't surprise anyone — pointers and value types behave identically in Go",
-      "Cache[K, V] looks like an ordinary value type (no asterisk, a plain struct), so `c2 := c` reads like an independent copy — the aliasing is hidden inside the map field rather than being visible in the type itself",
-      "Generic types cannot be assigned with :=",
-      "This behavior only happens with comparable key types"
+      "ไม่ควรทำให้ใครแปลกใจเลย — pointer กับ value type ทำงานเหมือนกันทุกอย่างใน Go",
+      "Cache[K, V] มีหน้าตาเหมือน value type ธรรมดา (ไม่มีเครื่องหมาย asterisk เป็น struct ธรรมดา) ดังนั้น `c2 := c` จึงอ่านเหมือนเป็น copy ที่แยกอิสระจากกัน — การ alias ถูกซ่อนไว้ข้างใน map field แทนที่จะเห็นได้ชัดจากตัว type เอง",
+      "generic type assign ด้วย := ไม่ได้",
+      "พฤติกรรมนี้เกิดขึ้นเฉพาะกับ key type ที่เป็น comparable เท่านั้น"
     ],
     answer: 1,
     explain: "type `*MyStruct` ส่งสัญญาณเรื่องการแชร์ไว้ในไวยากรณ์ของมันเอง — ผู้อ่านคาดหวัง aliasing อยู่แล้ว `Cache[K, V]` ไม่มีสัญญาณแบบนั้นเลย หน้าตาแบบ value type ของมันซ่อนไว้ว่า state จริงตัวเดียวของมัน (map) เป็น reference type การ assign ธรรมดาจึง alias แทนที่จะ copy แบบเงียบๆ"
   },
   {
-    q: "The fixed version adds a `janitor` goroutine started inside `New` and a `Close` method. Why does `Close` matter here, beyond just 'good practice'?",
+    q: "เวอร์ชันที่แก้แล้วเพิ่ม goroutine `janitor` ที่เริ่มทำงานข้างใน `New` และ method `Close` ทำไม `Close` ถึงสำคัญตรงนี้ มากกว่าแค่ 'good practice' ทั่วไป?",
     options: [
-      "It doesn't matter — the janitor goroutine would stop on its own",
-      "Without calling Close, the janitor goroutine loops on its ticker forever, holding the mutex periodically and never exiting — exactly the goroutine-leak pattern from the AI Bug Catalog, just introduced by the fix itself",
-      "Close is required by the Go compiler for any type with a background goroutine",
-      "Close deletes all cache entries immediately"
+      "ไม่สำคัญเลย — goroutine janitor จะหยุดเองอยู่แล้ว",
+      "ถ้าไม่เรียก Close goroutine janitor จะวนลูปบน ticker ของมันตลอดกาล ถือ mutex เป็นระยะๆ และไม่มีวัน exit — เป็น pattern goroutine-leak เป๊ะๆ จาก AI Bug Catalog เพียงแต่ครั้งนี้ตัวการแก้ไขเองเป็นคนสร้างมันขึ้นมา",
+      "Go compiler บังคับให้ type ที่มี background goroutine ต้องมี Close",
+      "Close ลบ entry ทั้งหมดใน cache ทันที"
     ],
     answer: 1,
     explain: "การเพิ่ม background goroutine เพื่อแก้ bug หนึ่งตัว (entry ที่หมดอายุโตไม่มีที่สิ้นสุด) สร้างความรับผิดชอบใหม่เรื่อง lifetime management: ต้องมีอะไรสักอย่างส่งสัญญาณให้มันหยุดในที่สุด หน้าที่ของ Close ตรงกับปัญหา goroutine-leak จาก pattern 10 ใน AI Bug Catalog เป๊ะๆ — การแก้ที่ไม่ระวังตรงนี้ก็แค่สลับ bug ตัวหนึ่งไปเป็นอีกตัวเท่านั้น"
