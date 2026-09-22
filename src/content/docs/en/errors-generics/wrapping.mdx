@@ -359,14 +359,14 @@ When a generated snippet calls `errors.As` or wraps multiple errors, check for t
 func (e *NetErr) Error() string { return e.Op + ": timeout" }
 
 func handle(err error) {
-	var ne *NetErr
-	if errors.As(err, ne) {
-		fmt.Println("net error on", ne.Op)
-	}
+\tvar ne *NetErr
+\tif errors.As(err, ne) {
+\t\tfmt.Println("net error on", ne.Op)
+\t}
 }
 
 func main() {
-	handle(fmt.Errorf("dial: %w", &NetErr{Op: "dial"}))
+\thandle(fmt.Errorf("dial: %w", &NetErr{Op: "dial"}))
 }`}>
 `ne` is declared as `var ne *NetErr` — a nil `*NetErr` — and passed to `errors.As` directly instead of `&ne`. `errors.As` needs the *address* of the target variable so it can write the match into it; handed the nil pointer itself, it has nowhere to write. Verified on 1.26.5, this panics: `panic: errors: target must be a non-nil pointer`. The fix is `errors.As(err, &ne)`.
 </SpotTheBug>

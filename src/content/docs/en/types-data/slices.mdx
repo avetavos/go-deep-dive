@@ -363,20 +363,20 @@ When you read a slice-heavy function an AI wrote (or wrote yourself quickly), ch
 - Does a loop do `for _, v := range s { v = ... }` and expect `s` to change? `v` is a copy; only `s[i] = ...` (or `for i := range s`) mutates the original.
 
 <SpotTheBug code={`func dedupe(nums []int) []int {
-	out := nums[:0]
-	for i, n := range nums {
-		if i == 0 || n != nums[i-1] {
-			out = append(out, n)
-		}
-	}
-	return out
+\tout := nums[:0]
+\tfor i, n := range nums {
+\t\tif i == 0 || n != nums[i-1] {
+\t\t\tout = append(out, n)
+\t\t}
+\t}
+\treturn out
 }
 
 func main() {
-	data := []int{1, 1, 2, 3, 3}
-	backup := data[2:] // keep the tail "just in case"
-	result := dedupe(data)
-	fmt.Println(result, backup)
+\tdata := []int{1, 1, 2, 3, 3}
+\tbackup := data[2:] // keep the tail "just in case"
+\tresult := dedupe(data)
+\tfmt.Println(result, backup)
 }`}>
 `out := nums[:0]` reuses `nums`'s own backing array as the destination — a common, usually-correct in-place dedupe trick. But `backup := data[2:]` aliases that *same* array, starting at index 2. As `dedupe` writes deduplicated values forward (`1, 2, 3` land at indices 0, 1, 2), it overwrites index 2 — which is exactly where `backup` starts. Verified output on 1.26.5: `[1 2 3] [3 3 3]` — `backup` was silently corrupted by `dedupe`'s in-place writes, even though `dedupe` never touched a variable named `backup`. The fix: either don't write in place (`out := make([]int, 0, len(nums))`), or take `backup` as an independent copy (`backup := slices.Clone(data[2:])`) before calling anything that might mutate `data`'s backing array in place.
 </SpotTheBug>

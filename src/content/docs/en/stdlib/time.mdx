@@ -328,13 +328,13 @@ The reference moment is not arbitrary. Each component is a distinct number: mont
 - Does test code call `time.Now()` directly inside the function under test, instead of accepting an injected clock?
 
 <SpotTheBug code={`func retryWithBackoff(attempt int, do func() error) error {
-	for i := 0; i < attempt; i++ {
-		if err := do(); err == nil {
-			return nil
-		}
-		time.Sleep(5) // wait 5 seconds before retrying
-	}
-	return fmt.Errorf("failed after %d attempts", attempt)
+\tfor i := 0; i < attempt; i++ {
+\t\tif err := do(); err == nil {
+\t\t\treturn nil
+\t\t}
+\t\ttime.Sleep(5) // wait 5 seconds before retrying
+\t}
+\treturn fmt.Errorf("failed after %d attempts", attempt)
 }`}>
 
 The comment says "5 seconds", but `time.Sleep` takes a `time.Duration` — an `int64` count of nanoseconds — and `5` with no unit attached means **5 nanoseconds**, not 5 seconds. The retry loop effectively has no backoff delay at all; it hammers `do()` as fast as the CPU allows. Fix it by multiplying by the named constant:

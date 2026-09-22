@@ -284,17 +284,17 @@ When a generated snippet launches a goroutine, check for these before trusting i
 - Is a `sync.WaitGroup` (or any struct containing one) ever passed or returned by value instead of by pointer?
 
 <SpotTheBug code={`func main() {
-	var wg sync.WaitGroup
-	results := make([]int, 5)
-	for i := 0; i < 5; i++ {
-		go func(id int) {
-			wg.Add(1) // BUG: Add happens inside the goroutine
-			defer wg.Done()
-			results[id] = id * id
-		}(i)
-	}
-	wg.Wait()
-	fmt.Println(results)
+\tvar wg sync.WaitGroup
+\tresults := make([]int, 5)
+\tfor i := 0; i < 5; i++ {
+\t\tgo func(id int) {
+\t\t\twg.Add(1) // BUG: Add happens inside the goroutine
+\t\t\tdefer wg.Done()
+\t\t\tresults[id] = id * id
+\t\t}(i)
+\t}
+\twg.Wait()
+\tfmt.Println(results)
 }`}>
 `wg.Add(1)` has to run in the calling goroutine before `wg.Wait()` can possibly observe it — here it runs inside each new goroutine instead, so the scheduler is free to reach `wg.Wait()` while the counter is still `0` because none of the five goroutines have called `Add` yet. `Wait()` then returns immediately, `main` reads `results` while some of the five goroutines are still writing to it, and `go run -race` catches the resulting race on `results`:
 

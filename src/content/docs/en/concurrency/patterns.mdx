@@ -438,29 +438,29 @@ When a generated snippet combines these patterns, check for these before trustin
 - If multiple goroutines write into a shared slice by index, are the indices actually guaranteed disjoint (no two goroutines can ever compute the same index), or could two of them collide and turn a "safe" indexed write into a real race?
 
 <SpotTheBug code={`func worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for j := range jobs {
-		out <- j * 2
-	}
-	close(out) // called once per worker, but out is shared by all of them
+\tdefer wg.Done()
+\tfor j := range jobs {
+\t\tout <- j * 2
+\t}
+\tclose(out) // called once per worker, but out is shared by all of them
 }
 
 func main() {
-	jobs := make(chan int, 3)
-	out := make(chan int, 3)
-	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go worker(jobs, out, &wg)
-	}
-	jobs <- 1
-	jobs <- 2
-	jobs <- 3
-	close(jobs)
-	wg.Wait()
-	for v := range out {
-		fmt.Println(v)
-	}
+\tjobs := make(chan int, 3)
+\tout := make(chan int, 3)
+\tvar wg sync.WaitGroup
+\tfor i := 0; i < 3; i++ {
+\t\twg.Add(1)
+\t\tgo worker(jobs, out, &wg)
+\t}
+\tjobs <- 1
+\tjobs <- 2
+\tjobs <- 3
+\tclose(jobs)
+\twg.Wait()
+\tfor v := range out {
+\t\tfmt.Println(v)
+\t}
 }`}>
 This is the same shared-channel-close bug as the Channels lesson's fan-in `merge`, wearing a worker-pool costume: `out` is shared by all 3 workers, but each one calls `close(out)` when its own `for j := range jobs` loop ends. The first worker to finish closes `out`; the next worker that also finishes calls `close(out)` again and panics — captured real output on Go 1.26.5 (`out` here is buffered, so a worker usually finishes its sends before racing on the close, but the exact failure varies by run):
 

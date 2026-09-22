@@ -409,17 +409,17 @@ When a generated snippet uses a lock or another sync primitive, check for these 
 - Would `sync.Map` be a better fit here than a `map` guarded by a `Mutex`, or is it being reached for out of habit on a workload that is not write-once-read-many or disjoint-keys?
 
 <SpotTheBug code={`type Counter struct {
-	mu sync.Mutex
-	n  int
+\tmu sync.Mutex
+\tn  int
 }
 
 func main() {
-	counters := []Counter{{}, {}, {}}
-	for _, c := range counters {
-		c.mu.Lock()
-		c.n++
-		c.mu.Unlock()
-	}
+\tcounters := []Counter{{}, {}, {}}
+\tfor _, c := range counters {
+\t\tc.mu.Lock()
+\t\tc.n++
+\t\tc.mu.Unlock()
+\t}
 }`}>
 `range` copies each element into `c` on every iteration — including its `sync.Mutex` — so every `Lock`/`Unlock` pair in the loop operates on a throwaway copy of the mutex, and `c.n++` never touches the real `Counter` in the slice at all. `go vet` catches it on Go 1.26.5:
 

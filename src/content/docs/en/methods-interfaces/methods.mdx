@@ -303,8 +303,8 @@ When a generated snippet defines methods, check for these before trusting it:
 func (c *Counter) Inc() { c.n++ }
 
 func main() {
-	m := map[string]Counter{"a": {}}
-	m["a"].Inc()
+\tm := map[string]Counter{"a": {}}
+\tm["a"].Inc()
 }`}>
 `m["a"]` is not addressable — a map value can be moved by a rehash at any time, so Go refuses to take its address for the pointer-receiver call. The real compiler message is `cannot call pointer method Inc on Counter`. Fix it by using `map[string]*Counter`, or by loading the value, mutating it, and storing it back: `c := m["a"]; c.Inc(); m["a"] = c`.
 </SpotTheBug>

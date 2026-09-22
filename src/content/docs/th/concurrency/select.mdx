@@ -330,13 +330,13 @@ Tag `[select (no cases)]` ระบุสาเหตุตรง ๆ เหม�
 - channel ที่ควรเลิกถูกเลือก (ดึงหมดและ close แล้ว) ถูก nil-out หรือเปล่า หรือ case `ok == false` ที่พร้อมตลอดของมันจะทำให้ loop spin ตลอดไป?
 
 <SpotTheBug code={`for {
-	select {
-	case <-ctx.Done():
-		fmt.Println("stopping")
-		break // intended to exit the for loop
-	case v := <-work:
-		process(v)
-	}
+\tselect {
+\tcase <-ctx.Done():
+\t\tfmt.Println("stopping")
+\t\tbreak // intended to exit the for loop
+\tcase v := <-work:
+\t\tprocess(v)
+\t}
 }`}>
 `break` ข้างใน `select` case ออกได้แค่จาก `select` statement เท่านั้น — `select` เป็นหนึ่งใน construct (พร้อมกับ `switch`) ที่ `break` เปล่า ๆ เล็งไปที่มันก่อนที่จะไปถึง `for` ที่ล้อมอยู่ เมื่อ `ctx` ถูกยกเลิกไปแล้ว case ของ `ctx.Done()` จะพร้อมตลอดไป loop จึงกลับเข้า `select` ทันที ชน case เดิม print `"stopping"` อีกครั้ง แล้ววนซ้ำ — busy-spin ที่ไม่มีวันหยุดจริง ๆ output จริงที่จับได้จากโปรแกรมเวอร์ชันที่เพิ่มตัวนับความปลอดภัยไว้แค่เพื่อสังเกตพฤติกรรม:
 

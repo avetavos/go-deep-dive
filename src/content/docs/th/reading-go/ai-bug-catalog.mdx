@@ -77,15 +77,15 @@ SA4023: this comparison is always true (staticcheck)
 ข้อความนี้ขึ้นเฉพาะตอนที่ staticcheck พิสูจน์ได้เท่านั้น — ถ้า `doWork` ผ่าน indirection มากขึ้นอีกหน่อยก็หลุดรอดทุกเครื่องมือในลิสต์นี้ได้ ให้ยึดกฎนี้เป็นสิ่งที่ต้องเช็กด้วยตาเอง ไม่ใช่พึ่ง linter ดู **[A nil pointer inside an interface is not nil](/go/th/methods-interfaces/interfaces/)**
 
 <SpotTheBug code={`func validate(input string) *ValidationError {
-	if input == "" {
-		return &ValidationError{"empty input"}
-	}
-	return nil
+\tif input == "" {
+\t\treturn &ValidationError{"empty input"}
+\t}
+\treturn nil
 }
 
 func process(input string) error {
-	var err *ValidationError = validate(input)
-	return err
+\tvar err *ValidationError = validate(input)
+\treturn err
 }`}>
 
 bug เดิม แค่เปลี่ยนชื่อ `process(อะไรก็ได้ที่ไม่ว่าง)` คืน `error` ที่ไม่ใช่ nil ทั้งที่ `validate` คืน nil pointer — `err != nil` เป็น true ในทุก caller วิธีแก้: `if err := validate(input); err != nil { return err }; return nil`

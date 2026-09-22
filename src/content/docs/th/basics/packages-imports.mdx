@@ -286,7 +286,7 @@ Generated code ที่ประกาศ package, import, หรือ `init` 
 <SpotTheBug code={`import "math/rand/v2"
 
 func main() {
-	fmt.Println(v2.IntN(100))
+\tfmt.Println(v2.IntN(100))
 }`}>
 Import path `math/rand/v2` ลงท้ายด้วย `/v2` แต่ชื่อจริงของ package — ที่ประกาศด้วย `package rand` ใน source ของมันเอง — คือ `rand` ไม่ใช่ `v2` compiler error จริงคือ `undefined: v2` วิธีแก้คืออ้างถึงมันด้วยชื่อจริง: `rand.IntN(100)` suffix `/v2` ใน import path เป็น convention การ version module ของ Go สำหรับ breaking change ของ package เชิง logic เดียวกัน มันไม่ใช่ส่วนหนึ่งของ identifier ที่คุณใช้ใน code
 </SpotTheBug>

@@ -365,25 +365,25 @@ When generated code embeds a type, check for these before trusting it:
 - When embedding by value, does the embedded type's only relevant method have a pointer receiver? If so, the *value* form of the outer type may not satisfy an interface that the *pointer* form does — check which one the code actually uses.
 
 <SpotTheBug code={`type Cache struct {
-	sync.Mutex
-	data map[string]int
+\tsync.Mutex
+\tdata map[string]int
 }
 
 func NewCache() *Cache {
-	return &Cache{data: make(map[string]int)}
+\treturn &Cache{data: make(map[string]int)}
 }
 
 func (c *Cache) Inc(key string) {
-	c.Lock()
-	defer c.Unlock()
-	c.data[key]++
+\tc.Lock()
+\tdefer c.Unlock()
+\tc.data[key]++
 }
 
 func main() {
-	c := NewCache()
-	c.Lock() // caller reaches into Cache's internal lock directly
-	c.Inc("requests")
-	c.Unlock()
+\tc := NewCache()
+\tc.Lock() // caller reaches into Cache's internal lock directly
+\tc.Inc("requests")
+\tc.Unlock()
 }`}>
 `Cache` embeds `sync.Mutex` directly, which promotes `Lock` and `Unlock` into `Cache`'s own exported method set — any caller, not just `Cache`'s methods, can call `c.Lock()`. In `main`, the caller locks the mutex and then calls `c.Inc`, which tries to `Lock` again internally — `sync.Mutex` is not reentrant, so the goroutine blocks on itself forever: `fatal error: all goroutines are asleep - deadlock!`. The fix is a named, unexported field — `mu sync.Mutex` — so only `Cache`'s own methods can reach the lock, and callers can never interfere with its internal locking discipline.
 </SpotTheBug>

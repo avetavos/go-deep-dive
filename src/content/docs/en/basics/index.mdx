@@ -123,12 +123,12 @@ Across every lesson in this module, the same handful of checks catch most genera
 - Is a function value, or a struct field that holds one, called without a `nil` check first?
 
 <SpotTheBug code={`type Config struct {
-	OnReady func()
+\tOnReady func()
 }
 
 func main() {
-	c := Config{}
-	c.OnReady()
+\tc := Config{}
+\tc.OnReady()
 }`}>
 `OnReady` is a function-valued field that was never assigned, so it holds its zero value, `nil`. Calling a `nil` function value panics: `runtime error: invalid memory address or nil pointer dereference`. This is the same class of bug as a nil pointer dereference — the fix is to check `if c.OnReady != nil { c.OnReady() }` before calling it, or to give `Config` a constructor that always sets a default no-op function.
 </SpotTheBug>

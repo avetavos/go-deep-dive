@@ -123,8 +123,8 @@ Before this module goes into depth, start with the single most common generated-
 - Does a benchmark or fuzz test's assertion logic actually depend on the input, or would it pass identically no matter what the function under test returned?
 
 <SpotTheBug code={`func TestParseConfig(t *testing.T) {
-	cfg := ParseConfig("timeout=30")
-	fmt.Println(cfg) // just prints — never compares to anything
+\tcfg := ParseConfig("timeout=30")
+\tfmt.Println(cfg) // just prints — never compares to anything
 }`}>
 This test calls `ParseConfig`, prints the result, and ends — there is no `t.Error`, `t.Errorf`, `t.Fatal`, or comparison against an expected value anywhere. `go test` reports `PASS` for this test unconditionally, whether `ParseConfig` returns a correct struct, an empty one, or silently drops the timeout field entirely. This compiles cleanly and "looks like a test" — which is exactly why it is dangerous: a real bug introduced later will not turn this test red, because nothing in it can ever fail. The fix is a real assertion: `want := Config{Timeout: 30 * time.Second}; if cfg != want { t.Errorf("ParseConfig() = %+v, want %+v", cfg, want) }`.
 </SpotTheBug>

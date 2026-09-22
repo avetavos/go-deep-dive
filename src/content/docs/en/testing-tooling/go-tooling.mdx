@@ -397,13 +397,13 @@ Generated code compiles, so the compiler's silence proves nothing. Run the pipel
 - Has `govulncheck` actually been run, or does the generated CI config only include `go vet` and assume that is sufficient?
 
 <SpotTheBug code={`func fetchAndLog(url string) {
-	resp, err := http.Get(url)
-	defer resp.Body.Close()
-	if err != nil {
-		log.Println("fetch failed:", err)
-		return
-	}
-	log.Println("status:", resp.StatusCode)
+\tresp, err := http.Get(url)
+\tdefer resp.Body.Close()
+\tif err != nil {
+\t\tlog.Println("fetch failed:", err)
+\t\treturn
+\t}
+\tlog.Println("status:", resp.StatusCode)
 }`}>
 `defer resp.Body.Close()` runs before the `err != nil` check, but when `http.Get` fails, `resp` is `nil` — so `resp.Body` panics with a nil pointer dereference on exactly the error path this code was trying to handle gracefully. `go vet`'s `httpresponse` analyzer catches this precisely: `using resp before checking for errors`. The fix is to check the error first and only defer the close once `resp` is known non-nil: move `if err != nil { ...; return }` above `defer resp.Body.Close()`.
 </SpotTheBug>

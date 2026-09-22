@@ -237,21 +237,21 @@ AI-generated Go leans on plain fields for cross-goroutine signaling constantly â
 - Is `sync/atomic`'s *typed* API (`atomic.Int64`, `atomic.Bool`, `atomic.Pointer[T]`) used, or is a plain variable manually incremented from multiple goroutines "because it's just a counter"?
 
 <SpotTheBug code={`type Result struct {
-	Value int
-	Ready bool
+\tValue int
+\tReady bool
 }
 
 func compute(r *Result) {
-	r.Value = expensiveCalc()
-	r.Ready = true
+\tr.Value = expensiveCalc()
+\tr.Ready = true
 }
 
 func main() {
-	r := &Result{}
-	go compute(r)
-	for !r.Ready {
-	}
-	fmt.Println(r.Value)
+\tr := &Result{}
+\tgo compute(r)
+\tfor !r.Ready {
+\t}
+\tfmt.Println(r.Value)
 }`}>
 This is the `done bool` bug in its most common AI-generated shape: a result struct with a plain `Ready` flag, and a **busy-spin loop with no synchronization at all** â€” not even the `time.Sleep` the lesson's own demo has. `go vet` says nothing; the program compiles and, on most machines, prints the right value most of the time. `go run -race` reports a data race on both `Ready` and `Value`, for exactly the reason this lesson demonstrates: neither field has a happens-before edge connecting `compute`'s writes to `main`'s reads. The busy-spin loop is also its own bug independent of the race: it burns 100% of a CPU core the entire time it waits, something a channel receive or `sync.WaitGroup.Wait()` never does (both park the goroutine).
 

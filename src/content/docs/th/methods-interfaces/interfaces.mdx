@@ -272,18 +272,18 @@ Anti-pattern ที่พบบ่อยซึ่งนำเข้ามาจ�
 func (e *MyErr) Error() string { return e.msg }
 
 func validate(input string) error {
-	var problem *MyErr
-	if input == "" {
-		problem = &MyErr{msg: "empty input"}
-	}
-	return problem
+\tvar problem *MyErr
+\tif input == "" {
+\t\tproblem = &MyErr{msg: "empty input"}
+\t}
+\treturn problem
 }
 
 func main() {
-	err := validate("ok")
-	if err != nil {
-		panic("validation failed: " + err.Error())
-	}
+\terr := validate("ok")
+\tif err != nil {
+\t\tpanic("validation failed: " + err.Error())
+\t}
 }`}>
 `validate` return `problem` ซึ่งเป็นตัวแปร `*MyErr` ผ่าน `error`-typed return — แม้บน success path ที่ `problem` เป็น nil `error` interface ที่ return จึงเก็บ `(type: *MyErr, data: nil)` ซึ่งไม่เคย `== nil` ดังนั้น `err != nil` จึงเป็น true แม้ input จะถูกต้อง `main` จากนั้นเรียก `err.Error()` บน nil `*MyErr` receiver นั้นเพื่ออ่าน `msg` ซึ่ง dereference nil pointer — panic จริงคือ `panic: runtime error: invalid memory address or nil pointer dereference` ไม่ใช่ข้อความที่ส่งเข้า `panic()` ทางแก้คือ return literal `nil` บน success path: `if input == "" { return &MyErr{msg: "empty input"} }; return nil`
 </SpotTheBug>

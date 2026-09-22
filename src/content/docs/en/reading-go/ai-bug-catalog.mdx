@@ -77,15 +77,15 @@ SA4023: this comparison is always true (staticcheck)
 That message only fires when staticcheck can prove it; a version where `doWork`'s result flows through more indirection can slip past every tool in this list. Treat this as a rule to apply by eye, not one to rely on a linter for. See **[A nil pointer inside an interface is not nil](/go/en/methods-interfaces/interfaces/)**.
 
 <SpotTheBug code={`func validate(input string) *ValidationError {
-	if input == "" {
-		return &ValidationError{"empty input"}
-	}
-	return nil
+\tif input == "" {
+\t\treturn &ValidationError{"empty input"}
+\t}
+\treturn nil
 }
 
 func process(input string) error {
-	var err *ValidationError = validate(input)
-	return err
+\tvar err *ValidationError = validate(input)
+\treturn err
 }`}>
 
 Same bug, different names. `process(anything-non-empty)` returns a non-nil `error` even though `validate` returned a nil pointer — `err != nil` is true in every caller. Fix: `if err := validate(input); err != nil { return err }; return nil`.

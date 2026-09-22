@@ -422,12 +422,12 @@ Bug เรื่อง control-flow เป็นหนึ่งใน bug ที
 - labeled `continue`/`break` ถูกใช้ในที่ที่ตั้งใจจะใช้ตัวธรรมดา หรือกลับกัน — ตรวจว่า label นั้นชี้ไป loop ไหนจริง ๆ
 
 <SpotTheBug code={`for i := 0; i < 3; i++ {
-	switch i {
-	case 1:
-		break
-	default:
-		fmt.Println("processing", i)
-	}
+\tswitch i {
+\tcase 1:
+\t\tbreak
+\tdefault:
+\t\tfmt.Println("processing", i)
+\t}
 }`}>
 `break` ข้างใน `case 1` ออกจาก `switch` statement เท่านั้น — ไม่มีผลต่อ `for` loop ที่ครอบอยู่ ซึ่งยังทำงานต่อตามปกติ output จริงคือ `processing 0` ตามด้วย `processing 2`: `i == 1` ไม่ทำอะไรนอกจากออกจาก switch แล้ว loop ก็เดินหน้าไปที่ `i == 2` เลย ถ้าตั้งใจจะหยุด loop ทั้งหมดที่ `i == 1` ต้อง label loop แล้วเขียน `break loop` แทน: `loop: for i := 0; i < 3; i++ { switch i { case 1: break loop; ... } }`
 </SpotTheBug>

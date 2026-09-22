@@ -323,13 +323,13 @@ type Circle struct{ Radius float64 }
 func (c Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }
 
 func report(s Shape) {
-	c := s.(Circle)
-	fmt.Println(c.Area())
+\tc := s.(Circle)
+\tfmt.Println(c.Area())
 }
 
 func main() {
-	var s Shape
-	report(s)
+\tvar s Shape
+\treport(s)
 }`}>
 `report` uses the single-value form `s.(Circle)` with no comma-ok check. `main` calls it with `s` still at its zero value — a nil interface, not a `Circle`. The assertion panics immediately: `panic: interface conversion: main.Shape is nil, not main.Circle`. The fix is the comma-ok form: `c, ok := s.(Circle); if !ok { return }` (or handle the nil case explicitly in a type switch with `case nil:`).
 </SpotTheBug>

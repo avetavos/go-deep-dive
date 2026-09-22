@@ -316,10 +316,10 @@ Generated benchmarks tend to compile and produce a number — which is exactly t
 - Does the benchmark run on a busy dev machine — VS Code, a browser, a running server — and the answer treat the resulting `ns/op` as a precise, comparable-across-machines number?
 
 <SpotTheBug code={`func BenchmarkParseConfig(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		data := loadTestFixture() // reads a file from disk every iteration
-		ParseConfig(data)
-	}
+\tfor i := 0; i < b.N; i++ {
+\t\tdata := loadTestFixture() // reads a file from disk every iteration
+\t\tParseConfig(data)
+\t}
 }`}>
 `loadTestFixture()` reads a file from disk on every single iteration, so the benchmark measures disk I/O plus parsing, not `ParseConfig` alone — and because the classic `b.N` form was used with no `b.ResetTimer()`, there is no setup phase to move it into anyway. The fix restructures the benchmark: load the fixture data once before the loop, and pass the already-loaded bytes to `ParseConfig` inside it — `for b.Loop() { ParseConfig(data) }` with `data := loadTestFixture()` above the loop. As written, this benchmark will report a number, and it will look meaningful, but it answers "how fast is disk I/O plus parsing" rather than the question it claims to answer.
 </SpotTheBug>

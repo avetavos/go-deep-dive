@@ -316,10 +316,10 @@ benchmark ที่ generate มามักจะ compile ผ่านและ
 - benchmark รันบนเครื่อง dev ที่ยุ่งอยู่ — VS Code, browser, server ที่กำลังรัน — แล้วคำตอบปฏิบัติต่อ `ns/op` ที่ได้เหมือนเป็นตัวเลขแม่นยำที่เทียบข้ามเครื่องได้หรือเปล่า?
 
 <SpotTheBug code={`func BenchmarkParseConfig(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		data := loadTestFixture() // reads a file from disk every iteration
-		ParseConfig(data)
-	}
+\tfor i := 0; i < b.N; i++ {
+\t\tdata := loadTestFixture() // reads a file from disk every iteration
+\t\tParseConfig(data)
+\t}
 }`}>
 `loadTestFixture()` อ่านไฟล์จาก disk ทุก iteration ดังนั้น benchmark จึงวัด disk I/O บวกกับการ parse ไม่ใช่ `ParseConfig` เพียงอย่างเดียว — และเพราะใช้รูปแบบ classic `b.N` โดยไม่มี `b.ResetTimer()` จึงไม่มี setup phase ให้ย้ายไปอยู่ตรงนั้นด้วย การแก้คือปรับโครงสร้าง benchmark ใหม่: load fixture data ครั้งเดียวก่อน loop แล้วส่ง byte ที่ load แล้วให้ `ParseConfig` ข้างใน — `for b.Loop() { ParseConfig(data) }` โดยมี `data := loadTestFixture()` อยู่เหนือ loop ตามที่เขียนไว้ benchmark นี้จะรายงานตัวเลขออกมา และมันจะดูมีความหมาย แต่มันตอบคำถาม "disk I/O บวก parsing เร็วแค่ไหน" ไม่ใช่คำถามที่มันอ้างว่าตอบ
 </SpotTheBug>

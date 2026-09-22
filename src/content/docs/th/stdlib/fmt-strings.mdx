@@ -401,12 +401,12 @@ export const fmtDispatchDiagram = `flowchart LR
 <SpotTheBug code={`type Point struct{ X, Y int }
 
 func (p Point) String() string {
-	return fmt.Sprintf("%v", p)
+\treturn fmt.Sprintf("%v", p)
 }
 
 func main() {
-	p := Point{1, 2}
-	fmt.Println(p)
+\tp := Point{1, 2}
+\tfmt.Println(p)
 }`}>
 
 `%v` บนค่าที่ implement `fmt.Stringer` จะเรียก `String()` — แต่ `String()` ในที่นี้ format `p` ด้วย `%v` อีกครั้ง เรียกตัวเองไม่รู้จบ `go vet` จับรูปแบบนี้ได้ตอน build ก่อนโปรแกรมจะรันด้วยซ้ำ:

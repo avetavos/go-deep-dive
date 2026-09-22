@@ -363,12 +363,12 @@ export const gcShapeDiagram = `flowchart LR
 - `var zero T` (หรือ `*new(T)`) ถูกใช้สร้างกรณี "ไม่มีผลลัพธ์" แต่ caller กลับปฏิบัติกับ zero value เหมือนมันมีความหมายต่างจาก "ไม่มี" หรือเปล่า — เช่น `0` หมายถึงทั้ง "ไม่มีค่า" และ "ค่าคือศูนย์" พร้อมกัน?
 
 <SpotTheBug code={`func Equal[T comparable](a, b T) bool {
-	return a == b
+\treturn a == b
 }
 
 func main() {
-	var a, b any = []int{1, 2}, []int{1, 2}
-	fmt.Println(Equal(a, b))
+\tvar a, b any = []int{1, 2}, []int{1, 2}
+\tfmt.Println(Equal(a, b))
 }`}>
 `any` satisfy `comparable` ได้ตั้งแต่ Go 1.20 — การตรวจ constraint ผ่านตอน compile time แต่ `==` ระหว่างค่า `any` สองตัวเทียบ concrete value ที่เก็บอยู่ข้างในตอน runtime และ `[]int` ไม่ comparable ตรวจสอบแล้วบน 1.26.5: โค้ดนี้ panic ด้วย `panic: runtime error: comparing uncomparable type []int` `comparable` รับประกันแค่ว่าโค้ด compile ผ่าน ไม่ได้รับประกันว่าทุก instantiation รันได้ปลอดภัย — ปัญหานี้จะเกิดเฉพาะเมื่อ `T` ลงเอยเป็น `any` หรือ interface type อื่นที่ถือ slice, map, หรือ func
 </SpotTheBug>

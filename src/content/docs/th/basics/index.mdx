@@ -123,12 +123,12 @@ Go บังคับให้คุณระบุ type และการแ�
 - function value หรือ struct field ที่เก็บมันอยู่ ถูกเรียกโดยไม่เช็ก `nil` ก่อนหรือเปล่า?
 
 <SpotTheBug code={`type Config struct {
-	OnReady func()
+\tOnReady func()
 }
 
 func main() {
-	c := Config{}
-	c.OnReady()
+\tc := Config{}
+\tc.OnReady()
 }`}>
 `OnReady` เป็น field ชนิด function ที่ไม่เคยถูก assign ค่า จึงมี zero value เป็น `nil` การเรียก function value ที่เป็น `nil` จะ panic: `runtime error: invalid memory address or nil pointer dereference` นี่คือ bug ประเภทเดียวกับ nil pointer dereference — วิธีแก้คือเช็ก `if c.OnReady != nil { c.OnReady() }` ก่อนเรียก หรือให้ `Config` มี constructor ที่กำหนด default เป็น no-op function เสมอ
 </SpotTheBug>

@@ -231,15 +231,15 @@ Struct layout: field ถูกวางตามลำดับ DECLARATION, pad
 - `unsafe.Pointer` ถูกใช้แปลงระหว่าง struct type สองตัวที่จริง ๆ ไม่ได้ share memory layout เท่ากัน — ลำดับ field ต่างกัน, type ของ field ต่างกัน หรือขนาดต่างกัน — ซึ่ง pattern (1) ต้องการชัดเจนหรือเปล่า?
 
 <SpotTheBug code={`type Flags struct {
-	Debug     bool
-	MaxConns  int64
-	Verbose   bool
-	Timeout   int32
-	ReadOnly  bool
+\tDebug     bool
+\tMaxConns  int64
+\tVerbose   bool
+\tTimeout   int32
+\tReadOnly  bool
 }
 
 func NewFlags() *Flags {
-	return &Flags{MaxConns: 100, Timeout: 30}
+\treturn &Flags{MaxConns: 100, Timeout: 30}
 }`}>
 ไม่มีอะไรผิดพลาดในแง่ Go ที่ถูกต้องเลย — compile ผ่าน รัน และทำงานตามที่เขียนไว้ทุกประการ bug คือการเปลือง byte: `bool` สาม field (1 byte ต่อตัว) สลับอยู่กับ `int64` (8 byte) และ `int32` (4 byte) ตามลำดับการประกาศ ซึ่งก็คือลำดับ layout ด้วย `bool` ทุกตัวก่อน field ที่ align 8 byte บังคับ padding ขึ้นไปถึง boundary 8 byte ถัดไป รูปร่างเดียวกับ struct `Bad` ของบทนี้ การเรียงตาม alignment จากมากไปน้อยเอา padding ออกทั้งหมดโดยไม่เปลี่ยนพฤติกรรมเลย:
 

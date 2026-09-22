@@ -397,13 +397,13 @@ export const toolingPipeline = `flowchart TD
 - `govulncheck` ถูกรันจริงหรือเปล่า หรือ CI config ที่ generate มามีแค่ `go vet` แล้วสมมติว่าเพียงพอแล้ว?
 
 <SpotTheBug code={`func fetchAndLog(url string) {
-	resp, err := http.Get(url)
-	defer resp.Body.Close()
-	if err != nil {
-		log.Println("fetch failed:", err)
-		return
-	}
-	log.Println("status:", resp.StatusCode)
+\tresp, err := http.Get(url)
+\tdefer resp.Body.Close()
+\tif err != nil {
+\t\tlog.Println("fetch failed:", err)
+\t\treturn
+\t}
+\tlog.Println("status:", resp.StatusCode)
 }`}>
 `defer resp.Body.Close()` รันก่อนเช็ก `err != nil` แต่เมื่อ `http.Get` fail `resp` จะเป็น `nil` — ดังนั้น `resp.Body` จึง panic ด้วย nil pointer dereference บน error path ที่โค้ดนี้พยายามจะจัดการอย่างสวยงามเป๊ะ ๆ analyzer `httpresponse` ของ `go vet` จับสิ่งนี้ได้ตรง ๆ: `using resp before checking for errors` วิธีแก้คือเช็ก error ก่อน แล้วค่อย defer การปิดเมื่อรู้แล้วว่า `resp` ไม่ใช่ nil: ย้าย `if err != nil { ...; return }` ขึ้นไปอยู่เหนือ `defer resp.Body.Close()`
 </SpotTheBug>

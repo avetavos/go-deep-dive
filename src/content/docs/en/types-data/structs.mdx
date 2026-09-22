@@ -325,14 +325,14 @@ Struct-related bugs tend to hide in what looks like boilerplate. Check for these
 - Does a type require a `New()`/`Init()` call before it is safe to use, when its zero value could have been made to just work? Every caller who forgets that call has a latent bug, and nothing enforces the call at compile time.
 
 <SpotTheBug code={`type Metrics struct {
-	Name  string \`json:"name"\`
-	Count int    \`jso:"count"\`
+\tName  string \`json:"name"\`
+\tCount int    \`jso:"count"\`
 }
 
 func main() {
-	m := Metrics{Name: "requests", Count: 42}
-	b, _ := json.Marshal(m)
-	fmt.Println(string(b))
+\tm := Metrics{Name: "requests", Count: 42}
+\tb, _ := json.Marshal(m)
+\tfmt.Println(string(b))
 }`}>
 The second field's tag has a typo: `` `jso:"count"` `` instead of `` `json:"count"` ``. This is valid tag *syntax* — `go vet ./...` reports nothing, because the `structtag` check only validates the `key:"value"` grammar, not that `"jso"` is a key `encoding/json` recognizes. The struct compiles and runs, but `Count` marshals under its Go field name instead of the intended key: `{"name":"requests","Count":42}`. Nothing short of a test asserting the exact JSON shape would catch this — it will not fail a build, a lint pass, or even a casual glance at the struct definition.
 </SpotTheBug>

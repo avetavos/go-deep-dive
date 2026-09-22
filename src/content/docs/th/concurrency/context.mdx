@@ -271,12 +271,12 @@ func main() {
 <SpotTheBug code={`type ctxKey string
 
 func requestID(ctx context.Context) string {
-	return ctx.Value(ctxKey("reqID")).(string) // bare assertion
+\treturn ctx.Value(ctxKey("reqID")).(string) // bare assertion
 }
 
 func main() {
-	ctx := context.Background() // reqID was never attached to this context
-	fmt.Println(requestID(ctx))
+\tctx := context.Background() // reqID was never attached to this context
+\tfmt.Println(requestID(ctx))
 }`}>
 `ctx.Value(ctxKey("reqID"))` return `nil` (เป็น `any`) เพราะไม่มีใครเรียก `context.WithValue` ด้วย key นี้บน context นี้หรือบรรพบุรุษของมันเลย การ assert `nil` ที่เป็น `any` ตรง ๆ ไปเป็น `string` — concrete type ที่ไม่ใช่ interface — จะ panic แทนที่จะ return zero value:
 

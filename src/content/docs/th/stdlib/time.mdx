@@ -328,13 +328,13 @@ export const timeClockDiagram = `flowchart LR
 - โค้ด test เรียก `time.Now()` ตรงๆ ข้างใน function ที่กำลัง test แทนที่จะรับ clock ที่ inject เข้ามาหรือไม่?
 
 <SpotTheBug code={`func retryWithBackoff(attempt int, do func() error) error {
-	for i := 0; i < attempt; i++ {
-		if err := do(); err == nil {
-			return nil
-		}
-		time.Sleep(5) // wait 5 seconds before retrying
-	}
-	return fmt.Errorf("failed after %d attempts", attempt)
+\tfor i := 0; i < attempt; i++ {
+\t\tif err := do(); err == nil {
+\t\t\treturn nil
+\t\t}
+\t\ttime.Sleep(5) // wait 5 seconds before retrying
+\t}
+\treturn fmt.Errorf("failed after %d attempts", attempt)
 }`}>
 
 comment บอกว่า "5 วินาที" แต่ `time.Sleep` รับ `time.Duration` — จำนวน nanosecond แบบ `int64` — และ `5` ที่ไม่มีหน่วยแปลว่า **5 nanosecond** ไม่ใช่ 5 วินาที loop retry นี้แทบไม่มี backoff delay เลย มันยิง `do()` เร็วเท่าที่ CPU จะทำได้ แก้ได้โดยคูณด้วยค่าคงที่ที่มีชื่อ:

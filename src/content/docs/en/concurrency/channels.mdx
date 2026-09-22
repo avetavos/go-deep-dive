@@ -352,19 +352,19 @@ When a generated snippet creates or closes a channel, check for these before tru
 - On every path — including error returns — is a send-after-close actually impossible, or does an early-return branch skip past a point where the channel is already closed?
 
 <SpotTheBug code={`func merge(chs ...<-chan int) <-chan int {
-	out := make(chan int)
-	var wg sync.WaitGroup
-	for _, c := range chs {
-		wg.Add(1)
-		go func(c <-chan int) {
-			defer wg.Done()
-			for v := range c {
-				out <- v
-			}
-			close(out) // called once per input channel
-		}(c)
-	}
-	return out
+\tout := make(chan int)
+\tvar wg sync.WaitGroup
+\tfor _, c := range chs {
+\t\twg.Add(1)
+\t\tgo func(c <-chan int) {
+\t\t\tdefer wg.Done()
+\t\t\tfor v := range c {
+\t\t\t\tout <- v
+\t\t\t}
+\t\t\tclose(out) // called once per input channel
+\t\t}(c)
+\t}
+\treturn out
 }`}>
 Every one of the `len(chs)` goroutines calls `close(out)` when its own input channel drains — but `out` is shared. The first goroutine to finish closes it; every other goroutine that finishes afterward panics on its own `close(out)` call, and any goroutine still trying to send on it panics with `send on closed channel`. The real output on Go 1.26.5 (order varies by run):
 

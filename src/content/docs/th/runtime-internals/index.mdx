@@ -130,9 +130,9 @@ goroutines after Wait: 1
 ประเด็นทั้งหมดของโมดูลนี้คือ section นี้ ซ้ำสี่ครั้ง — บทละครั้ง นี่คือเวอร์ชัน survey-level ก่อน: snippet ที่ compile ผ่าน, ผ่าน `go vet`, แต่ยังผิดในแบบที่ไม่มีโมดูลไหนก่อนหน้าจับได้
 
 <SpotTheBug code={`func recordHit(counts map[string]int, key string) {
-	go func() {
-		counts[key]++ // no lock, no channel, called from many goroutines
-	}()
+\tgo func() {
+\t\tcounts[key]++ // no lock, no channel, called from many goroutines
+\t}()
 }`}>
 โค้ดนี้ compile ผ่าน ผ่าน `go vet` ไม่มีอะไรในโมดูล Basics, Types หรือ Methods ที่จับได้ แต่ `counts[key]++` จาก goroutine ที่ไม่มีการ synchronize ถูกเรียกพร้อมกันมากกว่าหนึ่งที่คือ **data race** บน `map` ธรรมดาของ Go — ซึ่งไม่ปลอดภัยด้วยซ้ำแม้จะมีแค่ *หนึ่ง* writer กับ reader พร้อมกัน ไม่ต้องพูดถึงสอง writer สอง goroutine สามารถทำให้โครงสร้างภายในของ map เสียหายจริง และ runtime ของ Go ตรวจจับกรณีนี้ได้และ crash ด้วย `fatal error: concurrent map writes` แทนที่จะปล่อยให้ข้อมูลเสียหายเงียบ ๆ — แต่ต้องโชคดีพอที่จะไป trigger การเช็กของ runtime เองก่อน บท Memory Model ในโมดูลนี้อธิบายว่าทำไม "ไม่มี shared mutable state" ต้องถูกบังคับโดยคุณเอง ไม่ใช่อนุมานจากการที่โค้ด compile ผ่าน
 

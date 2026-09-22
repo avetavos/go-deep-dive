@@ -97,16 +97,16 @@ Across every lesson in this module, the same handful of checks catch most genera
 func (e *MyError) Error() string { return e.msg }
 
 func mightFail(fail bool) error {
-	var e *MyError
-	if fail {
-		e = &MyError{msg: "boom"}
-	}
-	return e
+\tvar e *MyError
+\tif fail {
+\t\te = &MyError{msg: "boom"}
+\t}
+\treturn e
 }
 
 func main() {
-	err := mightFail(false)
-	fmt.Println(err == nil)
+\terr := mightFail(false)
+\tfmt.Println(err == nil)
 }`}>
 `mightFail` returns the `*MyError`-typed variable `e` directly, even when `e` is `nil`. The returned `error` interface then has a concrete type (`*MyError`) and a nil value — that is a non-nil interface holding a nil pointer, not a nil interface. Verified on 1.26.5, this prints `false`, not `true`. The fix is to hold `*MyError` only in a local variable and return a bare, untyped `nil` on the success path — see Error Values for the full explanation and a runnable playground.
 </SpotTheBug>

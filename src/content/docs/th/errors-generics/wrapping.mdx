@@ -359,14 +359,14 @@ func main() {
 func (e *NetErr) Error() string { return e.Op + ": timeout" }
 
 func handle(err error) {
-	var ne *NetErr
-	if errors.As(err, ne) {
-		fmt.Println("net error on", ne.Op)
-	}
+\tvar ne *NetErr
+\tif errors.As(err, ne) {
+\t\tfmt.Println("net error on", ne.Op)
+\t}
 }
 
 func main() {
-	handle(fmt.Errorf("dial: %w", &NetErr{Op: "dial"}))
+\thandle(fmt.Errorf("dial: %w", &NetErr{Op: "dial"}))
 }`}>
 `ne` ถูกประกาศเป็น `var ne *NetErr` — nil `*NetErr` — แล้วส่งให้ `errors.As` ตรง ๆ แทนที่จะเป็น `&ne` `errors.As` ต้องการ *address* ของตัวแปร target เพื่อเขียนผลการ match ลงไป เมื่อได้รับ nil pointer เองก็ไม่มีที่ให้เขียน ตรวจสอบแล้วบน 1.26.5 โค้ดนี้ panic: `panic: errors: target must be a non-nil pointer` ทางแก้คือ `errors.As(err, &ne)`
 </SpotTheBug>

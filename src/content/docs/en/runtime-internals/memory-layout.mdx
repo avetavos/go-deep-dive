@@ -231,15 +231,15 @@ AI-generated Go rarely reasons about layout at all — structs get field order m
 - Is `unsafe.Pointer` used to convert between two struct types that do not actually share an equivalent memory layout — different field order, different field types, or different sizes — which pattern (1) explicitly requires?
 
 <SpotTheBug code={`type Flags struct {
-	Debug     bool
-	MaxConns  int64
-	Verbose   bool
-	Timeout   int32
-	ReadOnly  bool
+\tDebug     bool
+\tMaxConns  int64
+\tVerbose   bool
+\tTimeout   int32
+\tReadOnly  bool
 }
 
 func NewFlags() *Flags {
-	return &Flags{MaxConns: 100, Timeout: 30}
+\treturn &Flags{MaxConns: 100, Timeout: 30}
 }`}>
 Nothing here is incorrect Go — it compiles, runs, and behaves exactly as written. The bug is a wasted-bytes one: three `bool` fields (1 byte each) are interleaved with an `int64` (8 bytes) and an `int32` (4 bytes) in declaration order, which is also layout order. Every `bool` before an 8-byte-aligned field forces padding up to the next 8-byte boundary, the same shape as this lesson's `Bad` struct. Reordering by descending alignment removes all of it with zero behavior change:
 

@@ -612,16 +612,16 @@ test ที่ generate มา compile ผ่านบ่อยกว่าท�
 - มีไฟล์ `_test.go` ที่ชื่อ package ไม่ตรงกับ package ของ directory หรือ `<package>_test` หรือเปล่า — เป็น copy-paste mistake ที่พบบ่อยและทำให้ compile ไม่ผ่าน
 
 <SpotTheBug code={`func TestGroupPreGo122(t *testing.T) {
-	names := []string{"a", "b", "c"}
-	for _, name := range names {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if name == "" {
-				t.Fatal("empty name")
-			}
-			t.Logf("checked %s", name)
-		})
-	}
+\tnames := []string{"a", "b", "c"}
+\tfor _, name := range names {
+\t\tt.Run(name, func(t *testing.T) {
+\t\t\tt.Parallel()
+\t\t\tif name == "" {
+\t\t\t\tt.Fatal("empty name")
+\t\t\t}
+\t\t\tt.Logf("checked %s", name)
+\t\t})
+\t}
 }`}>
 บน Go version ก่อน 1.22, `name` เป็นตัวแปรตัวเดียวที่ loop ทุก iteration ใช้ร่วมกัน เพราะ `t.Parallel()` หยุด subtest แต่ละตัวไว้ก่อนที่มันจะอ่าน `name` ใน closure subtest ทั้งสามตัวจึงกลับมารันพร้อมกัน *หลัง* loop จบไปแล้ว ตอนนั้น `name` มีค่าสุดท้ายคือ `"c"` แล้ว ดังนั้นทุก subtest จึง log `checked c` แทนที่จะเป็นชื่อของตัวเอง ตั้งแต่ Go 1.22 แต่ละ iteration ได้ `name` เป็นของตัวเอง โค้ดนี้เป๊ะ ๆ จึงปลอดภัยบน 1.22 ขึ้นไป — แต่การอ่านโค้ดแบบนี้ใน codebase เก่า (หรือที่ยังไม่ยก `go.mod` line ขึ้น) โดยไม่รู้จักกับดักนี้ ก็คือสิ่งที่คอร์สนี้มีไว้เพื่อจับให้ได้ วิธีแก้ที่ใช้ได้ทุก version คือ capture ให้ชัดเจน: ใส่ `name := name` เป็นบรรทัดแรกในลูป ก่อน `t.Run`
 </SpotTheBug>

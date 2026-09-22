@@ -402,22 +402,22 @@ AI-generated Go defensively returns pointers and boxes values into `any` far mor
 - Is `GOGC` or `GOMEMLIMIT` tuned in a comment or config file with a claimed effect ("this eliminates GC pauses") that confuses disabling the ratio trigger with disabling collection entirely?
 
 <SpotTheBug code={`type Stats struct {
-	Requests int
-	Errors   int
+\tRequests int
+\tErrors   int
 }
 
 func recordStats(s Stats) map[string]any {
-	return map[string]any{
-		"requests": s.Requests,
-		"errors":   s.Errors,
-	}
+\treturn map[string]any{
+\t\t"requests": s.Requests,
+\t\t"errors":   s.Errors,
+\t}
 }
 
 func logAll(entries []Stats) {
-	for _, e := range entries {
-		m := recordStats(e)
-		fmt.Println(m)
-	}
+\tfor _, e := range entries {
+\t\tm := recordStats(e)
+\t\tfmt.Println(m)
+\t}
 }`}>
 `recordStats` boxes two `int` fields into `any` values inside a freshly allocated `map[string]any`, on every call, for data that is only ever printed. Every `map[string]any` allocates the map's internal buckets, and every non-small-int value assigned into it (here, `s.Requests` and `s.Errors` are only avoiding a box if they happen to land in the 0–255 static table — a request counter will not stay there for long) boxes into a fresh heap allocation. None of that indirection buys anything here: `fmt.Println` would print a concretely-typed struct exactly as well, with zero of these allocations, because `Stats` itself never needs to leave the stack.
 

@@ -311,20 +311,20 @@ func main() {
 - function `MustX` ถูกเรียกด้วย input ที่มาจากผู้ใช้ ไฟล์ หรือ network แทนที่จะเป็นค่าคงที่ที่รู้ตอน compile/init หรือเปล่า?
 
 <SpotTheBug code={`func tryRecover() any {
-	return recover()
+\treturn recover()
 }
 
 func riskyOp() {
-	defer func() {
-		r := tryRecover()
-		fmt.Println("recovered:", r)
-	}()
-	panic("boom")
+\tdefer func() {
+\t\tr := tryRecover()
+\t\tfmt.Println("recovered:", r)
+\t}()
+\tpanic("boom")
 }
 
 func main() {
-	riskyOp()
-	fmt.Println("reached after riskyOp")
+\triskyOp()
+\tfmt.Println("reached after riskyOp")
 }`}>
 `recover()` ทำงานได้ก็ต่อเมื่อการเรียกเขียนไว้ตรง ๆ ข้างใน deferred function เท่านั้น — ที่นี่มันถูกเรียกห่างออกไปหนึ่งชั้น ข้างใน `tryRecover` ซึ่ง deferred function ของ `riskyOp` แค่เรียกมันอีกที ตรวจสอบแล้วบน 1.26.5: โค้ดนี้พิมพ์ `recovered: <nil>` แล้วโปรแกรมก็ยัง crash ด้วย `panic: boom` — `"reached after riskyOp"` ไม่พิมพ์เลย ทางแก้คือเรียกตรง ๆ: `r := recover()` ข้างในตัว `defer func() { ... }()` เอง
 </SpotTheBug>

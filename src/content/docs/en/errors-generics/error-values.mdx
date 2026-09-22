@@ -263,14 +263,14 @@ When a generated snippet returns or checks an error, look for these before trust
 <SpotTheBug code={`var ErrNotFound = errors.New("not found")
 
 func find(id string) error {
-	return fmt.Errorf("find %s: %w", id, ErrNotFound)
+\treturn fmt.Errorf("find %s: %w", id, ErrNotFound)
 }
 
 func main() {
-	err := find("42")
-	if err == ErrNotFound {
-		fmt.Println("not found")
-	}
+\terr := find("42")
+\tif err == ErrNotFound {
+\t\tfmt.Println("not found")
+\t}
 }`}>
 `find` wraps `ErrNotFound` with `%w`, so `err` is a `*fmt.wrapError`, not `ErrNotFound` itself. `err == ErrNotFound` compares that wrapper against the sentinel by identity and is `false` — the `if` body never runs, even though `ErrNotFound` is right there in the chain. Verified on 1.26.5: printing `err == ErrNotFound` gives `false`, `errors.Is(err, ErrNotFound)` gives `true`. The fix is `errors.Is(err, ErrNotFound)`, which walks the chain instead of comparing the outermost value.
 </SpotTheBug>

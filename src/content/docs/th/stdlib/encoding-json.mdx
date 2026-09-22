@@ -510,12 +510,12 @@ Field ที่ขึ้นต้นด้วยตัวอักษรพิ�
 - โค้ดที่ต้องปฏิเสธ field ที่ไม่คาดคิดใช้ `Unmarshal` ธรรมดาแทนที่จะใช้ `Decoder` พร้อม `DisallowUnknownFields()` หรือไม่?
 
 <SpotTheBug code={`func parseCount(body []byte) (int, error) {
-	var v map[string]any
-	if err := json.Unmarshal(body, &v); err != nil {
-		return 0, err
-	}
-	count := v["count"].(int) // ???
-	return count, nil
+\tvar v map[string]any
+\tif err := json.Unmarshal(body, &v); err != nil {
+\t\treturn 0, err
+\t}
+\tcount := v["count"].(int) // ???
+\treturn count, nil
 }`}>
 
 `json.Unmarshal` ลงใน `map[string]any` จะแปลงตัวเลข JSON ทุกตัวเป็น `float64` ไม่เคยเป็น `int` — ดังนั้น `v["count"].(int)` จะ panic กับ input ที่ถูกต้องทุกตัว:

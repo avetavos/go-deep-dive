@@ -387,25 +387,25 @@ Pointer-related bugs are rarely a crash right where the mistake was made — the
 - Does any code compare or format a `uintptr` as if the garbage collector still knows where it points? A `uintptr` obtained from a pointer is only valid for the instant it was taken — the object underneath can move before the next line runs.
 
 <SpotTheBug code={`type Cache struct {
-	mu   sync.Mutex
-	data map[string]int
+\tmu   sync.Mutex
+\tdata map[string]int
 }
 
 func (c *Cache) Get(key string) (int, bool) {
-	if c == nil {
-		return 0, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.data[key]
-	return v, ok
+\tif c == nil {
+\t\treturn 0, false
+\t}
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\tv, ok := c.data[key]
+\treturn v, ok
 }
 
 var globalCache *Cache
 
 func main() {
-	v, ok := globalCache.Get("x")
-	fmt.Println(v, ok)
+\tv, ok := globalCache.Get("x")
+\tfmt.Println(v, ok)
 }`}>
 This one is actually correct, and that is the point of the exercise — `Get`'s nil check comes first and returns before touching `c.mu` or `c.data`, so calling it on a nil `*Cache` (as `main` does with the zero-valued `globalCache`) is completely legal and prints `0 false`. The bug-pattern to watch for is the same shape with the check in the wrong place, or missing: if `c.mu.Lock()` ran before the `nil` check, the exact same call would panic with `nil pointer dereference` because `Lock()` needs to read `c.mu`'s address, which requires `c` to be non-nil first. When reviewing generated code with a nil-receiver guard, confirm the guard is the very first statement in the method — not just present somewhere in the function.
 </SpotTheBug>

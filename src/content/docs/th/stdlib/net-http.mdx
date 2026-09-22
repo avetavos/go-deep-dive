@@ -498,14 +498,14 @@ w.Header().Set(...)  ->  w.WriteHeader(code)  ->  w.Write(body)
 - goroutine ที่ spawn ขึ้นภายใน handler ส่ง `r.Context()` ต่อไปด้วยหรือไม่ หรือมันทำงานต่อ (และใช้ resource ต่อ) หลังจาก client หลุดการเชื่อมต่อไปแล้ว?
 
 <SpotTheBug code={`func createHandler(w http.ResponseWriter, r *http.Request) {
-	var in Item
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	body, _ := json.Marshal(in)
-	w.Write(body)
-	w.WriteHeader(http.StatusCreated)
+\tvar in Item
+\tif err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+\t\thttp.Error(w, err.Error(), http.StatusBadRequest)
+\t\treturn
+\t}
+\tbody, _ := json.Marshal(in)
+\tw.Write(body)
+\tw.WriteHeader(http.StatusCreated)
 }`}>
 
 `w.Write(body)` ส่ง response body ทันที และเนื่องจากยังไม่มีการตั้ง status ไว้ Go จะส่ง `200 OK` โดยปริยายเป็นส่วนหนึ่งของการเขียนครั้งแรกนั้น `w.WriteHeader(http.StatusCreated)` บรรทัดถัดไปสายเกินไปแล้ว — status line ถูกส่งออกไปแล้ว ยืนยันแล้วจริงในเครื่อง: client เห็น status `200` ไม่ใช่ `201` เลย และ server log ว่า

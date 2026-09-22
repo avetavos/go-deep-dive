@@ -466,11 +466,11 @@ func main() {
 - โค้ดเทียบ function value สองตัวตรง ๆ ด้วย `==` (ไม่ใช่เทียบกับ `nil`) หรือเปล่า? นั่นคือ compile error — function type เทียบได้แค่กับ nil เท่านั้น
 
 <SpotTheBug code={`func leaky(n int) {
-	for i := 0; i < n; i++ {
-		r := openResource(i)
-		defer r.Close()
-	}
-	fmt.Println("all opened, none closed yet")
+\tfor i := 0; i < n; i++ {
+\t\tr := openResource(i)
+\t\tdefer r.Close()
+\t}
+\tfmt.Println("all opened, none closed yet")
 }`}>
 `defer` กำหนดให้ `r.Close()` ทำงานตอน `leaky` return — ไม่ใช่ตอนจบแต่ละ loop iteration เมื่อ `n` มีค่ามาก บรรทัดนี้จะรันตอนที่ resource ทั้ง `n` ตัวยังเปิดอยู่ และใน program ที่รันนานอาจทำให้ file descriptor หรือ connection หมดก่อนที่ `leaky` จะ return ด้วยซ้ำ แก้ได้โดยให้แต่ละ iteration มี scope ของตัวเอง เพื่อให้ deferred call ทำงานทุก iteration ปกติผ่าน helper function เล็ก ๆ: `func() { r := openResource(i); defer r.Close(); /* use r */ }()` เรียกครั้งเดียวต่อ loop iteration
 </SpotTheBug>

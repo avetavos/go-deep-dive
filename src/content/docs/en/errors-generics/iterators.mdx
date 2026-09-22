@@ -317,20 +317,20 @@ When a generated snippet writes or consumes an iterator, check for these before 
 - Is `iter.Pull` used without `defer stop()` on every return path, including early returns and errors?
 
 <SpotTheBug code={`func Count(n int) iter.Seq[int] {
-	return func(yield func(int) bool) {
-		for i := 0; i < n; i++ {
-			yield(i)
-		}
-	}
+\treturn func(yield func(int) bool) {
+\t\tfor i := 0; i < n; i++ {
+\t\t\tyield(i)
+\t\t}
+\t}
 }
 
 func main() {
-	for v := range Count(5) {
-		if v == 2 {
-			break
-		}
-		fmt.Println(v)
-	}
+\tfor v := range Count(5) {
+\t\tif v == 2 {
+\t\t\tbreak
+\t\t}
+\t\tfmt.Println(v)
+\t}
 }`}>
 `Count`'s iterator calls `yield(i)` but never checks the return value, so it keeps calling `yield` on every remaining `i` even after the loop already broke out. Verified on 1.26.5, this panics: `panic: runtime error: range function continued iteration after function for loop body returned false`. The fix is `if !yield(i) { return }`, exactly as the correct `Count` earlier in this lesson does.
 </SpotTheBug>

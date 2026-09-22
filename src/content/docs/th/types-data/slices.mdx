@@ -363,20 +363,20 @@ append เกิน cap:
 - มี loop แบบ `for _, v := range s { v = ... }` แล้วคาดหวังให้ `s` เปลี่ยนหรือเปล่า? `v` เป็น copy มีแค่ `s[i] = ...` (หรือ `for i := range s`) เท่านั้นที่ mutate ต้นทางจริง ๆ
 
 <SpotTheBug code={`func dedupe(nums []int) []int {
-	out := nums[:0]
-	for i, n := range nums {
-		if i == 0 || n != nums[i-1] {
-			out = append(out, n)
-		}
-	}
-	return out
+\tout := nums[:0]
+\tfor i, n := range nums {
+\t\tif i == 0 || n != nums[i-1] {
+\t\t\tout = append(out, n)
+\t\t}
+\t}
+\treturn out
 }
 
 func main() {
-	data := []int{1, 1, 2, 3, 3}
-	backup := data[2:] // keep the tail "just in case"
-	result := dedupe(data)
-	fmt.Println(result, backup)
+\tdata := []int{1, 1, 2, 3, 3}
+\tbackup := data[2:] // keep the tail "just in case"
+\tresult := dedupe(data)
+\tfmt.Println(result, backup)
 }`}>
 `out := nums[:0]` ใช้ backing array ของ `nums` เองเป็นปลายทาง — เป็นเทคนิค dedupe แบบ in-place ที่ปกติแล้วถูกต้อง แต่ `backup := data[2:]` แชร์ array *เดียวกัน* นั้น เริ่มจาก index 2 พอ `dedupe` เขียนค่าที่ dedupe แล้วไล่ไปข้างหน้า (`1, 2, 3` ไปตกที่ index 0, 1, 2) มันจึงเขียนทับ index 2 ซึ่งเป็นจุดเริ่มต้นของ `backup` พอดี ผลลัพธ์จริงที่ verify บน 1.26.5: `[1 2 3] [3 3 3]` — `backup` ถูกทำลายแบบเงียบ ๆ จากการเขียน in-place ของ `dedupe` ทั้งที่ `dedupe` ไม่เคยแตะตัวแปรชื่อ `backup` เลย วิธีแก้: ไม่เขียน in-place (`out := make([]int, 0, len(nums))`) หรือทำให้ `backup` เป็น copy ที่เป็นอิสระ (`backup := slices.Clone(data[2:])`) ก่อนเรียกอะไรก็ตามที่อาจ mutate backing array ของ `data` แบบ in-place
 </SpotTheBug>

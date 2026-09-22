@@ -360,17 +360,17 @@ Maps are one of the easiest places for generated code to compile cleanly and sti
 - Is a map passed to a function that the author believed would receive "a copy" (some comment like `// safe, m is a local copy`)? The copy is only the header — the callee can still mutate every entry.
 
 <SpotTheBug code={`type Config struct {
-	Counts map[string]int
+\tCounts map[string]int
 }
 
 func NewConfig() *Config {
-	return &Config{}
+\treturn &Config{}
 }
 
 func main() {
-	c := NewConfig()
-	c.Counts["hits"]++
-	fmt.Println(c.Counts)
+\tc := NewConfig()
+\tc.Counts["hits"]++
+\tfmt.Println(c.Counts)
 }`}>
 `NewConfig` returns a `*Config` whose `Counts` field was never initialized — the zero value of `map[string]int` is `nil`, not an empty map. `c.Counts["hits"]++` is a read-then-write; the read half is fine (returns 0 for a nil map), but the write half panics. Verified on 1.26.5: `panic: assignment to entry in nil map`. Fix `NewConfig` to initialize the field: `return &Config{Counts: make(map[string]int)}`.
 </SpotTheBug>

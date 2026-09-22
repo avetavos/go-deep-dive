@@ -285,17 +285,17 @@ export const gmpDiagram = `flowchart TD
 - `sync.WaitGroup` (หรือ struct ที่มีมันอยู่ข้างใน) ถูกส่งหรือ return โดยค่าแทนที่จะเป็น pointer หรือเปล่า?
 
 <SpotTheBug code={`func main() {
-	var wg sync.WaitGroup
-	results := make([]int, 5)
-	for i := 0; i < 5; i++ {
-		go func(id int) {
-			wg.Add(1) // BUG: Add happens inside the goroutine
-			defer wg.Done()
-			results[id] = id * id
-		}(i)
-	}
-	wg.Wait()
-	fmt.Println(results)
+\tvar wg sync.WaitGroup
+\tresults := make([]int, 5)
+\tfor i := 0; i < 5; i++ {
+\t\tgo func(id int) {
+\t\t\twg.Add(1) // BUG: Add happens inside the goroutine
+\t\t\tdefer wg.Done()
+\t\t\tresults[id] = id * id
+\t\t}(i)
+\t}
+\twg.Wait()
+\tfmt.Println(results)
 }`}>
 `wg.Add(1)` ต้องรันใน calling goroutine ก่อนที่ `wg.Wait()` จะมีโอกาสเห็นมันได้ — ตรงนี้มันรันข้างใน goroutine ใหม่แต่ละตัวแทน ดังนั้น scheduler จึงมีสิทธิ์ไปถึง `wg.Wait()` ขณะที่ counter ยังเป็น `0` เพราะยังไม่มีตัวไหนในห้า goroutine เรียก `Add` เลย `Wait()` จึง return ทันที `main` อ่าน `results` ขณะที่บาง goroutine ยังเขียนอยู่ และ `go run -race` จับ race บน `results` ได้:
 

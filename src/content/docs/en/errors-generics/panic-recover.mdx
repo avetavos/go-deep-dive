@@ -311,20 +311,20 @@ When a generated snippet uses panic/recover, check for these before trusting it:
 - Is a `MustX` function called with input that comes from a user, a file, or the network, rather than a fixed value known at compile/init time?
 
 <SpotTheBug code={`func tryRecover() any {
-	return recover()
+\treturn recover()
 }
 
 func riskyOp() {
-	defer func() {
-		r := tryRecover()
-		fmt.Println("recovered:", r)
-	}()
-	panic("boom")
+\tdefer func() {
+\t\tr := tryRecover()
+\t\tfmt.Println("recovered:", r)
+\t}()
+\tpanic("boom")
 }
 
 func main() {
-	riskyOp()
-	fmt.Println("reached after riskyOp")
+\triskyOp()
+\tfmt.Println("reached after riskyOp")
 }`}>
 `recover()` only works when the call is written directly inside a deferred function — here it is one level removed, inside `tryRecover`, which `riskyOp`'s deferred function merely calls. Verified on 1.26.5: this prints `recovered: <nil>`, then the program still crashes with `panic: boom` — `"reached after riskyOp"` never prints. The fix is to inline the call: `r := recover()` directly inside the `defer func() { ... }()` body.
 </SpotTheBug>

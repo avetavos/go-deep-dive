@@ -106,12 +106,12 @@ func main() {
 - ถ้า snippet ถูกนำเสนอว่า deterministic ลำดับที่ print ออกมาถูกบังคับจริงไหม (sort แล้ว หรืออ่านกลับผ่าน indexed slice) หรือสองรอบที่รันอาจ print ลำดับต่างกันได้จริง ๆ?
 
 <SpotTheBug code={`func main() {
-	for i := 0; i < 3; i++ {
-		go func(id int) {
-			fmt.Println("goroutine", id, "says hello")
-		}(i)
-	}
-	fmt.Println("main exits")
+\tfor i := 0; i < 3; i++ {
+\t\tgo func(id int) {
+\t\t\tfmt.Println("goroutine", id, "says hello")
+\t\t}(i)
+\t}
+\tfmt.Println("main exits")
 }`}>
 ไม่มีอะไรตรงนี้รอให้ทั้งสาม goroutine รันก่อนที่ `main` จะ return เลย Go runtime ไม่ได้เก็บ process ให้มีชีวิตอยู่เพื่อ background goroutine — ทันทีที่ `main` return process จะ exit ไม่ว่า goroutine ไหนจะถูก schedule ไปแล้วหรือยังก็ตาม output จริงที่จับได้จากสองรอบที่รันโปรแกรมเดียวกันเป๊ะนี้:
 

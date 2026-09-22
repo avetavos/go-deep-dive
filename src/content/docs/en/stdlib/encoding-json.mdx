@@ -510,12 +510,12 @@ AI-generated `encoding/json` code tends to look complete while quietly assuming 
 - Does code that must reject unexpected fields use plain `Unmarshal` instead of a `Decoder` with `DisallowUnknownFields()`?
 
 <SpotTheBug code={`func parseCount(body []byte) (int, error) {
-	var v map[string]any
-	if err := json.Unmarshal(body, &v); err != nil {
-		return 0, err
-	}
-	count := v["count"].(int) // ???
-	return count, nil
+\tvar v map[string]any
+\tif err := json.Unmarshal(body, &v); err != nil {
+\t\treturn 0, err
+\t}
+\tcount := v["count"].(int) // ???
+\treturn count, nil
 }`}>
 
 `json.Unmarshal` into `map[string]any` turns every JSON number into `float64`, never `int` — so `v["count"].(int)` panics on any valid input:

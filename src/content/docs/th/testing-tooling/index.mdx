@@ -123,8 +123,8 @@ Pure function — function ที่ขึ้นอยู่กับ argument �
 - assertion logic ของ benchmark หรือ fuzz test ขึ้นอยู่กับ input จริงไหม หรือจะ pass เหมือนเดิมไม่ว่า function ที่ทดสอบจะคืนอะไรมา?
 
 <SpotTheBug code={`func TestParseConfig(t *testing.T) {
-	cfg := ParseConfig("timeout=30")
-	fmt.Println(cfg) // just prints — never compares to anything
+\tcfg := ParseConfig("timeout=30")
+\tfmt.Println(cfg) // just prints — never compares to anything
 }`}>
 test นี้เรียก `ParseConfig` พิมพ์ผลลัพธ์ แล้วจบ — ไม่มี `t.Error`, `t.Errorf`, `t.Fatal` หรือการเทียบกับค่าที่คาดหวังที่ไหนเลย `go test` รายงาน `PASS` สำหรับ test นี้เสมอ ไม่ว่า `ParseConfig` จะคืน struct ที่ถูกต้อง คืน struct ว่าง หรือทำ timeout field หายไปเงียบ ๆ ก็ตาม โค้ดนี้ compile ผ่านสะอาดและ "ดูเหมือน test" — ซึ่งนั่นแหละคืออันตราย: bug จริงที่เกิดขึ้นทีหลังจะไม่ทำให้ test นี้แดงเลย เพราะไม่มีอะไรในนั้นที่ fail ได้ วิธีแก้คือ assertion จริง: `want := Config{Timeout: 30 * time.Second}; if cfg != want { t.Errorf("ParseConfig() = %+v, want %+v", cfg, want) }`
 </SpotTheBug>

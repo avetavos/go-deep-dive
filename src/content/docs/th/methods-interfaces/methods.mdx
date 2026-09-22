@@ -303,8 +303,8 @@ func main() {
 func (c *Counter) Inc() { c.n++ }
 
 func main() {
-	m := map[string]Counter{"a": {}}
-	m["a"].Inc()
+\tm := map[string]Counter{"a": {}}
+\tm["a"].Inc()
 }`}>
 `m["a"]` ไม่ addressable — map value ถูกย้ายได้ตลอดเวลาจาก rehash ดังนั้น Go จึงปฏิเสธที่จะ take address ให้กับการเรียก pointer-receiver แบบนี้ compiler message จริงคือ `cannot call pointer method Inc on Counter` แก้ได้โดยใช้ `map[string]*Counter` หรือโหลดค่าออกมา mutate แล้วเก็บกลับ: `c := m["a"]; c.Inc(); m["a"] = c`
 </SpotTheBug>

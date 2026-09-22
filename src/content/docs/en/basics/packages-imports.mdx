@@ -291,7 +291,7 @@ Generated code that declares packages, imports, or `init` functions tends to hid
 <SpotTheBug code={`import "math/rand/v2"
 
 func main() {
-	fmt.Println(v2.IntN(100))
+\tfmt.Println(v2.IntN(100))
 }`}>
 The import path `math/rand/v2` ends in `/v2`, but the package's actual name — declared with `package rand` in its own source — is `rand`, not `v2`. The real compiler error is `undefined: v2`. The fix is to refer to it by its real name: `rand.IntN(100)`. The `/v2` suffix in the import path is Go's module-versioning convention for a breaking change to the same logical package; it is not part of the identifier you use in code.
 </SpotTheBug>

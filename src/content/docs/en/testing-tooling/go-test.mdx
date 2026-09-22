@@ -612,16 +612,16 @@ Generated tests compile far more often than they catch bugs. Check for these:
 - Is there a `_test.go` file whose package name does not match either the directory's package or `<package>_test` — a common copy-paste mistake that fails to compile?
 
 <SpotTheBug code={`func TestGroupPreGo122(t *testing.T) {
-	names := []string{"a", "b", "c"}
-	for _, name := range names {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if name == "" {
-				t.Fatal("empty name")
-			}
-			t.Logf("checked %s", name)
-		})
-	}
+\tnames := []string{"a", "b", "c"}
+\tfor _, name := range names {
+\t\tt.Run(name, func(t *testing.T) {
+\t\t\tt.Parallel()
+\t\t\tif name == "" {
+\t\t\t\tt.Fatal("empty name")
+\t\t\t}
+\t\t\tt.Logf("checked %s", name)
+\t\t})
+\t}
 }`}>
 On Go versions before 1.22, `name` is a single variable reused by every loop iteration. Because `t.Parallel()` pauses each subtest before it reads `name` in the closure, all three subtests resume together *after* the loop has already finished — by then `name` holds `"c"`, its final value, so every subtest logs `checked c` instead of its own name. Since Go 1.22 each iteration gets its own `name`, so this exact code is safe on 1.22+ — but reading it in an older codebase (or one that hasn't raised its `go.mod` line) without recognizing the trap is exactly the bug this course exists to catch. The fix that works on every version is capturing explicitly: `name := name` as the first line inside the loop, before `t.Run`.
 </SpotTheBug>

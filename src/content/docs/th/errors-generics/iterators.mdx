@@ -317,20 +317,20 @@ func main() {
 - `iter.Pull` ถูกใช้โดยไม่มี `defer stop()` ครอบทุก return path รวมถึง early return และ error หรือเปล่า?
 
 <SpotTheBug code={`func Count(n int) iter.Seq[int] {
-	return func(yield func(int) bool) {
-		for i := 0; i < n; i++ {
-			yield(i)
-		}
-	}
+\treturn func(yield func(int) bool) {
+\t\tfor i := 0; i < n; i++ {
+\t\t\tyield(i)
+\t\t}
+\t}
 }
 
 func main() {
-	for v := range Count(5) {
-		if v == 2 {
-			break
-		}
-		fmt.Println(v)
-	}
+\tfor v := range Count(5) {
+\t\tif v == 2 {
+\t\t\tbreak
+\t\t}
+\t\tfmt.Println(v)
+\t}
 }`}>
 iterator ของ `Count` เรียก `yield(i)` แต่ไม่เช็กค่าที่คืนกลับมาเลย จึงยังเรียก `yield` ต่อทุก `i` ที่เหลือ แม้ loop จะ break ออกไปแล้วก็ตาม ตรวจสอบแล้วบน 1.26.5: โค้ดนี้ panic ด้วย `panic: runtime error: range function continued iteration after function for loop body returned false` ทางแก้คือ `if !yield(i) { return }` เหมือนที่ `Count` เวอร์ชันถูกต้องก่อนหน้านี้ในบทเรียนทำ
 </SpotTheBug>

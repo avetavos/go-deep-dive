@@ -330,13 +330,13 @@ When a generated snippet uses `select` inside a loop, check for these before tru
 - Does a channel that should stop being selected (already drained and closed) get nil'd out, or will its always-ready `ok == false` case spin the loop forever?
 
 <SpotTheBug code={`for {
-	select {
-	case <-ctx.Done():
-		fmt.Println("stopping")
-		break // intended to exit the for loop
-	case v := <-work:
-		process(v)
-	}
+\tselect {
+\tcase <-ctx.Done():
+\t\tfmt.Println("stopping")
+\t\tbreak // intended to exit the for loop
+\tcase v := <-work:
+\t\tprocess(v)
+\t}
 }`}>
 `break` inside a `select` case only breaks out of the `select` statement — `select` is one of the constructs (with `switch`) that a bare `break` targets before an enclosing `for`. Once `ctx` is already cancelled, `ctx.Done()`'s case is permanently ready, so the loop re-enters `select`, hits the same case, prints `"stopping"` again, and repeats — a busy-spin that never actually stops. Captured output from a version of this program with a safety counter added just to observe the behavior:
 

@@ -401,12 +401,12 @@ When you are unsure what is inside a struct, reach for `%+v` first — it prints
 <SpotTheBug code={`type Point struct{ X, Y int }
 
 func (p Point) String() string {
-	return fmt.Sprintf("%v", p)
+\treturn fmt.Sprintf("%v", p)
 }
 
 func main() {
-	p := Point{1, 2}
-	fmt.Println(p)
+\tp := Point{1, 2}
+\tfmt.Println(p)
 }`}>
 
 `%v` on a value that implements `fmt.Stringer` calls `String()` — but `String()` here formats `p` with `%v` again, calling itself forever. `go vet` catches this exact shape at build time, before the program ever runs:

@@ -271,12 +271,12 @@ When a generated snippet uses `context.Context`, check for these before trusting
 <SpotTheBug code={`type ctxKey string
 
 func requestID(ctx context.Context) string {
-	return ctx.Value(ctxKey("reqID")).(string) // bare assertion
+\treturn ctx.Value(ctxKey("reqID")).(string) // bare assertion
 }
 
 func main() {
-	ctx := context.Background() // reqID was never attached to this context
-	fmt.Println(requestID(ctx))
+\tctx := context.Background() // reqID was never attached to this context
+\tfmt.Println(requestID(ctx))
 }`}>
 `ctx.Value(ctxKey("reqID"))` returns `nil` (as an `any`) because nothing ever called `context.WithValue` with that key on this context or any of its ancestors. Asserting a `nil` `any` directly to `string` — a concrete, non-interface type — panics rather than returning the zero value:
 

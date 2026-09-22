@@ -342,15 +342,15 @@ func main() {
 - `iota` block เริ่มด้วย identifier ธรรมดาแทนที่จะเป็น `_` ทั้งที่ค่าตัวที่ศูนย์ควรถูกข้ามหรือถือว่า "invalid" หรือเปล่า?
 
 <SpotTheBug code={`func step() (int, error) {
-	return 0, errors.New("boom")
+\treturn 0, errors.New("boom")
 }
 
 func run() error {
-	var err error
-	if v, err := step(); err != nil {
-		fmt.Println("inner saw:", v, err)
-	}
-	return err
+\tvar err error
+\tif v, err := step(); err != nil {
+\t\tfmt.Println("inner saw:", v, err)
+\t}
+\treturn err
 }`}>
 `:=` ใน `if` ประกาศ `err` *ตัวใหม่* ที่ scope อยู่แค่ใน `if` block — มันไม่ได้ assign ให้ `err` ตัวนอกที่ประกาศด้วย `var` `step()` ล้มเหลวจริง และ `fmt.Println` ข้างใน `if` ก็ print error จริง แต่ `run()` ยัง return `nil` เพราะ `err` ตัวนอกไม่เคยถูก assign ใหม่ แก้ได้โดยไม่ shadow: ใช้ `err` ตัวที่ประกาศไว้แล้วด้วยการเขียน `var v int; v, err = step()` แล้วเช็ค `err` แยกบรรทัดหลังจากนั้น
 </SpotTheBug>

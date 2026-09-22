@@ -440,29 +440,29 @@ func main() {
 - ถ้า goroutine หลายตัวเขียนลง shared slice ด้วย index index เหล่านั้นการันตีว่าแยกกันจริงไหม (ไม่มี goroutine สองตัวคำนวณ index เดียวกันได้เลย) หรือทั้งสองอาจชนกันแล้วเปลี่ยน indexed write ที่ "ปลอดภัย" ให้กลายเป็น race จริง?
 
 <SpotTheBug code={`func worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for j := range jobs {
-		out <- j * 2
-	}
-	close(out) // called once per worker, but out is shared by all of them
+\tdefer wg.Done()
+\tfor j := range jobs {
+\t\tout <- j * 2
+\t}
+\tclose(out) // called once per worker, but out is shared by all of them
 }
 
 func main() {
-	jobs := make(chan int, 3)
-	out := make(chan int, 3)
-	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go worker(jobs, out, &wg)
-	}
-	jobs <- 1
-	jobs <- 2
-	jobs <- 3
-	close(jobs)
-	wg.Wait()
-	for v := range out {
-		fmt.Println(v)
-	}
+\tjobs := make(chan int, 3)
+\tout := make(chan int, 3)
+\tvar wg sync.WaitGroup
+\tfor i := 0; i < 3; i++ {
+\t\twg.Add(1)
+\t\tgo worker(jobs, out, &wg)
+\t}
+\tjobs <- 1
+\tjobs <- 2
+\tjobs <- 3
+\tclose(jobs)
+\twg.Wait()
+\tfor v := range out {
+\t\tfmt.Println(v)
+\t}
 }`}>
 นี่คือบัค shared-channel-close ตัวเดียวกับ fan-in `merge` ของบท Channels แค่ใส่ชุดของ worker pool: `out` ถูก 3 worker ใช้ร่วมกัน แต่แต่ละตัวเรียก `close(out)` ตอนที่ loop `for j := range jobs` ของตัวเองจบ worker ตัวแรกที่เสร็จจะ close `out` สำเร็จ; worker ตัวอื่นที่เสร็จทีหลังและเรียก `close(out)` อีกครั้งจะ panic — output จริงที่จับได้บน Go 1.26.5 (`out` ตรงนี้เป็น buffered ดังนั้น worker มักส่งเสร็จก่อนที่จะแข่งกันตอน close แต่บัคจริงที่เกิดขึ้นต่างกันไปตามการรัน):
 

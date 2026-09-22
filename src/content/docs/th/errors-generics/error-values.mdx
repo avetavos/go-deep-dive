@@ -263,14 +263,14 @@ func main() {
 <SpotTheBug code={`var ErrNotFound = errors.New("not found")
 
 func find(id string) error {
-	return fmt.Errorf("find %s: %w", id, ErrNotFound)
+\treturn fmt.Errorf("find %s: %w", id, ErrNotFound)
 }
 
 func main() {
-	err := find("42")
-	if err == ErrNotFound {
-		fmt.Println("not found")
-	}
+\terr := find("42")
+\tif err == ErrNotFound {
+\t\tfmt.Println("not found")
+\t}
 }`}>
 `find` wrap `ErrNotFound` ด้วย `%w` ทำให้ `err` เป็น `*fmt.wrapError` ไม่ใช่ `ErrNotFound` เอง `err == ErrNotFound` เทียบ wrapper นั้นกับ sentinel ด้วย identity แล้วได้ `false` — โค้ดใน `if` ไม่ทำงานเลย ทั้งที่ `ErrNotFound` อยู่ใน chain จริง ๆ ตรวจสอบแล้วบน 1.26.5: พิมพ์ `err == ErrNotFound` ได้ `false`, `errors.Is(err, ErrNotFound)` ได้ `true` ทางแก้คือใช้ `errors.Is(err, ErrNotFound)` ซึ่งเดินไปตาม chain แทนที่จะเทียบแค่ค่าชั้นนอกสุด
 </SpotTheBug>

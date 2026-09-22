@@ -244,19 +244,19 @@ bug ที่เกิดจาก scheduler มักไม่ดูเหม�
 - array หรือ struct ขนาดใหญ่ถูก allocate ข้างใน function ที่ recursive ลึก โดยไม่คิดว่าต้นทุนของแต่ละ frame คูณกันไปตามความลึกของ recursion บังคับให้ stack โต (และ copy) มากกว่าเวอร์ชันที่ตื้นกว่าหรือแบบ iterative หรือเปล่า?
 
 <SpotTheBug code={`func computeAll(n int) []int {
-	results := make([]int, n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
-			for {
-				// tight CPU-bound retry loop, no channel op, no sleep
-				if attempt(i, results) {
-					return
-				}
-			}
-		}(i)
-	}
-	time.Sleep(2 * time.Second) // "should be enough time"
-	return results
+\tresults := make([]int, n)
+\tfor i := 0; i < n; i++ {
+\t\tgo func(i int) {
+\t\t\tfor {
+\t\t\t\t// tight CPU-bound retry loop, no channel op, no sleep
+\t\t\t\tif attempt(i, results) {
+\t\t\t\t\treturn
+\t\t\t\t}
+\t\t\t}
+\t\t}(i)
+\t}
+\ttime.Sleep(2 * time.Second) // "should be enough time"
+\treturn results
 }`}>
 มีปัญหาแบบ scheduler สองอย่างแยกกันอยู่ใน function เดียวนี้ อย่างแรก goroutine ถูก spawn `n` ตัวโดยไม่มีขอบเขตเลย — ถ้า `n` ใหญ่ จะมี goroutine มากกว่าที่ `GOMAXPROCS` จะรันพร้อมกันได้เยอะมาก ส่วนใหญ่แค่ต่อคิว (ใน local run queue แล้วก็ global) แทนที่จะคืบหน้าแบบขนานจริง สมมติฐานที่ซ่อนอยู่ของ function ว่า goroutine มากขึ้นแปลว่างานขนานมากขึ้นตามสัดส่วนนั้นผิดเมื่อเกิน `GOMAXPROCS` ตัว อย่างที่สอง retry loop ของแต่ละ goroutine ไม่มี channel operation, blocking call หรือ sleep เลย — goroutine ที่เจอ `attempt` คืน `false` เรื่อย ๆ จะ spin บน CPU ล้วน ๆ และแม้ async preemption (Go 1.14+) จะป้องกันไม่ให้มันอดตาย P ของมัน*ตลอดไป* มันก็ยังแย่งเวลาของ P นั้นเท่า ๆ กับ goroutine ที่ทำงานจริงมีประโยชน์อยู่ ตราบใดที่มันยัง spin
 

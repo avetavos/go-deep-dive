@@ -365,25 +365,25 @@ func main() {
 - เมื่อ embed แบบ value, method ที่เกี่ยวข้องเดียวของ embedded type มี pointer receiver หรือเปล่า? ถ้าใช่ outer type รูปแบบ *value* อาจไม่ตอบสนอง interface ที่รูปแบบ *pointer* ตอบสนองได้ — เช็กว่าโค้ดใช้แบบไหนจริง ๆ
 
 <SpotTheBug code={`type Cache struct {
-	sync.Mutex
-	data map[string]int
+\tsync.Mutex
+\tdata map[string]int
 }
 
 func NewCache() *Cache {
-	return &Cache{data: make(map[string]int)}
+\treturn &Cache{data: make(map[string]int)}
 }
 
 func (c *Cache) Inc(key string) {
-	c.Lock()
-	defer c.Unlock()
-	c.data[key]++
+\tc.Lock()
+\tdefer c.Unlock()
+\tc.data[key]++
 }
 
 func main() {
-	c := NewCache()
-	c.Lock() // caller reaches into Cache's internal lock directly
-	c.Inc("requests")
-	c.Unlock()
+\tc := NewCache()
+\tc.Lock() // caller reaches into Cache's internal lock directly
+\tc.Inc("requests")
+\tc.Unlock()
 }`}>
 `Cache` embed `sync.Mutex` ตรง ๆ ซึ่ง promote `Lock` และ `Unlock` เข้าไปใน exported method set ของ `Cache` เอง — caller ใดก็ได้ ไม่ใช่แค่ methods ของ `Cache` สามารถเรียก `c.Lock()` ได้ ใน `main` caller lock mutex แล้วเรียก `c.Inc` ซึ่งพยายาม `Lock` อีกครั้งภายใน — `sync.Mutex` ไม่ reentrant ดังนั้น goroutine จึง block ตัวเองตลอดไป: `fatal error: all goroutines are asleep - deadlock!` ทางแก้คือ named, unexported field — `mu sync.Mutex` — เพื่อให้เฉพาะ methods ของ `Cache` เองเท่านั้นที่เข้าถึง lock ได้ และ caller ไม่มีทางไปยุ่งกับวินัยการ lock ภายในของมัน
 </SpotTheBug>

@@ -402,22 +402,22 @@ end when the function returns?             white -> grey -> black
 - `GOGC` หรือ `GOMEMLIMIT` ถูกปรับใน comment หรือ config file พร้อมผลที่อ้างไว้ ("this eliminates GC pauses") ที่สับสนระหว่างการปิด ratio trigger กับการปิดการเก็บกวาดไปเลยหรือเปล่า?
 
 <SpotTheBug code={`type Stats struct {
-	Requests int
-	Errors   int
+\tRequests int
+\tErrors   int
 }
 
 func recordStats(s Stats) map[string]any {
-	return map[string]any{
-		"requests": s.Requests,
-		"errors":   s.Errors,
-	}
+\treturn map[string]any{
+\t\t"requests": s.Requests,
+\t\t"errors":   s.Errors,
+\t}
 }
 
 func logAll(entries []Stats) {
-	for _, e := range entries {
-		m := recordStats(e)
-		fmt.Println(m)
-	}
+\tfor _, e := range entries {
+\t\tm := recordStats(e)
+\t\tfmt.Println(m)
+\t}
 }`}>
 `recordStats` box field `int` สองตัวเข้า `any` ข้างใน `map[string]any` ที่ allocate ใหม่ทุกครั้งที่เรียก สำหรับข้อมูลที่ถูก print เท่านั้น `map[string]any` ทุกอันจอง bucket ภายในของ map เอง และค่าที่ไม่ใช่ small-int ทุกตัวที่ assign เข้าไป (ในที่นี้ `s.Requests` กับ `s.Errors` จะไม่เสีย box ก็ต่อเมื่อบังเอิญตกอยู่ในตาราง static 0–255 — request counter จะไม่อยู่ในนั้นนานหรอก) box เข้า heap allocation ใหม่ ไม่มี indirection ไหนในนี้ที่คุ้มค่าเลย: `fmt.Println` print struct แบบ concrete type ได้ดีพอ ๆ กันโดยไม่มี allocation เหล่านี้เลย เพราะ `Stats` เองไม่จำเป็นต้องออกจาก stack เลย
 

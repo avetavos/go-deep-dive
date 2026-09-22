@@ -360,17 +360,17 @@ Map เป็นจุดที่โค้ดที่ generate มา compile 
 - map ถูกส่งเข้าฟังก์ชันที่ผู้เขียนเชื่อว่าจะได้ "copy" หรือเปล่า (มี comment แบบ `// safe, m is a local copy`)? copy ที่ได้มีแค่ header — callee ยังแก้ทุก entry ได้อยู่ดี
 
 <SpotTheBug code={`type Config struct {
-	Counts map[string]int
+\tCounts map[string]int
 }
 
 func NewConfig() *Config {
-	return &Config{}
+\treturn &Config{}
 }
 
 func main() {
-	c := NewConfig()
-	c.Counts["hits"]++
-	fmt.Println(c.Counts)
+\tc := NewConfig()
+\tc.Counts["hits"]++
+\tfmt.Println(c.Counts)
 }`}>
 `NewConfig` คืน `*Config` ที่ field `Counts` ไม่เคยถูก initialize เลย — zero value ของ `map[string]int` คือ `nil` ไม่ใช่ map ว่าง `c.Counts["hits"]++` คือการอ่านแล้วเขียน ฝั่งอ่านไม่มีปัญหา (คืน 0 สำหรับ nil map) แต่ฝั่งเขียน panic verify บน 1.26.5 แล้ว: `panic: assignment to entry in nil map` แก้โดยให้ `NewConfig` initialize field นี้: `return &Config{Counts: make(map[string]int)}`
 </SpotTheBug>

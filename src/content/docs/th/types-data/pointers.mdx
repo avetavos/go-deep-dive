@@ -387,25 +387,25 @@ Bug ที่เกี่ยวกับ pointer มักไม่ crash ตร
 - มีโค้ดที่เปรียบเทียบหรือ format `uintptr` ราวกับ garbage collector ยังรู้ว่ามันชี้ไปไหนหรือเปล่า? `uintptr` ที่ได้จาก pointer valid แค่ชั่วขณะที่ดึงมันมาเท่านั้น — object ข้างใต้ย้ายได้ก่อนบรรทัดถัดไปจะรัน
 
 <SpotTheBug code={`type Cache struct {
-	mu   sync.Mutex
-	data map[string]int
+\tmu   sync.Mutex
+\tdata map[string]int
 }
 
 func (c *Cache) Get(key string) (int, bool) {
-	if c == nil {
-		return 0, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.data[key]
-	return v, ok
+\tif c == nil {
+\t\treturn 0, false
+\t}
+\tc.mu.Lock()
+\tdefer c.mu.Unlock()
+\tv, ok := c.data[key]
+\treturn v, ok
 }
 
 var globalCache *Cache
 
 func main() {
-	v, ok := globalCache.Get("x")
-	fmt.Println(v, ok)
+\tv, ok := globalCache.Get("x")
+\tfmt.Println(v, ok)
 }`}>
 โค้ดนี้ถูกต้องจริง ๆ และนั่นคือประเด็นของแบบฝึกหัดนี้ — nil check ของ `Get` มาก่อนและ return ออกไปก่อนแตะ `c.mu` หรือ `c.data` ดังนั้นการเรียกมันบน `*Cache` ที่เป็น nil (แบบที่ `main` ทำกับ `globalCache` ที่เป็น zero value) ถูกกฎหมายสมบูรณ์และ print `0 false` รูปแบบ bug ที่ต้องระวังคือโครงเดียวกันแต่ check อยู่ผิดที่หรือหายไป: ถ้า `c.mu.Lock()` รันก่อน `nil` check การเรียกแบบเดียวกันเป๊ะจะ panic ด้วย `nil pointer dereference` เพราะ `Lock()` ต้องอ่าน address ของ `c.mu` ซึ่งต้องการให้ `c` ไม่เป็น nil ก่อน เวลา review โค้ดที่ generate มาซึ่งมี nil-receiver guard ให้ยืนยันว่า guard นั้นเป็น statement แรกสุดใน method จริง ๆ ไม่ใช่แค่มีอยู่ที่ไหนสักแห่งใน function
 </SpotTheBug>

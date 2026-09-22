@@ -409,17 +409,17 @@ func main() {
 - `sync.Map` จะเหมาะกว่า `map` ที่ป้องกันด้วย `Mutex` ตรงนี้ไหม หรือมันถูกหยิบมาใช้ตามความเคยชินบน workload ที่ไม่ใช่ write-once-read-many หรือ disjoint-keys?
 
 <SpotTheBug code={`type Counter struct {
-	mu sync.Mutex
-	n  int
+\tmu sync.Mutex
+\tn  int
 }
 
 func main() {
-	counters := []Counter{{}, {}, {}}
-	for _, c := range counters {
-		c.mu.Lock()
-		c.n++
-		c.mu.Unlock()
-	}
+\tcounters := []Counter{{}, {}, {}}
+\tfor _, c := range counters {
+\t\tc.mu.Lock()
+\t\tc.n++
+\t\tc.mu.Unlock()
+\t}
 }`}>
 `range` copy แต่ละ element เข้า `c` ทุกรอบ — รวมถึง `sync.Mutex` ของมันด้วย — ดังนั้นทุกคู่ `Lock`/`Unlock` ใน loop ทำงานบน copy ที่ใช้แล้วทิ้งของ mutex และ `c.n++` ไม่เคยแตะ `Counter` ตัวจริงใน slice เลย `go vet` จับได้บน Go 1.26.5:
 

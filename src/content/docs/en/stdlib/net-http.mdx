@@ -498,14 +498,14 @@ w.Header().Set(...)  ->  w.WriteHeader(code)  ->  w.Write(body)
 - Does a goroutine spawned inside a handler carry `r.Context()` forward, or does it keep running (and consuming resources) after the client disconnects?
 
 <SpotTheBug code={`func createHandler(w http.ResponseWriter, r *http.Request) {
-	var in Item
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	body, _ := json.Marshal(in)
-	w.Write(body)
-	w.WriteHeader(http.StatusCreated)
+\tvar in Item
+\tif err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+\t\thttp.Error(w, err.Error(), http.StatusBadRequest)
+\t\treturn
+\t}
+\tbody, _ := json.Marshal(in)
+\tw.Write(body)
+\tw.WriteHeader(http.StatusCreated)
 }`}>
 
 `w.Write(body)` sends the response body immediately, and since no status was set yet, Go implicitly sends `200 OK` as part of that first write. The `w.WriteHeader(http.StatusCreated)` on the next line is too late — the status line already went out. Verified locally: the client sees status `200`, never `201`, and the server logs

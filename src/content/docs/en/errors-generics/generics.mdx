@@ -363,12 +363,12 @@ When a generated snippet uses type parameters, check for these before trusting i
 - Is `var zero T` (or `*new(T)`) used to build a "no result" case, but the caller then treats the zero value as if it meant something different from "absent" — e.g. `0` meaning both "no value" and "value is zero"?
 
 <SpotTheBug code={`func Equal[T comparable](a, b T) bool {
-	return a == b
+\treturn a == b
 }
 
 func main() {
-	var a, b any = []int{1, 2}, []int{1, 2}
-	fmt.Println(Equal(a, b))
+\tvar a, b any = []int{1, 2}, []int{1, 2}
+\tfmt.Println(Equal(a, b))
 }`}>
 `any` satisfies `comparable` since Go 1.20 — the constraint check succeeds at compile time. But `==` between two `any` values compares whatever concrete value is stored inside them at runtime, and a `[]int` is not comparable. Verified on 1.26.5, this panics: `panic: runtime error: comparing uncomparable type []int`. `comparable` guarantees the code compiles, not that every instantiation is safe to run — this only bites when `T` ends up being `any` or another interface type holding a slice, map, or func.
 </SpotTheBug>

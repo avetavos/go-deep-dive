@@ -244,19 +244,19 @@ Scheduler-shaped bugs rarely look like bugs — they look like code that "occasi
 - Is a large local array or big struct allocated inside a deeply recursive function without considering that every frame's cost multiplies across recursion depth, forcing more stack growth (and more copying) than a shallower or iterative version would?
 
 <SpotTheBug code={`func computeAll(n int) []int {
-	results := make([]int, n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
-			for {
-				// tight CPU-bound retry loop, no channel op, no sleep
-				if attempt(i, results) {
-					return
-				}
-			}
-		}(i)
-	}
-	time.Sleep(2 * time.Second) // "should be enough time"
-	return results
+\tresults := make([]int, n)
+\tfor i := 0; i < n; i++ {
+\t\tgo func(i int) {
+\t\t\tfor {
+\t\t\t\t// tight CPU-bound retry loop, no channel op, no sleep
+\t\t\t\tif attempt(i, results) {
+\t\t\t\t\treturn
+\t\t\t\t}
+\t\t\t}
+\t\t}(i)
+\t}
+\ttime.Sleep(2 * time.Second) // "should be enough time"
+\treturn results
 }`}>
 Two separate scheduler-shaped problems live in this one function. First, `n` goroutines are spawned with no bound at all — if `n` is large, far more goroutines exist than `GOMAXPROCS` can ever run simultaneously, so most of them simply queue (in local run queues, then the global one) rather than making any progress in parallel; the function's implicit assumption that more goroutines means proportionally more parallel work is wrong past `GOMAXPROCS` of them. Second, each goroutine's retry loop has no channel operation, blocking call, or sleep in it at all — a goroutine that keeps finding `attempt` returning `false` spins purely on CPU, and while async preemption (Go 1.14+) prevents it from starving its P *forever*, it still competes for that P's time on equal footing with goroutines doing real, useful work, for as long as it spins.
 

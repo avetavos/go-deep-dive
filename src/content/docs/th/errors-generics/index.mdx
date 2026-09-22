@@ -97,16 +97,16 @@ func main() {
 func (e *MyError) Error() string { return e.msg }
 
 func mightFail(fail bool) error {
-	var e *MyError
-	if fail {
-		e = &MyError{msg: "boom"}
-	}
-	return e
+\tvar e *MyError
+\tif fail {
+\t\te = &MyError{msg: "boom"}
+\t}
+\treturn e
 }
 
 func main() {
-	err := mightFail(false)
-	fmt.Println(err == nil)
+\terr := mightFail(false)
+\tfmt.Println(err == nil)
 }`}>
 `mightFail` คืนตัวแปร `e` ที่มี type เป็น `*MyError` ตรง ๆ แม้ `e` จะเป็น `nil` ก็ตาม `error` interface ที่ return กลับมามี concrete type (`*MyError`) และ value เป็น nil — นั่นคือ interface ที่ไม่ nil ที่ถือ pointer เป็น nil อยู่ข้างใน ไม่ใช่ nil interface ตรวจสอบแล้วบน 1.26.5: โค้ดนี้พิมพ์ `false` ไม่ใช่ `true` ทางแก้คือถือ `*MyError` แค่ใน local variable แล้วคืน `nil` เปล่า ๆ ที่ไม่มี type ในเส้นทางสำเร็จ — ดูคำอธิบายเต็มพร้อม playground ที่รันได้ใน Error Values
 </SpotTheBug>

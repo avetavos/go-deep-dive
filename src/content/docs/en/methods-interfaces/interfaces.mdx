@@ -272,18 +272,18 @@ When a generated function returns an `error` (or any interface type), check for 
 func (e *MyErr) Error() string { return e.msg }
 
 func validate(input string) error {
-	var problem *MyErr
-	if input == "" {
-		problem = &MyErr{msg: "empty input"}
-	}
-	return problem
+\tvar problem *MyErr
+\tif input == "" {
+\t\tproblem = &MyErr{msg: "empty input"}
+\t}
+\treturn problem
 }
 
 func main() {
-	err := validate("ok")
-	if err != nil {
-		panic("validation failed: " + err.Error())
-	}
+\terr := validate("ok")
+\tif err != nil {
+\t\tpanic("validation failed: " + err.Error())
+\t}
 }`}>
 `validate` returns `problem`, a `*MyErr` variable, through an `error`-typed return — even on the success path where `problem` is nil. The returned `error` interface then holds `(type: *MyErr, data: nil)`, which is never `== nil`, so `err != nil` is true even though input was valid. `main` then calls `err.Error()` on that nil `*MyErr` receiver to read `msg`, which dereferences a nil pointer — the real panic is `panic: runtime error: invalid memory address or nil pointer dereference`, not the message text passed to `panic()`. The fix is to return a literal `nil` on the success path: `if input == "" { return &MyErr{msg: "empty input"} }; return nil`.
 </SpotTheBug>

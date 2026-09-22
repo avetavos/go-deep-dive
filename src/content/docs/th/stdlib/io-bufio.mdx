@@ -374,19 +374,19 @@ AI assistant เขียนโค้ด `io`/`bufio` ที่ compile ผ่�
 - `bytes.Buffer` ถูก copy โดยค่า (ส่งเป็น argument, เก็บใน slice, return จาก function) หลังจากมันมีข้อมูลแล้วหรือไม่?
 
 <SpotTheBug code={`func loadConfig(path string) (map[string]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+\tf, err := os.Open(path)
+\tif err != nil {
+\t\treturn nil, err
+\t}
+\tdefer f.Close()
 
-	cfg := map[string]string{}
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		k, v, _ := strings.Cut(scanner.Text(), "=")
-		cfg[k] = v
-	}
-	return cfg, nil
+\tcfg := map[string]string{}
+\tscanner := bufio.NewScanner(f)
+\tfor scanner.Scan() {
+\t\tk, v, _ := strings.Cut(scanner.Text(), "=")
+\t\tcfg[k] = v
+\t}
+\treturn cfg, nil
 }`}>
 
 loop ไม่เคยเช็ก `scanner.Err()` เลย ถ้าบรรทัดหนึ่งใน `path` ยาวเกินเพดาน default 64 KB — ค่ายาวๆ, ไฟล์ binary หลุดเข้ามา — `Scan()` จะคืน `false`, loop จบ, และ `loadConfig` จะคืน config ที่**ไม่ครบ**พร้อม error เป็น `nil` เหมือนกับว่าไฟล์ถูกอ่านครบแล้ว แก้ได้โดยเช็ก error หลัง loop:

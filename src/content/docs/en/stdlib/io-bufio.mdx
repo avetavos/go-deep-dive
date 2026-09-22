@@ -374,19 +374,19 @@ AI assistants write `io`/`bufio` code that compiles and looks reasonable far mor
 - Is a `bytes.Buffer` ever copied by value (passed as an argument, stored in a slice, returned from a function) after it has data in it?
 
 <SpotTheBug code={`func loadConfig(path string) (map[string]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+\tf, err := os.Open(path)
+\tif err != nil {
+\t\treturn nil, err
+\t}
+\tdefer f.Close()
 
-	cfg := map[string]string{}
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		k, v, _ := strings.Cut(scanner.Text(), "=")
-		cfg[k] = v
-	}
-	return cfg, nil
+\tcfg := map[string]string{}
+\tscanner := bufio.NewScanner(f)
+\tfor scanner.Scan() {
+\t\tk, v, _ := strings.Cut(scanner.Text(), "=")
+\t\tcfg[k] = v
+\t}
+\treturn cfg, nil
 }`}>
 
 The loop never checks `scanner.Err()`. If one line in `path` is longer than the default 64 KB limit — a long value, a stray binary file — `Scan()` returns `false`, the loop ends, and `loadConfig` returns a **partial** config with a `nil` error, as if the file had been read completely. Fix it by checking the error after the loop:

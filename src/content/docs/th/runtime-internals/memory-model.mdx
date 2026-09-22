@@ -237,21 +237,21 @@ export const memModelDiagram = `flowchart LR
 - ใช้ typed API ของ `sync/atomic` (`atomic.Int64`, `atomic.Bool`, `atomic.Pointer[T]`) หรือ increment ตัวแปรธรรมดาจากหลาย goroutine "เพราะมันแค่ counter"?
 
 <SpotTheBug code={`type Result struct {
-	Value int
-	Ready bool
+\tValue int
+\tReady bool
 }
 
 func compute(r *Result) {
-	r.Value = expensiveCalc()
-	r.Ready = true
+\tr.Value = expensiveCalc()
+\tr.Ready = true
 }
 
 func main() {
-	r := &Result{}
-	go compute(r)
-	for !r.Ready {
-	}
-	fmt.Println(r.Value)
+\tr := &Result{}
+\tgo compute(r)
+\tfor !r.Ready {
+\t}
+\tfmt.Println(r.Value)
 }`}>
 นี่คือ bug `done bool` ในรูปแบบที่ AI เขียนบ่อยที่สุด: struct ผลลัพธ์ที่มี flag `Ready` ธรรมดา และ **busy-spin loop ที่ไม่มี synchronization เลย** — ไม่มีแม้แต่ `time.Sleep` ที่ demo ของบทนี้เองยังมี `go vet` ไม่บ่นอะไร โปรแกรม compile ผ่านและบนเครื่องส่วนใหญ่พิมพ์ค่าที่ถูกส่วนใหญ่ `go run -race` รายงาน data race ทั้งบน `Ready` และ `Value` ด้วยเหตุผลเดียวกับที่บทนี้สาธิต: ทั้งสอง field ไม่มี happens-before edge เชื่อม write ของ `compute` เข้ากับ read ของ `main` เลย busy-spin loop ยังเป็น bug ของตัวเองแยกจาก race ด้วย: มันเผา CPU core หนึ่งตัว 100% ตลอดเวลาที่รอ ซึ่ง channel receive หรือ `sync.WaitGroup.Wait()` ไม่ทำแบบนั้น (ทั้งคู่ park goroutine)
 

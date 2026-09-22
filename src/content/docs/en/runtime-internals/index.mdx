@@ -130,9 +130,9 @@ None of these four lessons make you able to reimplement the Go runtime — they 
 The whole point of this module is this section, four times over — one per lesson. As a preview, here is the survey-level version: a snippet that compiles, passes `go vet`, and is still wrong in a way none of the earlier modules in this course would catch.
 
 <SpotTheBug code={`func recordHit(counts map[string]int, key string) {
-	go func() {
-		counts[key]++ // no lock, no channel, called from many goroutines
-	}()
+\tgo func() {
+\t\tcounts[key]++ // no lock, no channel, called from many goroutines
+\t}()
 }`}>
 This compiles. It passes `go vet`. Nothing in the Basics, Types, or Methods modules flags it. But `counts[key]++` from an unsynchronized goroutine, called concurrently from more than one place, is a **data race** on a plain Go `map` — which is not even safe for *one* writer plus any reader at the same time, let alone two writers. Two goroutines can genuinely corrupt the map's internal structure, and Go's runtime detects this specific case and crashes with `fatal error: concurrent map writes` rather than silently corrupting data — but only if you get lucky enough to trigger the runtime's own check. The Memory Model lesson in this module explains exactly why "no shared mutable state" has to be enforced by you, not inferred from the code compiling.
 

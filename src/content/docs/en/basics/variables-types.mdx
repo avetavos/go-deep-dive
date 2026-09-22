@@ -343,15 +343,15 @@ Generated code that touches variables and basic types tends to hide these exact 
 - Does an `iota` block start with a plain identifier instead of `_` when the zero-th value should be skipped or treated as "invalid"?
 
 <SpotTheBug code={`func step() (int, error) {
-	return 0, errors.New("boom")
+\treturn 0, errors.New("boom")
 }
 
 func run() error {
-	var err error
-	if v, err := step(); err != nil {
-		fmt.Println("inner saw:", v, err)
-	}
-	return err
+\tvar err error
+\tif v, err := step(); err != nil {
+\t\tfmt.Println("inner saw:", v, err)
+\t}
+\treturn err
 }`}>
 The `if` statement's `:=` declares a *new* `err`, scoped to the `if` block — it does not assign to the outer `err` declared with `var`. `step()` really does fail, and the `fmt.Println` inside the `if` really does print the error, but `run()` still returns `nil`, because the outer `err` was never reassigned. Fix it by not shadowing: `v, err := step()` using the already-declared `err` requires reusing `=` for `err` and `:=` only where a name is genuinely new, e.g. write `var v int; v, err = step()`, or move the `if` check onto its own line after the assignment.
 </SpotTheBug>

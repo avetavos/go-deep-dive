@@ -325,14 +325,14 @@ Bug ที่เกี่ยวกับ struct มักซ่อนอยู�
 - type ต้องเรียก `New()`/`Init()` ก่อนถึงจะใช้ได้อย่างปลอดภัยหรือเปล่า ทั้งที่ zero value ของมันน่าจะทำให้ใช้ได้เลยได้? caller ทุกคนที่ลืมเรียกจะมี bug แฝงอยู่ และไม่มีอะไรบังคับให้เรียกตอน compile time เลย
 
 <SpotTheBug code={`type Metrics struct {
-	Name  string \`json:"name"\`
-	Count int    \`jso:"count"\`
+\tName  string \`json:"name"\`
+\tCount int    \`jso:"count"\`
 }
 
 func main() {
-	m := Metrics{Name: "requests", Count: 42}
-	b, _ := json.Marshal(m)
-	fmt.Println(string(b))
+\tm := Metrics{Name: "requests", Count: 42}
+\tb, _ := json.Marshal(m)
+\tfmt.Println(string(b))
 }`}>
 Tag ของ field ที่สองพิมพ์ผิด: `` `jso:"count"` `` แทนที่จะเป็น `` `json:"count"` `` นี่เป็น tag *syntax* ที่ valid — `go vet ./...` ไม่รายงานอะไรเลย เพราะ `structtag` check ตรวจแค่ grammar ของ `key:"value"` ไม่ได้ตรวจว่า `"jso"` เป็น key ที่ `encoding/json` รู้จักหรือเปล่า struct นี้ compile และรันได้ปกติ แต่ `Count` จะ marshal ด้วยชื่อ Go field ของมันแทนที่จะเป็น key ที่ตั้งใจ: `{"name":"requests","Count":42}` ไม่มีอะไรจับความผิดพลาดนี้ได้เลยนอกจาก test ที่ assert รูปร่าง JSON ตรง ๆ — มันจะไม่ทำให้ build พัง, lint พัง, หรือแม้แต่มองเผิน ๆ ที่ตัว struct ก็ไม่เห็น
 </SpotTheBug>

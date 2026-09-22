@@ -108,20 +108,20 @@ Across every lesson in this module, the same handful of checks catch most genera
 - Does an embedded pointer, or an embedded interface used as a partial mock, get a promoted method called on it before anything assigns it a real value?
 
 <SpotTheBug code={`type Rectangle struct {
-	Width, Height float64
+\tWidth, Height float64
 }
 
 func (r *Rectangle) Area() float64 {
-	return r.Width * r.Height
+\treturn r.Width * r.Height
 }
 
 type Sizer interface {
-	Area() float64
+\tArea() float64
 }
 
 func main() {
-	var s Sizer = Rectangle{Width: 4, Height: 3}
-	_ = s
+\tvar s Sizer = Rectangle{Width: 4, Height: 3}
+\t_ = s
 }`}>
 `Area` has a **pointer** receiver, so `Rectangle`'s method set (the value type) does not include it — only `*Rectangle`'s does. Assigning a plain `Rectangle{}` value to the `Sizer` interface variable fails to compile: `cannot use Rectangle{…} (value of struct type Rectangle) as Sizer value in variable declaration: Rectangle does not implement Sizer (method Area has pointer receiver)`. The fix is `var s Sizer = &Rectangle{Width: 4, Height: 3}`.
 </SpotTheBug>

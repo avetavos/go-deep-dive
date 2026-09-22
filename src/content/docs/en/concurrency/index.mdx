@@ -106,12 +106,12 @@ Every lesson in this module ends with its own detailed version of this section; 
 - If the snippet is presented as deterministic, is the printed order actually forced (sorted, or read back through an indexed slice), or could two runs legitimately print in a different order?
 
 <SpotTheBug code={`func main() {
-	for i := 0; i < 3; i++ {
-		go func(id int) {
-			fmt.Println("goroutine", id, "says hello")
-		}(i)
-	}
-	fmt.Println("main exits")
+\tfor i := 0; i < 3; i++ {
+\t\tgo func(id int) {
+\t\t\tfmt.Println("goroutine", id, "says hello")
+\t\t}(i)
+\t}
+\tfmt.Println("main exits")
 }`}>
 Nothing here waits for the three goroutines to run before `main` returns. The Go runtime does not keep a process alive for background goroutines — the instant `main` returns, the process exits, whether or not any goroutine has been scheduled yet. Real captured output from two separate runs of this exact program:
 

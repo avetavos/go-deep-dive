@@ -423,12 +423,12 @@ Control-flow bugs are some of the easiest for generated code to hide, because th
 - Is a labeled `continue`/`break` used where a plain one was intended, or vice versa — check which loop the label actually names.
 
 <SpotTheBug code={`for i := 0; i < 3; i++ {
-	switch i {
-	case 1:
-		break
-	default:
-		fmt.Println("processing", i)
-	}
+\tswitch i {
+\tcase 1:
+\t\tbreak
+\tdefault:
+\t\tfmt.Println("processing", i)
+\t}
 }`}>
 The `break` inside `case 1` only exits the `switch` statement — it has no effect on the enclosing `for` loop, which keeps running normally. The real output is `processing 0` followed by `processing 2`: `i == 1` does nothing but leave the switch, and the loop proceeds straight to `i == 2`. If the intent was to stop the loop entirely at `i == 1`, label the loop and write `break loop` instead: `loop: for i := 0; i < 3; i++ { switch i { case 1: break loop; ... } }`.
 </SpotTheBug>

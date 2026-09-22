@@ -464,11 +464,11 @@ When a generated function uses `defer`, closures, or function values, check thes
 - Does the code compare two function values directly with `==` (not against `nil`)? That is a compile error — function types support no other comparison.
 
 <SpotTheBug code={`func leaky(n int) {
-	for i := 0; i < n; i++ {
-		r := openResource(i)
-		defer r.Close()
-	}
-	fmt.Println("all opened, none closed yet")
+\tfor i := 0; i < n; i++ {
+\t\tr := openResource(i)
+\t\tdefer r.Close()
+\t}
+\tfmt.Println("all opened, none closed yet")
 }`}>
 `defer` schedules `r.Close()` to run when `leaky` returns — not at the end of each loop iteration. With `n` large, this line runs with all `n` resources still open, and in a long-running program that can exhaust file descriptors or connections long before `leaky` returns. Fix it by giving each iteration its own scope so the deferred call fires per iteration, typically with a small helper function: `func() { r := openResource(i); defer r.Close(); /* use r */ }()` called once per loop iteration.
 </SpotTheBug>

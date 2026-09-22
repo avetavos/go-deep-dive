@@ -108,20 +108,20 @@ func main() {
 - embedded pointer หรือ embedded interface ที่ใช้เป็น partial mock ถูกเรียก promoted method ก่อนที่จะมีอะไรมา assign ค่าจริงให้หรือเปล่า?
 
 <SpotTheBug code={`type Rectangle struct {
-	Width, Height float64
+\tWidth, Height float64
 }
 
 func (r *Rectangle) Area() float64 {
-	return r.Width * r.Height
+\treturn r.Width * r.Height
 }
 
 type Sizer interface {
-	Area() float64
+\tArea() float64
 }
 
 func main() {
-	var s Sizer = Rectangle{Width: 4, Height: 3}
-	_ = s
+\tvar s Sizer = Rectangle{Width: 4, Height: 3}
+\t_ = s
 }`}>
 `Area` มี receiver แบบ **pointer** ดังนั้น method set ของ `Rectangle` (value type) จึงไม่มี method นี้ — มีแค่ method set ของ `*Rectangle` เท่านั้น การ assign `Rectangle{}` value ธรรมดาให้ interface variable `Sizer` จึง compile ไม่ผ่าน: `cannot use Rectangle{…} (value of struct type Rectangle) as Sizer value in variable declaration: Rectangle does not implement Sizer (method Area has pointer receiver)` ทางแก้คือ `var s Sizer = &Rectangle{Width: 4, Height: 3}`
 </SpotTheBug>
