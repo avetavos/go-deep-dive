@@ -87,21 +87,19 @@ goroutines after Wait: 1
 
 ## Mental Model
 
-```text
-Your only view of unfamiliar Go:        What actually decides behavior:
+export const viewVsDecidesDiagram = `flowchart TD
+  subgraph Left["Your only view of unfamiliar Go"]
+    Src["source code"] -->|"does this look right?"| Compiles["compiles, vets clean"]
+    Compiles --> Idiomatic["looks idiomatic"]
+  end
+  subgraph Right["What actually decides behavior"]
+    MM["memory model (happens-before)"] -->|"is this write visible elsewhere?"| Sched["scheduler (GMP)"]
+    Sched -->|"does this goroutine ever run again?"| GCEA["GC + escape analysis"]
+    GCEA -->|"does this allocate, and when is it freed?"| Layout["memory layout (how many bytes, how aligned?)"]
+  end
+  Compiles --> Sched`;
 
-  source code                            memory model (happens-before)
-      │  "does this look right?"              │ is this write visible elsewhere?
-      ▼                                        ▼
-  compiles, vets clean         ──────►    scheduler (GMP)
-      │                                        │ does this goroutine ever run again?
-      ▼                                        ▼
-  "looks idiomatic"                        GC + escape analysis
-                                                │ does this allocate, and when is it freed?
-                                                ▼
-                                          memory layout
-                                                │ how many bytes, how aligned?
-```
+<Mermaid code={viewVsDecidesDiagram} title="Reading source tells you it compiles and looks idiomatic; the memory model, scheduler, GC, and memory layout are what actually decide behavior" />
 
 Reading Go well means running this right-hand column in your head while your eyes are only doing the left-hand one.
 

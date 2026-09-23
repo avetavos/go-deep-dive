@@ -185,18 +185,10 @@ exit status 66
 
 ## Mental Model
 
-```text
-ไม่มี synchronization edge:                   มี edge (channel / mutex / once / atomic / init):
-
-Goroutine A        Goroutine B               Goroutine A        Goroutine B
-  write x             read x                   write x            [edge]
-     ?  ไม่มีลำดับที่รับประกัน  ?                    │  synchronized before
-     └──────X───────┘                              └──────────────► read x
-  (compiler/CPU มีสิทธิ์เรียงใหม่           (write ของ A และทุกอย่างก่อนหน้ามัน
-   cache หรือดีเลย์ visibility)                รับประกันว่า B เห็นแน่นอน)
-```
-
 export const memModelDiagram = `flowchart LR
+  subgraph NoEdge["Without a synchronization edge"]
+    WA["Goroutine A: write x"] -.->|"no guaranteed order -- compiler/CPU free to reorder, cache, or delay visibility"| RB["Goroutine B: read x"]
+  end
   subgraph GoA["Goroutine A"]
     W["write data"]
     S["ch <- v  /  mu.Unlock()  /  once.Do done  /  atomic.Store"]

@@ -304,19 +304,17 @@ func main() {
 
 Real output from this program on Go 1.27.0:
 
-```text
---> GET /items/1
-GET /items/1: 200 {"id":"1","name":"widget"}
+export const netHttpTraceDiagram = `sequenceDiagram
+    participant Client
+    participant Server
+    Client->>Server: GET /items/1
+    Server-->>Client: 200 {"id":"1","name":"widget"}
+    Client->>Server: GET /items/999
+    Server-->>Client: 404 item not found
+    Client->>Server: POST /items
+    Server-->>Client: 201 {"id":"2","name":"gadget"}`;
 
---> GET /items/999
-GET /items/999: 404 item not found
-
---> POST /items
-POST /items: 201 {"id":"2","name":"gadget"}
-
-```
-
-The blank line after each request is not a mistake: both `http.Error` and `json.NewEncoder.Encode` write their own trailing newline, and `fmt.Println` adds a second one on top of it.
+<Mermaid code={netHttpTraceDiagram} title="Two GETs (one found, one missing) and a POST that creates a new item" />
 
 ## Context cancellation and graceful shutdown
 
@@ -436,27 +434,19 @@ export const netHttpLifecycleDiagram = `flowchart TD
 
 ## Mental Model
 
-```text
-http.Server{Addr, Handler, ReadTimeout, WriteTimeout, ...}
-  |
-  v
-DefaultServeMux (global, shared by every http.HandleFunc call)
-  or
-  *ServeMux (private, created with http.NewServeMux())
-  |
-  v
-middleware(middleware(handler))   -- outermost runs first in, last out
-  |
-  v
-func(w http.ResponseWriter, r *http.Request)
-  r.PathValue("id")        <- from the matched route pattern
-  r.Context()              <- cancelled if the client disconnects
-  json.NewDecoder(r.Body)  <- server closes r.Body for you
-  |
-  v
-w.Header().Set(...)  ->  w.WriteHeader(code)  ->  w.Write(body)
-  (must happen in this order -- headers are frozen at WriteHeader)
-```
+export const netHttpPipelineDiagram = `flowchart TD
+  Srv["http.Server{Addr, Handler, ReadTimeout, WriteTimeout, ...}"] --> DSM["DefaultServeMux (global, shared by every http.HandleFunc call)"]
+  Srv --> PSM["*ServeMux (private, created with http.NewServeMux())"]
+  DSM --> MW["middleware(middleware(handler)) -- outermost runs first in, last out"]
+  PSM --> MW
+  MW --> H["func(w http.ResponseWriter, r *http.Request)"]
+  H --> PV["r.PathValue('id') -- from the matched route pattern"]
+  H --> Ctx["r.Context() -- cancelled if the client disconnects"]
+  H --> Dec["json.NewDecoder(r.Body) -- server closes r.Body for you"]
+  H --> Resp["w.Header().Set(...) then w.WriteHeader(code) then w.Write(body)"]
+  Resp --> Note["must happen in this order -- headers are frozen at WriteHeader"]`;
+
+<Mermaid code={netHttpPipelineDiagram} title="A request's path through http.Server, the ServeMux, middleware, and the handler down to the response write order" />
 
 ## Trade-offs
 

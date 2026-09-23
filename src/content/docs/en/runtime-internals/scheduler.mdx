@@ -34,7 +34,7 @@ export const runQueueDiagram = `flowchart TB
     RN2["runnext"]
     LQ2["local run queue (256 slots)"]
   end
-  GQ -.."checked periodically, not every tick".-> P1
+  GQ -.checked periodically, not every tick.-> P1
   GQ -.-> P2
   LQ1 -."P1 idle: steals half of P2's local queue".-> LQ2`;
 
@@ -197,24 +197,26 @@ The depths where a copy happens are stable across runs — 19, 47, 103, 445, 901
 
 ## Mental Model
 
-```text
-                    ┌─────────────── Global run queue (unbounded) ───────────────┐
-                    │            checked periodically by any idle P              │
-                    └──────────────────────────┬───────────────────────────────-┘
-                                                 │ overflow / retired-P work
-              ┌──────────────┐          ┌──────────────┐          ┌──────────────┐
-              │  P1          │          │  P2          │          │  P3 (idle)   │
-              │  runnext: G7 │          │  runnext: -  │          │  runnext: -  │
-              │  runq[256]:  │◄─steal───│  runq[256]:  │          │  runq[256]:  │
-              │  [G1 G2 G3]  │   half   │  [G4 G5]     │          │  [empty]     │
-              └──────┬───────┘          └──────┬───────┘          └──────┬───────┘
-                     │ M1 runs Gs               │ M2 runs Gs              │ steals from P1/P2,
-                     ▼                          ▼                         │ or checks netpoller,
-                   CPU 0                      CPU 1                       │ or checks global queue
-                                                                           ▼
-                                                                    (sysmon watches all
-                                                                     of this from outside)
-```
+export const schedulerBoxDiagram = `flowchart TD
+  GQ["Global run queue (unbounded), checked periodically by any idle P"]
+  subgraph P1["P1 -- runnext: G7, runq[256]: [G1 G2 G3]"]
+  end
+  subgraph P2["P2 -- runnext: -, runq[256]: [G4 G5]"]
+  end
+  subgraph P3["P3 (idle) -- runnext: -, runq[256]: [empty]"]
+  end
+  GQ -->|"overflow / retired-P work"| P1
+  GQ --> P2
+  GQ --> P3
+  P2 -.->|"steal half"| P1
+  P1 --> M1["M1 runs Gs"] --> CPU0["CPU 0"]
+  P2 --> M2["M2 runs Gs"] --> CPU1["CPU 1"]
+  P3 -.->|"steals from P1/P2, or checks netpoller, or checks global queue"| P1
+  Sysmon["sysmon (watches all of this from outside)"] -.-> P1
+  Sysmon -.-> P2
+  Sysmon -.-> P3`;
+
+<Mermaid code={schedulerBoxDiagram} title="Each P runs its local queue through its M; an idle P steals half a queue, then falls back to the netpoller or the global queue; sysmon watches from outside" />
 
 ## Trade-offs
 

@@ -296,20 +296,21 @@ func ownedProducer(n int) <-chan int {
 
 ## Mental Model
 
-```text
-Unbuffered channel — rendez-vous point:
+export const channelRendezvousDiagram = `flowchart TD
+  subgraph Unbuf["Unbuffered channel -- rendez-vous point"]
+    G1u["G1"] -->|"send (blocks)"| CHu["channel"]
+    G2u["G2"] -->|"recv (blocks)"| CHu
+    CHu --> Meet["G1 and G2 must meet"]
+  end
+  subgraph Buf["Buffered channel (cap=3)"]
+    G1b["G1"] -->|"send"| Slots["[_][_][_]"]
+    Slots -->|"recv"| G2b["G2"]
+    Slots -.->|"blocks when full"| G1b
+    Slots -.->|"blocks when empty"| G2b
+    Slots --> Indep["G1/G2 run more independently"]
+  end`;
 
-G1 ──send──→ [channel] ←──recv── G2
-             (block)   (block)
-             G1 and G2 must meet
-
-Buffered channel (cap=3):
-
-G1 ──send──→ [_][_][_] ←──recv── G2
-             (blocks when full)
-             (blocks when empty)
-             G1/G2 run more independently
-```
+<Mermaid code={channelRendezvousDiagram} title="An unbuffered channel forces the sender and receiver to meet; a buffered channel only blocks once the buffer is full or empty" />
 
 export const channelStateDiagram = `flowchart LR
   subgraph Lifecycle["chan T lifecycle"]

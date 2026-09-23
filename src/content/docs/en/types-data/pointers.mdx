@@ -324,30 +324,19 @@ func main() {
 
 ## Mental Model
 
-```text
-Stack                        Heap (GC-managed)
-─────────────────────        ────────────────────────
-x    [   42   ]  ←──┐
-p    [ 0xC001 ]─────┘
-                             ┌──────────────────────┐
-cfg  [ 0xC002 ]──────────────→  Config{Workers: 4}  │
-─────────────────────        └──────────────────────┘
-
-stack allocation: fast, the GC never touches it
-heap allocation:  the GC has to manage it, adding a little latency
-Escape analysis decides whether a variable lives on the stack or the heap
-```
-
 export const escapeDiagram = `flowchart LR
   subgraph Stack["Stack (per-goroutine, freed on return)"]
     x["x := 42"]
     p["p := &x"]
+    cfg["cfg"]
   end
   subgraph Heap["Heap (GC-managed)"]
     c["Config{Workers: 4}"]
   end
   p -.->|"&x: does not escape, stays on stack"| x
-  newConfig["newConfig() returns &c"] -->|"c escapes: outlives the function"| c`;
+  cfg -->|"cfg points into the heap"| c
+  newConfig["newConfig() returns &c"] -->|"c escapes: outlives the function"| c
+  Note["stack alloc is fast and GC-free; heap alloc costs GC-managed latency; escape analysis decides which"]`;
 
 <Mermaid code={escapeDiagram} title="A pointer only forces a heap allocation when escape analysis proves the value must outlive its function" />
 

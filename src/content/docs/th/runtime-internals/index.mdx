@@ -87,21 +87,19 @@ goroutines after Wait: 1
 
 ## Mental Model
 
-```text
-สิ่งที่คุณเห็นจากโค้ดที่ไม่คุ้นเคย:         สิ่งที่ตัดสินพฤติกรรมจริง ๆ:
+export const viewVsDecidesDiagram = `flowchart TD
+  subgraph Left["Your only view of unfamiliar Go"]
+    Src["source code"] -->|"does this look right?"| Compiles["compiles, vets clean"]
+    Compiles --> Idiomatic["looks idiomatic"]
+  end
+  subgraph Right["What actually decides behavior"]
+    MM["memory model (happens-before)"] -->|"is this write visible elsewhere?"| Sched["scheduler (GMP)"]
+    Sched -->|"does this goroutine ever run again?"| GCEA["GC + escape analysis"]
+    GCEA -->|"does this allocate, and when is it freed?"| Layout["memory layout (how many bytes, how aligned?)"]
+  end
+  Compiles --> Sched`;
 
-  source code                            memory model (happens-before)
-      │  "หน้าตาโค้ดดูถูกไหม?"                │ write นี้ visible ที่อื่นไหม?
-      ▼                                        ▼
-  compile ผ่าน, vet clean       ──────►    scheduler (GMP)
-      │                                        │ goroutine นี้ได้รันอีกไหม?
-      ▼                                        ▼
-  "ดู idiomatic"                            GC + escape analysis
-                                                │ สิ่งนี้ allocate ไหม เมื่อไหร่ถูก free?
-                                                ▼
-                                          memory layout
-                                                │ กี่ byte, align อย่างไร?
-```
+<Mermaid code={viewVsDecidesDiagram} title="อ่าน source code รู้แค่ว่า compile ผ่านและดู idiomatic แต่ memory model, scheduler, GC และ memory layout ต่างหากที่ตัดสินพฤติกรรมจริง" />
 
 การอ่าน Go ให้ดีคือการรันคอลัมน์ขวาในหัวของคุณ ในขณะที่สายตากำลังทำแค่คอลัมน์ซ้าย
 

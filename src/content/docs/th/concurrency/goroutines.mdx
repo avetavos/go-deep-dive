@@ -214,25 +214,6 @@ import _ "net/http/pprof"
 
 ## Runtime Behavior
 
-```text
-GMP Model:
-
-G  G  G  G  G  G  G  G    ← goroutines (อาจมีหลักแสน)
- ╲ │ ╱    ╲ │ ╱
-  [P1]      [P2]           ← P (= GOMAXPROCS, default = #CPU)
-   │          │
-  [M1]       [M2]          ← M (OS thread)
-   │          │
- CPU0        CPU1
-
-เมื่อ G block บน I/O:
-  G ──block──→ waiting queue
-  M release P → P ถูก M อื่นรับ → G อื่นรัน
-
-Work stealing:
-  P1 run queue ว่าง → steal G จาก P2 run queue
-```
-
 export const gmpDiagram = `flowchart TD
   subgraph Gs["Goroutines (G) -- thousands, cheap"]
     G1["G"]
@@ -254,7 +235,13 @@ export const gmpDiagram = `flowchart TD
   G4 --> P2
   P1 --> M1 --> CPU0["CPU core 0"]
   P2 --> M2 --> CPU1["CPU core 1"]
-  P1 -.P1 idle: steal a G from P2.-> P2`;
+  P1 -.P1 idle: steal a G from P2.-> P2
+  subgraph IO["When a G blocks on I/O"]
+    Gio["G"] -->|"blocks"| WaitQ["waiting queue"]
+    Mrel["M"] -.->|"releases P"| Pfree["P"]
+    Pfree -.->|"picked up by another M"| Mnew["M"]
+    Mnew --> Grun["another G runs"]
+  end`;
 
 <Mermaid code={gmpDiagram} title="GMP model: goroutine เข้าคิวที่ P, P ต้องถูก M ถือไว้ถึงจะรันบน CPU core ได้ และ P ที่ว่างจะขโมยงานจาก P ที่ยุ่ง" />
 

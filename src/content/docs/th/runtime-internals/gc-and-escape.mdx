@@ -360,18 +360,19 @@ Output จริง (ตัวเลข byte และ object ต่างกั
 
 ## Mental Model
 
-```text
-Escape analysis (compile time):          Collector (runtime, ongoing):
+export const escapeCollectorDiagram = `flowchart TD
+  subgraph EA["Escape analysis (compile time)"]
+    Q["Does this value's lifetime end when the function returns?"]
+    Q -->|"yes"| Stack["stack (free)"]
+    Q -->|"no"| Heap["heap (GC-tracked from here on)"]
+  end
+  subgraph GC["The collector (runtime, ongoing)"]
+    White["white"] --> Grey["grey"] --> Black["black"]
+    WB["write barrier keeps this safe while goroutines run"]
+    STW1["STW sweep-term (short)"] --> CM["concurrent mark (most of the time)"] --> STW2["STW mark-term (short)"]
+  end`;
 
-does this value's lifetime               tri-color mark:
-end when the function returns?             white -> grey -> black
-        │                                        │
-   yes ─┴─ no                            write barrier keeps this
-    │       │                            safe while goroutines run
- stack    heap                                   │
- (free)   (GC-tracked            STW sweep-term → concurrent mark → STW mark-term
-           from here on)          (short)          (most of the time)   (short)
-```
+<Mermaid code={escapeCollectorDiagram} title="Escape analysis ตัดสินใจ stack vs. heap ตอน compile ส่วน collector ทำ tri-color mark แบบ concurrent คั่นด้วย stop-the-world สั้นๆ สองช่วง" />
 
 ## ข้อแลกเปลี่ยน
 

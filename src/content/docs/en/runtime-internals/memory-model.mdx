@@ -185,18 +185,10 @@ None of this makes a data race acceptable. It is still specified as an error, th
 
 ## Mental Model
 
-```text
-Without a synchronization edge:              With one (channel / mutex / once / atomic / init):
-
-Goroutine A        Goroutine B               Goroutine A        Goroutine B
-  write x             read x                   write x            [edge]
-     ?  no guaranteed order  ?                     │  synchronized before
-     └──────X───────┘                              └──────────────► read x
-  (compiler/CPU free to reorder,            (A's write, and everything before it,
-   cache, or delay visibility)               is guaranteed visible to B)
-```
-
 export const memModelDiagram = `flowchart LR
+  subgraph NoEdge["Without a synchronization edge"]
+    WA["Goroutine A: write x"] -.->|"no guaranteed order -- compiler/CPU free to reorder, cache, or delay visibility"| RB["Goroutine B: read x"]
+  end
   subgraph GoA["Goroutine A"]
     W["write data"]
     S["ch <- v  /  mu.Unlock()  /  once.Do done  /  atomic.Store"]

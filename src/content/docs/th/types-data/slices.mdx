@@ -318,19 +318,19 @@ func main() {
 
 ## Mental Model
 
-```text
-slice header (3 words, 24 bytes on 64-bit)
- ├─ pointer ──────────────→ [0][1][2][3][4]  ← backing array (cap=5)
- ├─ len: 3                    ↑
- └─ cap: 5                 visible range (len=3)
+export const appendGrowthDiagram = `flowchart TD
+  Header["slice header (3 words, 24 bytes): pointer, len=3, cap=5"] --> Backing["backing array (cap=5): [0][1][2][3][4], visible range = len (3)"]
+  subgraph WithinCap["append within cap"]
+    A1["s = append(s, 4)"] --> A2["len: 4, cap: 5 (no new allocation)"]
+  end
+  subgraph PastCap["append past cap"]
+    B1["s = append(s, 5, 6)"] --> B2["Go allocates a new backing array (~2x cap)"]
+    B2 --> B3["old backing array stays alive if another slice still points at it"]
+  end
+  Backing --> WithinCap
+  Backing --> PastCap`;
 
-append ภายใน cap:
- s = append(s, 4)    →  len: 4, cap: 5  (ไม่มี allocation ใหม่)
-
-append เกิน cap:
- s = append(s, 5, 6) →  Go allocates new backing array (~2x cap)
-                         backing array เดิมยัง live ถ้ามี slice อื่นชี้อยู่
-```
+<Mermaid code={appendGrowthDiagram} title="append ที่ยังไม่เกิน cap จะโตในที่เดิม; append ที่เกิน cap จะจอง backing array ใหม่ และของเก่ายัง live ถ้ามี slice อื่นชี้อยู่" />
 
 ## ข้อแลกเปลี่ยน
 

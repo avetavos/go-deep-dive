@@ -162,26 +162,20 @@ golangci-lint run && govulncheck ./... && go test -race -cover ./...
 
 ## Mental Model
 
-```text
-                     Static (source only)         Dynamic (must run)
-                   ┌───────────────────────┐    ┌───────────────────────┐
-Structural bugs    │ go vet                 │    │                       │
-(type-provable)    │ (copylocks, waitgroup, │    │                       │
-                    │  errorsas, loopclosure)│    │                       │
-                    ├───────────────────────┤    │                       │
-Deeper static bugs  │ staticcheck            │    │                       │
-                    │ (SA*, ST*)             │    │                       │
-                    ├───────────────────────┤    ├───────────────────────┤
-Concurrency bugs    │                        │    │ -race                 │
-that actually occur │                        │    │ (only what ran)       │
-                    ├───────────────────────┤    ├───────────────────────┤
-Known CVEs reached  │ govulncheck            │    │                       │
-by your call graph  │                        │    │                       │
-                    ├───────────────────────┤    ├───────────────────────┤
-What ran vs. didn't │                        │    │ go test -cover        │
-                    └───────────────────────┘    └───────────────────────┘
-golangci-lint runs the whole top-left box (go vet + staticcheck + more) in one command.
-```
+export const staticDynamicDiagram = `flowchart TD
+  subgraph Static["Static (source only)"]
+    Vet["go vet<br/>structural bugs (type-provable):<br/>copylocks, waitgroup, errorsas, loopclosure"]
+    SC["staticcheck (SA*, ST*)<br/>deeper static bugs"]
+    Vuln["govulncheck<br/>known CVEs reached by your call graph"]
+  end
+  subgraph Dynamic["Dynamic (must run)"]
+    Race["-race<br/>concurrency bugs that actually occur (only what ran)"]
+    Cover["go test -cover<br/>what ran vs. didn't"]
+  end
+  GCL["golangci-lint runs the whole Static box (go vet + staticcheck + more) in one command"] --> Vet
+  GCL --> SC`;
+
+<Mermaid code={staticDynamicDiagram} title="Static tools prove things from source alone; dynamic tools only see what actually ran" />
 
 <Callout title="Every tool here is a filter, not a verdict">
 A clean run across this entire page still leaves roughly half of the **[AI Bug Catalog](/go/en/reading-go/ai-bug-catalog/)** unaddressed — leaks, missing timeouts, unchecked status codes, context lifetime mistakes, and more. Run every tool, then still work through the **[Review Checklist](/go/en/reading-go/review-checklist/)** by eye.
