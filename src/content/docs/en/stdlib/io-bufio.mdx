@@ -324,19 +324,18 @@ Unlike `sync.Mutex`, there is no `go vet copylocks`-style check for this — `by
 
 ## Mental Model
 
-```text
-io.Reader interface:
-  Source → [Read(p []byte)] → buffer p → consumer
+export const ioMentalModelDiagram = `flowchart LR
+  subgraph R["io.Reader interface"]
+    Src["Source"] --> Read["Read(p []byte)"] --> Buf["buffer p"] --> Consumer["consumer"]
+  end
+  subgraph C["Chaining readers"]
+    F["os.File (raw)"] --> BRd["bufio.NewReader (buffered)"] --> GZ["gzip.NewReader (decompressed)"] --> JD["json.NewDecoder (decoded)"]
+  end
+  subgraph W["bufio.Writer batching"]
+    Small["small writes (many syscalls)"] --> WB["buffer 4 KB"] --> Flush["one Flush (one syscall)"] --> Out["os.File"]
+  end`;
 
-Chaining readers:
-  os.File → bufio.NewReader → gzip.NewReader → json.NewDecoder
-  ↓          ↓                ↓                ↓
-  raw        buffered         decompressed     decoded
-
-bufio.Writer batching:
-  small writes → [buffer 4 KB] → one flush → os.File
-  many syscalls                  one syscall
-```
+<Mermaid code={ioMentalModelDiagram} title="Reader pipeline, reader chaining, and Writer batching" />
 
 ## Trade-offs
 
