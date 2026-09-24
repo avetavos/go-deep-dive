@@ -1,6 +1,6 @@
 ---
 title: แคตตาล็อก bug ของโค้ด AI
-description: '24 bug ที่โค้ด Go จาก AI สร้างขึ้นซ้ำๆ — โค้ดที่ผิด, อาการจริง, วิธีแก้, และเครื่องมือ (ถ้ามี) ที่จับได้'
+description: '27 bug ที่โค้ด Go จาก AI สร้างขึ้นซ้ำๆ — โค้ดที่ผิด, อาการจริง, วิธีแก้, และเครื่องมือ (ถ้ามี) ที่จับได้'
 sidebar:
   order: 2
 ---
@@ -14,7 +14,7 @@ import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ทุก pattern ด้านล่างเขียนขึ้นให้เหมือนโค้ด Go ที่ AI assistant ผลิตออกมาจริงๆ แล้วนำไป compile, รัน, และในกรณีที่เกี่ยวข้องก็รันผ่าน `-race` หรือ `go vet` จริง panic, compiler error, และ output ของเครื่องมือที่ยกมาคือของจริงที่ copy มาจากการรันเหล่านั้น ไม่ได้เขียนขึ้นจากความจำ กดปุ่ม **เฉลย** เพื่อคิดก่อนอ่านคำตอบ และทุกข้อจบด้วย **จับได้โดย** ระบุเครื่องมือตัวเดียว (`go vet`, `staticcheck`, `golangci-lint`, `-race`) ที่จับ bug นั้นได้จริง — หรือบอกตรงๆ ว่าไม่มีตัวไหนจับได้เลย
 
-24 pattern นี้จัดกลุ่มแบบเดียวกับ **[Review Checklist](/go/th/reading-go/review-checklist/)** ที่ตามมาหลังบทนี้ คือ errors, concurrency, resources, API contract, types, และ tooling/style
+27 pattern นี้จัดกลุ่มแบบเดียวกับ **[Review Checklist](/go/th/reading-go/review-checklist/)** ที่ตามมาหลังบทนี้ คือ errors, concurrency, resources, API contract, types, และ tooling/style — บวกหัวข้อ **cgo** ปิดท้ายอีกสาม pattern ที่เจอเฉพาะในโปรแกรมที่เรียกเข้าไปใน C ดู **[Cgo and FFI](/go/th/runtime-internals/cgo-and-ffi/)** สำหรับกลไกเบื้องหลังทั้งสามข้อ
 
 <Playground code={typedNilCode} />
 
@@ -952,10 +952,114 @@ any: interface{} can be replaced by any (modernize)
 
 `ST1006` ของ `staticcheck` (อยู่ใน preset `standard` ของ `golangci-lint` โดย default) จับชื่อ receiver ได้เสมอ ส่วนการเปลี่ยน `interface{}` → `any` จับได้ด้วย analyzer `modernize` — แต่ `modernize` **ไม่ได้**อยู่ใน preset `standard` ของ `golangci-lint` ต้องเปิดเอง (`linters.enable: [modernize]`) ตัว interface ที่มี implementation เดียวเองไม่มีเครื่องมือไหนจับได้เลย ไม่มีเครื่องมือไหนนับว่ามีกี่ type ที่ implement interface หนึ่งๆ ทั่วทั้ง codebase ดังนั้น abstraction ที่ไม่จำเป็นอย่าง `UserStoreInterface` จึงไม่มีวัน trigger คำเตือนไม่ว่าจะ config ยังไง การลบมันทิ้ง — แล้วให้ `userStore` satisfy สิ่งที่ *caller* ต้องการจริงๆ — คือการตัดสินใจที่โมดูลนี้มีไว้เพื่อสอนให้คุณทำได้ ดู **[Interfaces](/go/th/methods-interfaces/interfaces/)** และ **[Methods](/go/th/methods-interfaces/methods/)**
 
+## Cgo
+
+### 25. Go pointer ที่ถูกเก็บไว้ฝั่ง C อยู่รอดเกิน call ของมันเอง
+
+```go
+type callbackCtx struct {
+	name  string // a string header is itself a Go pointer
+	total *int   // and this field is a Go pointer too
+}
+
+func register(name string, counter *int) {
+	ctx := &callbackCtx{name: name, total: counter}
+	C.register_callback(unsafe.Pointer(ctx)) // C keeps this pointer past the call
+}
+```
+
+`register_callback` (function ของ C) เก็บ raw pointer ที่ได้รับไว้ใน global ฝั่ง C เพื่อใช้ทีหลัง — เหมือนโค้ดสไตล์ "register callback context กับ C SDK" ที่ AI assistant เขียนได้อย่างมั่นใจเป๊ะ และตรงกับสิ่งที่กฎการส่ง pointer ของ cgo ห้ามไว้พอดี: `ctx` มี Go pointer อยู่ข้างใน (string header กับ field `*int`) และ C ต้องไม่เก็บสำเนาของ Go pointer ไว้หลัง call คืนค่า เว้นแต่ memory นั้นถูก pin ด้วย `runtime.Pinner`
+
+**อาการ — panic จริงบนเครื่องนี้:**
+
+```text
+panic: runtime error: argument of cgo function has Go pointer to unpinned Go pointer
+
+goroutine 1 [running]:
+main.register.func1(...)
+	main.go:26
+```
+
+**แก้ไข:** ส่ง `cgo.Handle` ที่ไม่มีความหมายแทน raw pointer — เป็นเลขจำนวนเต็มที่ C เก็บไว้ได้เรื่อยๆ โดยไม่มี Go pointer อยู่ข้างใน:
+
+```go
+func register(name string, counter *int) cgo.Handle {
+	h := cgo.NewHandle(callbackCtx{name: name, total: counter})
+	C.register_callback(C.uintptr_t(h)) // an integer, not a Go pointer
+	return h
+}
+```
+
+**จับได้โดย:** `GODEBUG=cgocheck=1` ค่า default — แต่จับได้ตอน runtime เท่านั้น และเฉพาะตอนที่ code path นั้นถูกรันจริง `cgocall` analyzer ของ `go vet` **จับกรณีนี้ไม่ได้**: doc comment ของมันเองจำกัดขอบเขตไว้ที่ Go chan, map, func หรือ slice ที่ส่งให้ C ส่วน struct ที่มี pointer field ธรรมดาอยู่นอกขอบเขตนั้น — verify แล้ว: `go vet` ไม่รายงานอะไรเลยบนโค้ดที่ผิดข้างบน ดู **[Cgo and FFI](/go/th/runtime-internals/cgo-and-ffi/)**
+
+### 26. `C.free` หายไป หรือ free memory ที่ Go เป็นคน allocate
+
+```go
+func leaky(n int) {
+	for i := 0; i < n; i++ {
+		_ = C.CString("this string never gets freed") // missing C.free
+	}
+}
+```
+
+`C.CString` แต่ละครั้ง allocate บน C heap ผ่าน `malloc` — garbage collector ของ Go ไม่รู้จัก memory นั้นเลยและจะไม่มีวัน reclaim มัน วัดบนเครื่องนี้ การ leak `C.CString` สั้นๆ 2,000,000 ครั้งแบบนี้ดัน peak memory footprint (`/usr/bin/time -l`) ขึ้นไปประมาณ **67.7 MB** — memory ที่ leak อยู่แบบนั้นตลอดอายุของ process
+
+ความผิดพลาดในทางกลับกันร้ายแรงกว่า leak อีก: การเรียก `C.free` บน memory ที่ Go เองเป็นคน allocate (`new(int)` ไม่ใช่ `C.malloc`/`C.CString`) คือการยื่น pointer ที่ allocator ของ C ไม่เคยแจกให้กลับไปให้มัน
+
+**อาการ — crash จริงบนเครื่องนี้:**
+
+```text
+SIGABRT: abort
+signal arrived during cgo execution
+main._Cfunc_free(...)
+```
+
+**แก้ไข:** free เฉพาะสิ่งที่ allocate ด้วย `C.CString`/`C.malloc`/`C.CBytes` เท่านั้น ทุกครั้ง ทุก path — `defer C.free(unsafe.Pointer(cs))` ทันทีหลัง allocate เหมือน pattern ที่บทก่อนหน้าใน catalog นี้ใช้กับ `resp.Body.Close()` ห้ามเรียก `C.free` บนค่า Go ที่มาจาก `new`, `&`, หรือ `make` เด็ดขาด
+
+**จับได้โดย:** ไม่มีอะไรจับได้เลย ไม่มี linter ตัวไหน track การจับคู่ `malloc`/`free` ข้ามขอบเขต cgo และกรณี free ผิดตัวคือ runtime crash ตรงๆ โดยไม่มีคำเตือนล่วงหน้า ดู **[Cgo and FFI](/go/th/runtime-internals/cgo-and-ffi/)**
+
+### 27. เรียก cgo ทีละ element ของ slice แทนที่จะ batch เป็น call เดียว
+
+```go
+func squarePerElement(nums []int32) []int32 {
+	out := make([]int32, len(nums))
+	for i, v := range nums {
+		out[i] = int32(C.square(C.int(v))) // one cgo call per element
+	}
+	return out
+}
+```
+
+cgo call หนึ่งครั้งมีต้นทุนประมาณ 9 เท่าของ Go function call ธรรมดาบนเครื่องนี้ แม้ฝั่ง C จะไม่ทำอะไรเลย — เป็น overhead จริงที่คงที่ต่อการข้ามหนึ่งครั้ง การเรียก C ครั้งละ element แทนที่จะเรียกครั้งเดียวทั้ง slice คือการจ่ายต้นทุนนั้นซ้ำ `len(nums)` ครั้ง
+
+**อาการ — benchmark จริงบนเครื่องนี้ (element `int32` 1,000 ตัว, `testing.B`, `b.Loop()`):**
+
+```text
+BenchmarkPerElement-11    47670    24801 ns/op
+BenchmarkBatched-11     2766969      433.9 ns/op
+```
+
+**แก้ไข:** ส่ง pointer กับความยาวให้ฝั่ง C แล้ววน loop ข้างในฝั่ง C:
+
+```go
+func squareBatched(nums []int32) []int32 {
+	out := make([]int32, len(nums))
+	if len(nums) == 0 {
+		return out
+	}
+	C.squareAll((*C.int)(&nums[0]), (*C.int)(&out[0]), C.int(len(nums)))
+	return out
+}
+```
+
+การ batch ทำให้เวลาลดจาก ~24.8 µs เหลือ ~0.44 µs สำหรับงานปริมาณ 1,000 element เท่าเดิม — เร็วขึ้นประมาณ 56 เท่า
+
+**จับได้โดย:** ไม่มีอะไรจับได้เลย นี่คือ performance smell ไม่ใช่ correctness bug — ไม่มี compiler error ไม่มี vet warning ไม่มี panic มีแค่ benchmark (`go test -bench`) หรือ profiler เท่านั้นที่ทำให้ต้นทุนนี้มองเห็นได้ ดู **[Cgo and FFI](/go/th/runtime-internals/cgo-and-ffi/)**
+
 ## Mental Model
 
 ```text
-24 pattern เรียงตามว่าใครจับได้จริง:
+27 pattern เรียงตามว่าใครจับได้จริง:
 
 Compiler / go build  → 19 (maps.Keys shape), 18b (int * time.Duration)
 go vet (ไม่ต้อง config) → 4, 11 (waitgroup), 13 (copylocks), 20 (errorsas)
@@ -964,11 +1068,12 @@ staticcheck           → 1 (SA4023), 11 (SA2000), 16 (SA5000), 17 (SA4011),
                         18a (SA1004), 23 (ST1006)
 modernize (opt-in)    → 23 (interface{} → any)
 -race                 → 11 (WaitGroup data race)
-ไม่มีอะไรจับได้         → 3, 5, 6, 7, 8, 9, 10, 12, 15, 21, 22, 24 — ครึ่งหนึ่งของ catalog
+GODEBUG=cgocheck=1 (runtime, default) → 25 (unpinned Go pointer)
+ไม่มีอะไรจับได้         → 3, 5, 6, 7, 8, 9, 10, 12, 15, 21, 22, 24, 26, 27 — เกินครึ่งของ catalog
 ```
 
-<Callout title="ครึ่งหนึ่งของ catalog นี้ไม่มี automated safety net">
-สิบสองใน ยี่สิบสี่ pattern ด้านบนไม่มีเครื่องมือไหนที่คอร์สนี้ครอบคลุมจับได้เลย ไม่ว่าจะ config แบบไหน นี่แหละคือเหตุผลจริงๆ ของโมดูลนี้: tooling ช่วยลดขอบเขตที่ต้องอ่านด้วยตาเท่านั้น มันไม่เคยแทนที่การอ่านได้ รันทุกเครื่องมือใน **[Verification Tools](/go/th/reading-go/verification-tools/)** กับทุก diff — แล้วก็ยังต้องอ่าน diff นั้นอยู่ดี
+<Callout title="เกินครึ่งของ catalog นี้ไม่มี automated safety net">
+สิบสี่ใน ยี่สิบเจ็ด pattern ด้านบนไม่มีเครื่องมือไหนที่คอร์สนี้ครอบคลุมจับได้เลย ไม่ว่าจะ config แบบไหน นี่แหละคือเหตุผลจริงๆ ของโมดูลนี้: tooling ช่วยลดขอบเขตที่ต้องอ่านด้วยตาเท่านั้น มันไม่เคยแทนที่การอ่านได้ รันทุกเครื่องมือใน **[Verification Tools](/go/th/reading-go/verification-tools/)** กับทุก diff — แล้วก็ยังต้องอ่าน diff นั้นอยู่ดี
 </Callout>
 
 export const quizAiBugCatalog = [

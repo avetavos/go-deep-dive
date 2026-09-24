@@ -32,6 +32,7 @@ This module has one job: give you the four pieces of runtime knowledge that let 
 | Scheduler | How does a goroutine actually get onto a CPU core, and what can stall it? |
 | GC and Escape Analysis | Does this value live on the stack or the heap, and what does the collector do with it? |
 | Memory Layout | How many bytes does this value actually take, and how is it arranged? |
+| Cgo and FFI | What happens to the memory model, the scheduler, and the GC's view of the world when Go code calls into C? |
 
 The [Goroutines](/go/en/concurrency/goroutines/) and [Sync Primitives](/go/en/concurrency/sync-primitives/) lessons already introduced the GMP model, work stealing, async preemption, and the memory model's basic shape — this module goes past the introduction into the mechanism, and links back rather than repeating them. The [Pointers](/go/en/types-data/pointers/) lesson introduced escape analysis at the level of "why a pointer isn't always faster"; [GC and Escape Analysis](/go/en/runtime-internals/gc-and-escape/) goes into what the collector does with what escapes. The [Interfaces](/go/en/methods-interfaces/interfaces/) lesson already showed the two-word interface value and the itab; [Memory Layout](/go/en/runtime-internals/memory-layout/) puts a byte count on every type, not just interfaces.
 

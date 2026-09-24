@@ -1,0 +1,543 @@
+---
+title: Cgo and FFI
+description: 'Calling C from Go safely: import "C", the preamble, the cgo pointer-passing rules, cgo.Handle callbacks, what a cgo call actually costs, the scheduler during a call, and what CGO_ENABLED=0 gives up.'
+sidebar:
+  order: 6
+---
+
+import Playground from '../../../../components/Playground.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Crossing into C on purpose
+
+Every earlier lesson in this module stayed inside the Go runtime: the memory model governs Go goroutines, the scheduler moves Go goroutines, the garbage collector tracks Go values. Cgo is the one place Go code deliberately steps outside all three — a Go program calls a C function, and for the length of that call the memory model's guarantees, the scheduler's usual bookkeeping, and the garbage collector's view of the world all have a seam in them. Reading cgo code well means knowing exactly where that seam is.
+
+<Callout title="This lesson cannot run in the browser Playground">
+The browser compile proxy this course uses builds every playground with `CGO_ENABLED=0` — no C compiler is available server-side. Every snippet in this lesson that has `import "C"` is shown as a plain ```go``` fence followed by its real output from this machine (Go 1.26.5, darwin/arm64, Apple clang 17.0.0), not wired to a runnable `<Playground>`. The one `<Playground>` in this lesson, further down, is pure Go and needs no C compiler at all.
+</Callout>
+
+## `import "C"`, the preamble, and `#cgo` directives
+
+`import "C"` is not a real import — it is cgo's signal to the `go` tool to treat this file specially. When that import is immediately preceded by a comment (no blank line between them), the tool treats that comment as a C header, called the **preamble**, and compiles it as the C side of the package. `#cgo CFLAGS:` and `#cgo LDFLAGS:` lines inside the preamble add compiler and linker flags — concatenated across every cgo file in the package.
+
+```go
+package main
+
+/*
+#cgo CFLAGS: -DGREETING_LEN=5
+#include <string.h>
+
+static int greetingLen(void) {
+    return GREETING_LEN;
+}
+*/
+import "C"
+
+import "fmt"
+
+func main() {
+	fmt.Println("greeting length from -D flag:", int(C.greetingLen()))
+}
+```
+
+```text
+greeting length from -D flag: 5
+```
+
+Every name declared in the preamble becomes available as `C.name` in Go code — functions, variables (except `static` ones), and, with a `struct_`/`union_`/`enum_` prefix, types. `go doc cmd/cgo` is the actual reference for the full set of naming and type-conversion rules used below; this lesson only covers what shows up reading real code.
+
+## Calling C, converting types, and the C heap
+
+C's `int` is not Go's `int` — cgo exposes it as the distinct type `C.int`, and Go's strict conversion rules mean every value crossing the boundary needs an explicit `C.int(...)` or `int(...)` conversion. Strings need even more care: Go strings are not NUL-terminated and C strings are, so `C.CString` and `C.GoString` exist specifically to convert between them, each making a full copy.
+
+```go
+package main
+
+/*
+#include <stdio.h>
+#include <stdlib.h>
+
+static int add(int a, int b) {
+    return a + b;
+}
+*/
+import "C"
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+func main() {
+	sum := C.add(C.int(3), C.int(4))
+	fmt.Println("sum:", int(sum))
+
+	cs := C.CString("hello from Go")
+	defer C.free(unsafe.Pointer(cs)) // CString allocates on the C heap -- Go's GC never sees it
+	C.puts(cs)
+
+	back := C.GoString(cs) // copies the C bytes into a new Go string
+	fmt.Println("back:", back)
+}
+```
+
+```text
+sum: 7
+hello from Go
+back: hello from Go
+```
+
+`C.CString` calls C's `malloc` under the hood (`go doc cmd/cgo` spells this out explicitly: "the caller's responsibility to arrange for it to be freed, such as by calling `C.free`"). That memory is invisible to Go's garbage collector — it lives on the C heap for as long as something remembers the pointer, whether or not any Go value still points to it. `C.free` requires `#include <stdlib.h>` in the preamble, as used above.
+
+## Passing slices, bytes, and structs
+
+A `[]byte` or `[]int32` with no pointers inside it can be passed to C as a raw pointer to its first element — `unsafe.SliceData` gets that pointer without the older, easier-to-misread `&s[0]` spelling. `C.GoBytes` copies C memory back into a new Go `[]byte`. A C struct becomes a plain Go struct with matching field names and is passed by value like any other Go struct.
+
+```go
+package main
+
+/*
+#include <stdint.h>
+
+static void sumInto(const int32_t *data, int n, int32_t *out) {
+    int32_t total = 0;
+    for (int i = 0; i < n; i++) {
+        total += data[i];
+    }
+    *out = total;
+}
+
+typedef struct {
+    int32_t x;
+    int32_t y;
+} Point;
+
+static int32_t manhattan(Point p) {
+    int32_t ax = p.x < 0 ? -p.x : p.x;
+    int32_t ay = p.y < 0 ? -p.y : p.y;
+    return ax + ay;
+}
+*/
+import "C"
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+func main() {
+	nums := []int32{1, 2, 3, 4, 5}
+	var total C.int32_t
+	// nums holds no Go pointers, so passing its backing array to C for the
+	// duration of this one call is allowed under the rules in the next section.
+	C.sumInto((*C.int32_t)(unsafe.Pointer(unsafe.SliceData(nums))), C.int(len(nums)), &total)
+	fmt.Println("sum:", int32(total))
+
+	p := C.Point{x: -3, y: 4}
+	fmt.Println("manhattan:", int32(C.manhattan(p)))
+
+	raw := C.GoBytes(unsafe.Pointer(unsafe.SliceData(nums)), C.int(len(nums)*4))
+	fmt.Println("raw bytes len:", len(raw))
+}
+```
+
+```text
+sum: 15
+manhattan: 7
+raw bytes len: 20
+```
+
+`go vet` on this file reports nothing — passing a pointer to a pointer-free slice's backing array is exactly what the rules in the next section permit.
+
+## The cgo pointer-passing rules
+
+Go is garbage collected; the collector needs to know where every pointer to Go memory is. `go doc cmd/cgo` states the actual rules under "Passing pointers" — quoted directly, because this is exactly the kind of fact this course's rules say to verify against the tool, not memory:
+
+> All Go pointers passed to C must point to pinned Go memory. Go pointers passed as function arguments to C functions have the memory they point to implicitly pinned for the duration of the call. Go memory reachable from these function arguments must be pinned as long as the C code has access to it.
+>
+> Go code may pass a Go pointer to C provided the memory to which it points does not contain any Go pointers to memory that is unpinned. [...] C code may not keep a copy of a Go pointer after the call returns, unless the memory it points to is pinned with `runtime.Pinner` [...]
+
+In plain terms: a Go pointer is only safe in C's hands for the duration of one call, and only if what it points to contains no *other*, unpinned Go pointers. Here is that second condition failing, in code an AI assistant could plausibly write for "register a callback context with a C library":
+
+```go
+package main
+
+/*
+#include <stdint.h>
+
+static void *stashed_ctx;
+
+static void register_callback(void *ctx) {
+    stashed_ctx = ctx; // C keeps this pointer well past this call returns
+}
+*/
+import "C"
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+type callbackCtx struct {
+	name  string // a string header is itself a Go pointer
+	total *int   // and this field is a Go pointer too
+}
+
+func register(name string, counter *int) {
+	ctx := &callbackCtx{name: name, total: counter}
+	C.register_callback(unsafe.Pointer(ctx)) // ctx contains Go pointers
+}
+
+func main() {
+	n := 0
+	register("jobs", &n)
+	fmt.Println("registered")
+}
+```
+
+```text
+panic: runtime error: argument of cgo function has Go pointer to unpinned Go pointer
+
+goroutine 1 [running]:
+main.register.func1(...)
+	main.go:26
+main.register({...}, ...)
+	main.go:26 +0x88
+```
+
+That panic is `GODEBUG=cgocheck=1` — the default setting since `go doc cmd/cgo` describes it as implementing "reasonably cheap dynamic checks" at the Go-to-C call boundary. Two things are worth knowing precisely about it, both verified on this machine:
+
+- **It only checks the boundary, not what C does afterward.** A C function that stashes a raw pointer into its own global (with nothing suspicious in the argument itself, like `void *`) is invisible to Go's instrumentation — it runs and "succeeds" every time, which is exactly why this class of bug survives into production. `GODEBUG=cgocheck=0` disables the boundary check entirely; the stricter `GOEXPERIMENT=cgocheck2` build-time setting ("complete checking of pointer handling, at some cost in run time" per the same doc) catches more at the boundary but still cannot see inside C's own code.
+- **`go vet`'s `cgocall` analyzer is narrower still.** Its own doc comment says it "detect[s] some violations of the cgo pointer passing rules" and specifically "warns about attempts to pass a Go chan, map, func, or slice to C, either directly, or via a pointer, array, or struct." Running `go vet` on the snippet above reports **nothing** — a struct containing a plain pointer field and a string is outside what this particular static check looks for. Here is what it *does* catch, on a case built to trigger it:
+
+```go
+m := map[string]int{"a": 1}
+C.take(unsafe.Pointer(&m)) // passing a Go map (via pointer) to C
+```
+
+```text
+main.go:13:9: possibly passing Go type with embedded pointer to C
+```
+
+The fix for the callback-registration case is `runtime/cgo.Handle`: hand C an opaque integer instead of a real pointer, and look the Go value back up by that integer when C calls back.
+
+```go
+func register(name string, counter *int) cgo.Handle {
+	h := cgo.NewHandle(callbackCtx{name: name, total: counter})
+	C.register_callback(C.uintptr_t(h)) // an integer, not a Go pointer
+	return h
+}
+```
+
+```text
+registered
+```
+
+No panic, and `go vet` stays clean: the handle value is a plain `uintptr_t` as far as C is concerned, with no Go pointer anywhere in it.
+
+## Callbacks: `cgo.Handle` and `//export`
+
+A Go function can also be called *from* C, using `//export`. Making that work requires two files in the same package: the exported function's own file, and a real `.c` file that includes the cgo-generated `_cgo_export.h` (the header only exists once cgo has processed the `//export` comment, so it cannot be included from another Go file's own preamble in the same build).
+
+```go
+// export.go
+package main
+
+/*
+#include <stdint.h>
+
+// Declared here, defined in bridge.c (compiled once _cgo_export.h exists).
+void invokeFromC(uintptr_t handle, int value);
+*/
+import "C"
+
+import (
+	"fmt"
+	"runtime/cgo"
+)
+
+//export goCallback
+func goCallback(h C.uintptr_t, value C.int) {
+	handle := cgo.Handle(h)
+	label := handle.Value().(string)
+	fmt.Printf("callback for %q: value=%d\n", label, int(value))
+}
+
+func main() {
+	h := cgo.NewHandle("job-A")
+	defer h.Delete()
+	C.invokeFromC(C.uintptr_t(h), 7)
+}
+```
+
+```go
+// bridge.c
+#include "_cgo_export.h"
+
+void invokeFromC(uintptr_t handle, int value) {
+    goCallback(handle, value);
+}
+```
+
+```text
+callback for "job-A": value=7
+```
+
+`h.Delete()` matters as much as `C.free` did earlier: a `cgo.Handle` that is never deleted keeps its value reachable forever, from Go's point of view, through a lookup table the runtime keeps for exactly this purpose — it is the managed, Go-pointer-safe equivalent of forgetting to `C.free`.
+
+## What a cgo call actually costs
+
+A cgo call is not free even when the C side does nothing: it has to switch stacks and cross a boundary the compiler cannot inline through. Benchmarked on this machine (Apple M3 Pro, darwin/arm64, Go 1.26.5, `testing.B` with `b.Loop()`, `-benchtime=1s -count=3`):
+
+| Call | ns/op |
+|---|---|
+| Plain Go function call | ~2.68 |
+| Cgo call (`C.cAdd(a, b)`, empty C function) | ~24.2 |
+
+A cgo call costs roughly **9x** a plain Go call here — real overhead, but on the order of nanoseconds, not something that matters for one call. It matters when a cgo call happens once per element of a large slice instead of once for the whole slice:
+
+| Approach (1,000 `int32` elements) | ns/op | Total time |
+|---|---|---|
+| One `C.square(x)` call per element | ~24,780 | ~24.8 µs |
+| One `C.squareAll(...)` call over the whole slice | ~440 | ~0.44 µs |
+
+Batching turned this into roughly a **56x** speedup, for the same amount of work — the fix is exactly what the slice-passing section above already showed: pass a pointer and a length once, and loop inside C.
+
+Since cgo cannot run in this course's browser Playground, here is the same *shape* of cost demonstrated with something that can: `runtime.LockOSThread` plus a real syscall is, structurally, the same "leave Go, do work elsewhere, come back" trip a cgo call makes, just crossing into the kernel instead of into C.
+
+export const cgoLikeOverheadCode = `package main
+
+import (
+\t"fmt"
+\t"runtime"
+\t"syscall"
+\t"time"
+)
+
+// A plain Go function call: the compiler can even inline this.
+func goAdd(a, b int) int {
+\treturn a + b
+}
+
+// syscallCost measures a real trip out of the Go runtime and back: LockOSThread
+// pins the calling goroutine to one OS thread (the same guarantee cgo code
+// that needs thread affinity relies on), then Getpid is a minimal syscall --
+// structurally the same shape as a cgo call: leave Go, do work elsewhere, return.
+func syscallCost(n int) time.Duration {
+\truntime.LockOSThread()
+\tdefer runtime.UnlockOSThread()
+
+\tstart := time.Now()
+\tfor i := 0; i < n; i++ {
+\t\tsyscall.Getpid()
+\t}
+\treturn time.Since(start)
+}
+
+func goCallCost(n int) time.Duration {
+\tsink := 0
+\tstart := time.Now()
+\tfor i := 0; i < n; i++ {
+\t\tsink = goAdd(sink, i)
+\t}
+\t_ = sink
+\treturn time.Since(start)
+}
+
+func main() {
+\tconst n = 2_000_000
+
+\t// warm up
+\tgoCallCost(n)
+\tsyscallCost(n)
+
+\tgoDur := goCallCost(n)
+\tsysDur := syscallCost(n)
+
+\tfmt.Printf("plain Go call:            %6.1f ns/op\\n", float64(goDur.Nanoseconds())/n)
+\tfmt.Printf("LockOSThread + syscall:   %6.1f ns/op\\n", float64(sysDur.Nanoseconds())/n)
+\tfmt.Printf("syscall is ~%.0fx a plain Go call -- the same order of magnitude a cgo call pays for crossing into C\\n",
+\t\tfloat64(sysDur)/float64(goDur))
+}`;
+
+<Playground code={cgoLikeOverheadCode} />
+
+Real output on this machine: `plain Go call: 0.4 ns/op`, `LockOSThread + syscall: 12.2 ns/op`, roughly 32x — the exact multiplier depends on the machine and which syscall is used, but the shape (a small, real, fixed cost per crossing) is the same reason a cgo call is not free.
+
+## The scheduler during a cgo call
+
+The [Scheduler](/go/en/runtime-internals/scheduler/) lesson explained that a goroutine blocked in a syscall keeps its M for a moment, then the runtime hands the M's P to another thread so other goroutines are not starved. A cgo call goes through the same `entersyscall`/`exitsyscall` machinery — from the scheduler's point of view, being inside a long C function looks the same as being inside a slow syscall. Verified on this machine with `GOMAXPROCS(1)` (one P, total) and a goroutine blocked for 300ms inside `C.slowCCall()` (a C function that calls `usleep(300000)`):
+
+```text
+pure-Go goroutine finished 6292139 loop iterations while the cgo call was blocked
+cgo call finished after 310ms
+```
+
+With only one P in the whole program, a second, pure-Go goroutine still ran 6.29 million loop iterations *while the first goroutine was inside C* — proof the M running the cgo call released its P rather than holding the only P hostage for 300ms.
+
+The one case that changes this: C code that relies on thread-local state (a graphics context, a library that calls `pthread_self()` internally and expects consistency across calls) needs the *same* OS thread on every call. `runtime.LockOSThread()` pins the calling goroutine to its current M for exactly this reason — without it, nothing stops the Go scheduler from resuming that goroutine on a different M after some other blocking point, and Go's usual "goroutines are not threads" abstraction stops holding for that C library's assumptions.
+
+## `CGO_ENABLED=0`: what changes
+
+Every file with `import "C"` carries an implicit `//go:build cgo` constraint (`go doc cmd/cgo`: "The special import \"C\" implies the \"cgo\" build constraint"). With `CGO_ENABLED=0`, that constraint is never satisfied, so the file is dropped from the build entirely — not a compile error inside the file, a *missing file* error if it was the only source:
+
+```text
+go: no Go source files
+```
+
+Three concrete, verified consequences follow from that:
+
+- **Cross-compiling needs a real C cross-compiler, or none at all.** `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build` on this darwin/arm64 machine succeeds and produces a **statically linked** ELF binary (confirmed with `file`: `ELF 64-bit LSB executable, x86-64 ... statically linked`). The same build with `CGO_ENABLED=1` fails, because the native macOS `clang` is not a Linux C compiler: `linux_syscall.c:73:13: error: call to undeclared function 'setresuid'` — real output from trying it.
+- **`net` and `os/user` quietly drop to a pure-Go implementation.** `go doc net` states it directly: "the pure Go resolver is preferred over the cgo resolver, because a blocked DNS request consumes only a goroutine, while a blocked C call consumes an operating system thread" — but the cgo resolver is still used under specific conditions (macOS being one, per that same doc, since "OS X" cannot make direct DNS requests) whenever cgo is available. `CGO_ENABLED=0` forces the pure-Go path unconditionally; `GODEBUG=netdns=go` or `=cgo` and the `netgo`/`netcgo` build tags force it explicitly either way. `go doc os/user` describes the same shape: a cgo-based path using libc's `getpwuid_r`/`getgrnam_r` when available, a pure-Go `/etc/passwd`-parsing fallback otherwise, forced with the `osusergo` build tag.
+- **No C compiler, no cgo, no problem — for some libraries.** [`purego`](https://github.com/ebitengine/purego) (not runnable in this course's harness) loads a C shared library and calls into it at runtime through `dlopen`/`dlsym`, with no `import "C"`, no cgo, and no C compiler needed at build time — the tradeoff is giving up compile-time type checking of the C signatures for a build that needs nothing beyond the Go toolchain.
+
+None of this is an argument to reach for cgo by default. Prefer a pure-Go port of a C library when one exists and is maintained (`modernc.org/sqlite` over `mattn/go-sqlite3`, for the same reason `net`'s own default avoids it), the `syscall` package when the goal is really "one OS call," or WASI when the target is a sandboxed, portable binary. Cgo earns its cost — the loss of `CGO_ENABLED=0` builds, cross-compilation friction, the scheduler and pointer-rule seams above — when there is no substitute for the specific C library at hand.
+
+## Mental Model
+
+export const cgoCallPathDiagram = `flowchart LR
+  Go["Go code: C.fn(args)"] -->|"compiler-generated cgo stub"| Stub["_cgo_gotypes.go / _cgox.c: convert + check args"]
+  Stub -->|"entersyscall: M keeps running C, hands its P to another M"| C["C function runs on this M's OS thread"]
+  C -->|"exitsyscall: M must reacquire a P before running Go code again"| Stub2["stub converts the return value"]
+  Stub2 --> Go2["Go code resumes"]
+  Sched["Scheduler: other Ps/Ms keep running other goroutines the whole time"] -.-> C`;
+
+<Mermaid code={cgoCallPathDiagram} title="A cgo call: Go code through a generated stub into C, with the same M/P hand-off a blocking syscall gets" />
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Calling an existing C library | No need to reimplement it in Go | ~9x call overhead per crossing; a real C toolchain at build time |
+| `cgo.Handle` for callbacks | Safe against the Go-pointer rules, GC-aware | An extra lookup, and a `Delete()` you must remember (like `C.free`) |
+| `CGO_ENABLED=0` | Static binaries, easy cross-compilation, no C toolchain needed | Loses any library that only exists as a C binding |
+| `runtime.Pinner` / `cgo.Handle` over raw pointers | Passes the pinning and pointer rules `go vet`/`cgocheck` expect | More code than "just pass the pointer" |
+| `purego` instead of cgo | No C compiler needed anywhere, even at build time | No compile-time checking of the C function's signature |
+
+## Common Misconceptions
+
+- **"If `go vet` is clean, the cgo pointer rules are satisfied"** — `go vet`'s `cgocall` analyzer only flags a Go chan, map, func, or slice passed to C; a struct with a plain pointer field, passed via `unsafe.Pointer`, sails through `go vet` and still panics under the *runtime* check, `GODEBUG=cgocheck=1`.
+- **"`GODEBUG=cgocheck=1` (the default) catches every pointer-rule violation"** — it only instruments the Go-to-C call boundary. A C function that stashes the pointer it was given into its own global, with nothing unusual about the argument type itself, is completely invisible to it — verified on this machine to run and "succeed" every time.
+- **"A cgo call blocks the whole program the way a `sync.Mutex` blocks one goroutine"** — it blocks the one M running it, exactly like a syscall; the runtime hands that M's P to another thread so every other goroutine keeps running, which the M/P hand-off measurement above shows directly.
+- **"`CGO_ENABLED=0` just disables an optimization"** — it changes the build constraint on every file with `import "C"`, dropping those files from the build entirely, and switches `net`/`os/user` to a different, pure-Go implementation with different resolution behavior, not just a different binary format.
+
+## Reading AI-generated code
+
+Cgo-shaped bugs are quiet: they compile, `go vet` often says nothing, and the program runs correctly for a while. Check for:
+
+- Is there a `C.CString` / `C.CBytes` / `C.malloc` on every path, but a `C.free` (or `defer C.free`) missing on at least one — including an early error return?
+- Is a Go value that itself contains Go pointers (a struct field, a slice, a string) passed to C as a raw `unsafe.Pointer`, where C might keep it past the one call it was given for?
+- Is a cgo call made once per element inside a loop, where the C side could just as easily take a pointer and a length and loop internally?
+- Does code read through a C pointer (`C.GoString`, a struct field) after already calling `C.free` on the memory it points to?
+
+<SpotTheBug code={`func label(id int) string {
+\tcs := C.CString(fmt.Sprintf("item-%d", id))
+\tC.free(unsafe.Pointer(cs))
+\treturn C.GoString(cs) // reading through a pointer that was just freed
+}`}>
+`C.free` releases that memory back to C's allocator immediately — nothing stops the allocator from handing the same bytes to the very next `malloc` a moment later. `C.GoString(cs)` then copies whatever bytes now happen to occupy that address, not the string that used to be there. Run three times in a row on this machine, the same function printed `"item-42"` once and a single garbage byte (`"A"`, then `"@"`) the other two times — no crash, no panic, nothing `go vet` or `-race` flags (this is a single-goroutine use-after-free, not a data race), just silently wrong output that depends on what else the C allocator happened to do in between.
+
+```go
+func label(id int) string {
+	cs := C.CString(fmt.Sprintf("item-%d", id))
+	defer C.free(unsafe.Pointer(cs)) // free only after the string is copied out
+	return C.GoString(cs)            // GoString runs before the deferred free
+}
+```
+</SpotTheBug>
+
+> 💡 Real-world example
+>
+> `runtime/cgo.Handle`'s own doc comment (`runtime/cgo/handle.go`, standard library) exists specifically because "programs that break these [pointer-passing] rules are likely to fail in unexpected and unpredictable ways" (`go doc cmd/cgo`) — the handle type is the standard library's own answer to the exact problem this lesson's `register_callback` example ran into.
+
+<Callout title="A cgo call is a syscall with C on the other end">
+Every fact in this lesson follows from that one sentence: the scheduler hands off the P the same way, `GODEBUG=cgocheck`/`go vet`'s `cgocall` check the pointer rules at that same boundary and nowhere past it, and `CGO_ENABLED=0` is really "build without ever crossing this boundary at all." When reading someone else's cgo code, find that boundary first — the call itself — and ask what crosses it in each direction.
+</Callout>
+
+export const quizCgoAndFfi = [
+  {
+    q: "What determines whether a comment before `import \"C\"` becomes the cgo preamble?",
+    options: [
+      "Any comment anywhere in the file that mentions C",
+      "The comment must be immediately preceding the import, with no blank line between them",
+      "The comment must start with the word PREAMBLE",
+      "Preambles must be in a separate .h file, never inline"
+    ],
+    answer: 1,
+    explain: "cgo only treats a comment as the preamble when it directly precedes `import \"C\"` with nothing in between -- a blank line breaks the association and the comment is just an ordinary comment."
+  },
+  {
+    q: "```go\nfunc label(id int) string {\n    cs := C.CString(fmt.Sprintf(\"item-%d\", id))\n    C.free(unsafe.Pointer(cs))\n    return C.GoString(cs)\n}\n```\nWhat does this program actually do when run, and why?",
+    options: [
+      "It fails to compile because C.free is called before C.GoString",
+      "It panics with a use-after-free error every time",
+      "It runs without crashing but can silently return garbage instead of the intended string, because C.GoString reads memory already handed back to C's allocator",
+      "Go's garbage collector automatically delays the free until after GoString runs"
+    ],
+    answer: 2,
+    explain: "C.free is a real call into C's allocator with no Go-side safety net. GoString then reads through a pointer to memory the allocator is free to reuse -- observed on this machine to sometimes print the correct string and sometimes a single garbage byte, with no crash either way."
+  },
+  {
+    q: "Why does `go vet` report nothing on a Go struct with a pointer field passed to C via unsafe.Pointer, even though it panics at runtime under the default GODEBUG=cgocheck=1?",
+    options: [
+      "go vet does not analyze cgo code at all",
+      "go vet's cgocall analyzer specifically looks for a Go chan, map, func, or slice passed to C -- a plain pointer field inside a struct is outside what it checks for",
+      "The panic only happens with -race enabled",
+      "go vet requires GODEBUG=cgocheck=1 to be set to check anything"
+    ],
+    answer: 1,
+    explain: "cgocall's own doc comment scopes it to chan/map/func/slice arguments specifically. The runtime check (cgocheck) is broader because it inspects the actual pointed-to memory dynamically, not just the argument's static type."
+  },
+  {
+    q: "A benchmark on this machine measured a plain Go function call at about 2.7 ns/op and an equivalent cgo call at about 24 ns/op. What is the most direct consequence for a hot loop?",
+    options: [
+      "cgo calls should never be used for anything performance-sensitive",
+      "The overhead per call is fixed, so calling C once over a whole slice (batching) costs roughly one crossing instead of one per element",
+      "The 9x difference means Go itself is 9x slower than C",
+      "This overhead only applies on darwin/arm64 and disappears on Linux"
+    ],
+    answer: 1,
+    explain: "Measured on the same machine, one cgo call per element of a 1,000-element slice cost about 24.8 microseconds total; one batched call over the whole slice cost about 0.44 microseconds -- the fixed per-call cost is what batching amortizes away."
+  },
+  {
+    q: "With GOMAXPROCS(1) and one goroutine blocked inside a 300ms cgo call, a second pure-Go goroutine completed over 6 million loop iterations before the cgo call returned. What does this demonstrate?",
+    options: [
+      "cgo calls run on a separate CPU core automatically",
+      "GOMAXPROCS(1) was not actually applied",
+      "The M running the cgo call handed its P to another M, the same hand-off a blocking syscall triggers, so other goroutines are not starved",
+      "The second goroutine was running C code too"
+    ],
+    answer: 2,
+    explain: "A long cgo call goes through the same entersyscall/exitsyscall path as a blocking syscall. With only one P total, the fact that other Go code still ran proves that P moved to a different M rather than sitting idle behind the blocked call."
+  },
+  {
+    q: "Which statement about `CGO_ENABLED=0` is accurate, based on `go doc cmd/cgo` and `go doc net`?",
+    options: [
+      "It only affects whether import \"C\" compiles, nothing else in the standard library changes",
+      "Files with import \"C\" carry an implicit cgo build constraint and are dropped from the build entirely; net and os/user also switch to pure-Go implementations",
+      "It disables goroutines from being scheduled onto multiple threads",
+      "It is only relevant when cross-compiling, and has no effect on native builds"
+    ],
+    answer: 1,
+    explain: "import \"C\" implies //go:build cgo per go doc cmd/cgo, so CGO_ENABLED=0 excludes those files outright (verified: 'go: no Go source files' when it was the only file). net and os/user each ship both a cgo-based and pure-Go implementation and pick the pure-Go one when cgo is unavailable."
+  },
+  {
+    q: "What does `runtime.LockOSThread` actually guarantee, in the context of a cgo call?",
+    options: [
+      "It makes the cgo call run faster by avoiding the M/P hand-off",
+      "It prevents the goroutine calling it from ever being moved to a different OS thread, which matters when C code depends on thread-local state or affinity",
+      "It disables the garbage collector for the duration of the call",
+      "It is required before every single cgo call, not just ones needing thread affinity"
+    ],
+    answer: 1,
+    explain: "LockOSThread pins the calling goroutine to its current M. Most cgo calls need no such guarantee -- it matters specifically when the C library itself relies on being called from a consistent OS thread, such as thread-local state or a library that calls pthread_self() internally."
+  }
+];
+
+<Quiz client:visible id="runtime-internals/cgo-and-ffi" questions={quizCgoAndFfi} />
+
+<ProgressTracker client:visible id="runtime-internals/cgo-and-ffi" />

@@ -1,6 +1,6 @@
 ---
 title: The AI bug catalog
-description: '24 bugs AI-generated Go code produces constantly — the wrong code, the real symptom, the fix, and which tool (if any) catches it.'
+description: '27 bugs AI-generated Go code produces constantly — the wrong code, the real symptom, the fix, and which tool (if any) catches it.'
 sidebar:
   order: 2
 ---
@@ -14,7 +14,7 @@ import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 Every pattern below was written to look exactly like the Go an AI assistant actually produces, then compiled, run, and — where relevant — raced or vetted for real. The quoted panics, compiler errors, and tool output are copied verbatim from those runs, not reconstructed from memory. Click **Spot the bug** to think before you read the answer; each entry ends with **Caught by**, naming the one tool (`go vet`, `staticcheck`, `golangci-lint`, `-race`) that actually flags it — or stating plainly that nothing does.
 
-The 24 patterns are grouped the same way as the **[Review Checklist](/go/en/reading-go/review-checklist/)** that follows this lesson: errors, concurrency, resources, API contract, types, and tooling/style.
+The 27 patterns are grouped the same way as the **[Review Checklist](/go/en/reading-go/review-checklist/)** that follows this lesson: errors, concurrency, resources, API contract, types, and tooling/style — plus a closing **cgo** section for the three patterns that only show up in programs that call into C. See **[Cgo and FFI](/go/en/runtime-internals/cgo-and-ffi/)** for the mechanism behind all three.
 
 <Playground code={typedNilCode} />
 
@@ -952,10 +952,114 @@ any: interface{} can be replaced by any (modernize)
 
 `staticcheck`'s `ST1006` (part of `golangci-lint`'s default `standard` set) catches the receiver name unconditionally. The `interface{}` → `any` rewrite is caught by the `modernize` analyzer — but `modernize` is **not** in `golangci-lint`'s `standard` preset; it must be enabled explicitly (`linters.enable: [modernize]`). The single-implementation interface itself is caught by nothing: no tool counts how many types implement an interface across a codebase, so an unnecessary abstraction like `UserStoreInterface` never triggers a warning no matter how it is configured. Deleting it — and having `userStore` satisfy whatever the *caller* actually needs — is a judgment call this module exists to teach you to make. See **[Interfaces](/go/en/methods-interfaces/interfaces/)** and **[Methods](/go/en/methods-interfaces/methods/)**.
 
+## Cgo
+
+### 25. A Go pointer stashed on the C side outlives its call
+
+```go
+type callbackCtx struct {
+	name  string // a string header is itself a Go pointer
+	total *int   // and this field is a Go pointer too
+}
+
+func register(name string, counter *int) {
+	ctx := &callbackCtx{name: name, total: counter}
+	C.register_callback(unsafe.Pointer(ctx)) // C keeps this pointer past the call
+}
+```
+
+`register_callback` (a C function) stores the raw pointer it was given into a C-side global for later use — exactly the kind of "register a callback context with a C SDK" code an AI assistant produces confidently, and exactly what the cgo pointer-passing rules forbid: `ctx` contains Go pointers (a `string` header and a `*int` field), and C must not keep a copy of a Go pointer after the call returns unless the memory is pinned with `runtime.Pinner`.
+
+**Symptom — real panic on this machine:**
+
+```text
+panic: runtime error: argument of cgo function has Go pointer to unpinned Go pointer
+
+goroutine 1 [running]:
+main.register.func1(...)
+	main.go:26
+```
+
+**Fix:** pass an opaque `cgo.Handle` instead of a raw pointer — an integer C can hold indefinitely with no Go pointer inside it:
+
+```go
+func register(name string, counter *int) cgo.Handle {
+	h := cgo.NewHandle(callbackCtx{name: name, total: counter})
+	C.register_callback(C.uintptr_t(h)) // an integer, not a Go pointer
+	return h
+}
+```
+
+**Caught by:** `GODEBUG=cgocheck=1`, the default — but only at runtime, and only when the code path actually runs. `go vet`'s `cgocall` analyzer does **not** catch this: its own doc comment scopes it to a Go chan, map, func, or slice passed to C, and a struct with a plain pointer field is outside that check — verified: `go vet` reports nothing on the buggy version above. See **[Cgo and FFI](/go/en/runtime-internals/cgo-and-ffi/)**.
+
+### 26. Missing `C.free`, or freeing memory Go allocated
+
+```go
+func leaky(n int) {
+	for i := 0; i < n; i++ {
+		_ = C.CString("this string never gets freed") // missing C.free
+	}
+}
+```
+
+Every `C.CString` call allocates on the C heap via `malloc`; Go's garbage collector has no idea that memory exists and will never reclaim it. Measured on this machine, leaking 2,000,000 short `C.CString` calls this way pushed peak memory footprint (`/usr/bin/time -l`) to about **67.7 MB** — memory that stays leaked for the life of the process.
+
+The inverse mistake is worse than a leak: calling `C.free` on memory Go itself allocated (`new(int)`, not `C.malloc`/`C.CString`) hands C's allocator a pointer it never gave out.
+
+**Symptom — real crash on this machine:**
+
+```text
+SIGABRT: abort
+signal arrived during cgo execution
+main._Cfunc_free(...)
+```
+
+**Fix:** free exactly what was allocated with `C.CString`/`C.malloc`/`C.CBytes`, always, on every path — `defer C.free(unsafe.Pointer(cs))` right after the allocation, the same pattern the earlier lessons in this catalog use for `resp.Body.Close()`. Never call `C.free` on a `new`, `&`, or `make`-produced Go value.
+
+**Caught by:** nothing. No linter tracks `malloc`/`free` pairing across a cgo boundary, and the wrong-free case is a hard runtime crash with no warning beforehand. See **[Cgo and FFI](/go/en/runtime-internals/cgo-and-ffi/)**.
+
+### 27. One cgo call per slice element instead of one batched call
+
+```go
+func squarePerElement(nums []int32) []int32 {
+	out := make([]int32, len(nums))
+	for i, v := range nums {
+		out[i] = int32(C.square(C.int(v))) // one cgo call per element
+	}
+	return out
+}
+```
+
+A cgo call costs roughly 9x a plain Go function call on this machine even when the C side does nothing — real, fixed overhead per crossing. Calling C once per element instead of once for the whole slice pays that cost `len(nums)` times over.
+
+**Symptom — real benchmark on this machine (1,000 `int32` elements, `testing.B`, `b.Loop()`):**
+
+```text
+BenchmarkPerElement-11    47670    24801 ns/op
+BenchmarkBatched-11     2766969      433.9 ns/op
+```
+
+**Fix:** give the C side a pointer and a length, and loop inside C:
+
+```go
+func squareBatched(nums []int32) []int32 {
+	out := make([]int32, len(nums))
+	if len(nums) == 0 {
+		return out
+	}
+	C.squareAll((*C.int)(&nums[0]), (*C.int)(&out[0]), C.int(len(nums)))
+	return out
+}
+```
+
+Batching turned ~24.8 µs into ~0.44 µs for the same 1,000-element operation — roughly a 56x speedup.
+
+**Caught by:** nothing. This is a performance smell, not a correctness bug — no compiler error, no vet warning, no panic. Only a benchmark (`go test -bench`) or a profiler makes the cost visible. See **[Cgo and FFI](/go/en/runtime-internals/cgo-and-ffi/)**.
+
 ## Mental Model
 
 ```text
-24 patterns, sorted by who actually catches them:
+27 patterns, sorted by who actually catches them:
 
 Compiler / go build  → 19 (maps.Keys shape), 18b (int * time.Duration)
 go vet (no config)   → 4, 11 (waitgroup), 13 (copylocks), 20 (errorsas)
@@ -964,11 +1068,12 @@ staticcheck           → 1 (SA4023), 11 (SA2000), 16 (SA5000), 17 (SA4011),
                         18a (SA1004), 23 (ST1006)
 modernize (opt-in)    → 23 (interface{} → any)
 -race                 → 11 (WaitGroup data race)
-Nothing               → 3, 5, 6, 7, 8, 9, 10, 12, 15, 21, 22, 24 — half the catalog
+GODEBUG=cgocheck=1 (runtime, default) → 25 (unpinned Go pointer)
+Nothing               → 3, 5, 6, 7, 8, 9, 10, 12, 15, 21, 22, 24, 26, 27 — just over half the catalog
 ```
 
-<Callout title="Half of this catalog has no automated safety net">
-Twelve of the twenty-four patterns above are caught by no tool this course covers, run with any configuration. That is the actual argument for this module: tooling narrows what you have to read for by eye, it never replaces reading. Run every tool in **[Verification Tools](/go/en/reading-go/verification-tools/)** on every diff — and still read the diff.
+<Callout title="Over half of this catalog has no automated safety net">
+Fourteen of the twenty-seven patterns above are caught by no tool this course covers, run with any configuration. That is the actual argument for this module: tooling narrows what you have to read for by eye, it never replaces reading. Run every tool in **[Verification Tools](/go/en/reading-go/verification-tools/)** on every diff — and still read the diff.
 </Callout>
 
 export const quizAiBugCatalog = [

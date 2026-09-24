@@ -32,6 +32,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 | Scheduler | goroutine ตัวหนึ่งขึ้นไปทำงานบน CPU core ได้อย่างไร และอะไรทำให้มันค้าง? |
 | GC and Escape Analysis | ค่าตัวนี้อยู่บน stack หรือ heap และ collector ทำอะไรกับสิ่งที่ escape? |
 | Memory Layout | ค่าตัวนี้กิน byte เท่าไหร่จริง ๆ และถูกจัดวางอย่างไร? |
+| Cgo and FFI | memory model, scheduler และมุมมองของ GC ต่อโลกเปลี่ยนไปอย่างไร เมื่อโค้ด Go เรียกเข้าไปใน C? |
 
 บทเรียน [Goroutines](/go/th/concurrency/goroutines/) และ [Sync Primitives](/go/th/concurrency/sync-primitives/) แนะนำ GMP model, work stealing, async preemption และรูปร่างพื้นฐานของ memory model ไปแล้ว — โมดูลนี้ไปไกลกว่าการแนะนำเข้าสู่กลไกจริง และ link กลับไปแทนที่จะพูดซ้ำ บทเรียน [Pointers](/go/th/types-data/pointers/) แนะนำ escape analysis ในระดับ "ทำไม pointer ไม่ได้เร็วกว่าเสมอไป"; [GC and Escape Analysis](/go/th/runtime-internals/gc-and-escape/) ลงลึกไปที่ collector ทำอะไรกับสิ่งที่ escape บทเรียน [Interfaces](/go/th/methods-interfaces/interfaces/) แสดง interface value สองคำ (two-word) และ itab ไปแล้ว; [Memory Layout](/go/th/runtime-internals/memory-layout/) ใส่ตัวเลข byte ให้กับทุก type ไม่ใช่แค่ interface
 
