@@ -355,7 +355,23 @@ export const quizGoroutines = [
     explain: "GOMAXPROCS กำหนดจำนวน P — scheduling context ที่ทำให้ goroutine รัน Go code ได้จริง มันจำกัด parallelism ไม่ใช่จำนวน goroutine ทั้งหมดที่สร้างได้ ซึ่งไม่มีขอบเขตจนกว่าจะชน memory limit"
   },
   {
-    q: "```go\nfunc leaky() {\n    ch := make(chan int)\n    go func() {\n        <-ch\n    }()\n}\n\nfunc main() {\n    for i := 0; i < 5; i++ {\n        leaky()\n    }\n    time.Sleep(50 * time.Millisecond)\n    fmt.Println(runtime.NumGoroutine())\n}\n```\nเกิดอะไรขึ้นกับ 5 goroutine ที่เปิดข้างใน leaky?",
+    q: `\`\`\`go
+func leaky() {
+    ch := make(chan int)
+    go func() {
+        <-ch
+    }()
+}
+
+func main() {
+    for i := 0; i < 5; i++ {
+        leaky()
+    }
+    time.Sleep(50 * time.Millisecond)
+    fmt.Println(runtime.NumGoroutine())
+}
+\`\`\`
+เกิดอะไรขึ้นกับ 5 goroutine ที่เปิดข้างใน leaky?`,
     options: [
       "แต่ละตัวรันจบเพราะ ch เป็น buffered โดย default",
       "รั่วทั้งหมด — ch ไม่มี sender และไม่เคยถูก close ทำให้ทุก receive block ตลอดไป",
@@ -366,7 +382,18 @@ export const quizGoroutines = [
     explain: "ch เป็น unbuffered และไม่มีใคร send เข้าไปหรือ close มันเลย ทำให้ทั้งห้า receive block ตลอดไป GC ไม่สามารถ reclaim goroutine ที่ยัง runnable/blocked ได้ — นี่คือสิ่งที่ทำให้มันเป็น leak ไม่ใช่แค่ allocation ที่ถูกปล่อย"
   },
   {
-    q: "```go\nfunc main() {\n    defer func() {\n        if r := recover(); r != nil {\n            fmt.Println(\"recovered:\", r)\n        }\n    }()\n    go func() { panic(\"boom\") }()\n    time.Sleep(100 * time.Millisecond)\n}\n```\ndeferred recover() ใน main จับ panic นี้ได้ไหม?",
+    q: `\`\`\`go
+func main() {
+    defer func() {
+        if r := recover(); r != nil {
+            fmt.Println("recovered:", r)
+        }
+    }()
+    go func() { panic("boom") }()
+    time.Sleep(100 * time.Millisecond)
+}
+\`\`\`
+deferred recover() ใน main จับ panic นี้ได้ไหม?`,
     options: [
       "ได้ — recover() จับ panic ได้ทุกที่ในโปรแกรม",
       "ไม่ได้ — recover จับ panic ได้เฉพาะ goroutine เดียวกันที่มันถูก defer ไว้เท่านั้น ทำให้ process crash",

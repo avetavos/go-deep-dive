@@ -529,7 +529,16 @@ export const quizPatterns = [
     explain: "sender ค้างอยู่ตลอดไปโดยไม่มีอะไรมา receive เลย — นั่นคือ leak ไม่ใช่ deadlock ทั้งโปรแกรม (goroutine อื่นอาจยังรันได้ปกติ) การให้ sender มี case ctx.Done() หรือการันตีว่า consumer drain จนถึง close เสมอ คือสองวิธีแก้มาตรฐาน"
   },
   {
-    q: "```go\nfunc worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {\n    defer wg.Done()\n    for j := range jobs {\n        out <- j * 2\n    }\n    close(out)\n}\n```\nworker สามตัวใช้ out channel เดียวกัน เกิดอะไรผิดพลาด?",
+    q: `\`\`\`go
+func worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {
+    defer wg.Done()
+    for j := range jobs {
+        out <- j * 2
+    }
+    close(out)
+}
+\`\`\`
+worker สามตัวใช้ out channel เดียวกัน เกิดอะไรผิดพลาด?`,
     options: [
       "ไม่มีอะไรผิด — close เป็น idempotent ดังนั้นเรียกซ้ำหลายครั้งไม่เป็นไร",
       "close(out) ของแต่ละ worker แข่งกับตัวอื่น และตัวที่สองที่รันจะ panic ด้วย \"close of closed channel\"",
@@ -540,7 +549,19 @@ export const quizPatterns = [
     explain: "close ไม่ใช่ idempotent และ out ใช้ร่วมกัน: worker ตัวแรกที่เสร็จ close มันสำเร็จ แล้ว worker ตัวอื่นที่เสร็จทีหลังและเรียก close(out) อีกครั้งจะ panic — เป๊ะกับบัคที่ fan-in merge ในบทนี้ระวังไม่ให้เกิดด้วย dedicated closer goroutine ตัวเดียว"
   },
   {
-    q: "```go\nresults := make([]int, 6)\nvar wg sync.WaitGroup\nfor i := 0; i < 6; i++ {\n    wg.Add(1)\n    go func(i int) {\n        defer wg.Done()\n        results[i] = i * i\n    }(i)\n}\nwg.Wait()\n```\nทำไม `go run -race` ไม่รายงาน race เลย ทั้งที่มี 6 goroutine เขียนลง slice เดียวกันพร้อมกัน?",
+    q: `\`\`\`go
+results := make([]int, 6)
+var wg sync.WaitGroup
+for i := 0; i < 6; i++ {
+    wg.Add(1)
+    go func(i int) {
+        defer wg.Done()
+        results[i] = i * i
+    }(i)
+}
+wg.Wait()
+\`\`\`
+ทำไม \`go run -race\` ไม่รายงาน race เลย ทั้งที่มี 6 goroutine เขียนลง slice เดียวกันพร้อมกัน?`,
     options: [
       "go run -race ไม่เช็ก slice write เช็กแค่ map write",
       "แต่ละ goroutine เขียนลง index ที่ต่างกัน — เป็นคนละ memory location ไม่มี overlapping access",

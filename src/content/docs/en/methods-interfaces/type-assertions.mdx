@@ -351,7 +351,13 @@ export const quizTypeAssertions = [
     explain: "The comma-ok form never panics. On failure it returns T's zero value and false, so the caller can branch on ok without a recover()."
   },
   {
-    q: "```go\nvar s Shape // nil interface\nc, ok := s.(Circle)\nfmt.Println(c, ok)\n_ = s.(Circle)\n```\nWhat happens?",
+    q: `\`\`\`go
+var s Shape // nil interface
+c, ok := s.(Circle)
+fmt.Println(c, ok)
+_ = s.(Circle)
+\`\`\`
+What happens?`,
     options: [
       "Prints `{0} false`, then the single-value assertion panics: interface conversion: main.Shape is nil, not main.Circle",
       "Prints `{0} true`, then the program exits normally",
@@ -362,7 +368,15 @@ export const quizTypeAssertions = [
     explain: "The comma-ok form is always safe, even on a nil interface — it just reports ok == false. Only the single-value form panics, and the message specifically names the interface as nil rather than naming a wrong concrete type."
   },
   {
-    q: "```go\ntype Shape interface{ Area() float64 }\ntype Circle struct{ Radius float64 }\nfunc (c *Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }\n\nvar s Shape = &Circle{Radius: 2}\n_, ok := s.(Circle)\n```\nDoes this compile, and if so what is `ok`?",
+    q: `\`\`\`go
+type Shape interface{ Area() float64 }
+type Circle struct{ Radius float64 }
+func (c *Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }
+
+var s Shape = &Circle{Radius: 2}
+_, ok := s.(Circle)
+\`\`\`
+Does this compile, and if so what is \`ok\`?`,
     options: [
       "Compiles; ok is true — Circle and *Circle are interchangeable",
       "Compiles; ok is false — s holds *Circle, not Circle",
@@ -373,7 +387,11 @@ export const quizTypeAssertions = [
     explain: "Area has a pointer receiver, so Circle's method set never includes Area — Circle can never satisfy Shape, and the compiler rejects the assertion statically instead of waiting for a runtime check that could never succeed."
   },
   {
-    q: "```go\nvar nf NotFoundError // not a pointer\nerrors.As(err, nf)\n```\nWhat happens when this runs?",
+    q: `\`\`\`go
+var nf NotFoundError // not a pointer
+errors.As(err, nf)
+\`\`\`
+What happens when this runs?`,
     options: [
       "Returns false — nf does not match err's type",
       "Returns true if err wraps a NotFoundError anywhere in the chain",

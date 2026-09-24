@@ -421,7 +421,18 @@ export const quizGoTooling = [
     explain: "go run compile ไปยังตำแหน่งชั่วคราว รัน แล้วเก็บกวาด — ไม่มีอะไรเหลือบน disk go build เขียน binary ที่มีชื่อให้คุณรันซ้ำได้ทีหลัง"
   },
   {
-    q: "```go\ntype Safe struct {\n    mu    sync.Mutex\n    count int\n}\nfunc process(s Safe) { // takes Safe by value\n    s.mu.Lock()\n    defer s.mu.Unlock()\n    s.count++\n}\n```\ngo vet analyzer ตัวไหน flag โค้ดนี้ และเพราะอะไร?",
+    q: `\`\`\`go
+type Safe struct {
+    mu    sync.Mutex
+    count int
+}
+func process(s Safe) { // takes Safe by value
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    s.count++
+}
+\`\`\`
+go vet analyzer ตัวไหน flag โค้ดนี้ และเพราะอะไร?`,
     options: [
       "printf — เพราะ count ถูกพิมพ์ผิดที่อื่น",
       "copylocks — การส่ง Safe แบบ value copy mutex ด้วย ดังนั้น process จึง lock สำเนาที่เป็นอิสระซึ่งไม่ป้องกันอะไรเลย",
@@ -432,7 +443,15 @@ export const quizGoTooling = [
     explain: "ทุกครั้งที่เรียก process(s) จะ copy struct ทั้งหมด รวมถึง internal state ของ mutex ด้วย copylocks flag สิ่งนี้ตรง ๆ: 'passes lock by value' มันเป็น bug ตั้งแต่ signature ของ function รับ Safe แบบ value แล้ว ไม่ว่าจะถูกเรียกแบบ concurrent หรือไม่ — สำเนานั้นพังตั้งแต่มันถูกสร้างแล้ว"
   },
   {
-    q: "```go\ngo func() {\n    wg.Add(1)\n    defer wg.Done()\n    doWork()\n}()\nwg.Wait()\n```\ngo vet analyzer waitgroup รายงานข้อความจริงอะไรที่นี่ และ race จริง ๆ คืออะไร?",
+    q: `\`\`\`go
+go func() {
+    wg.Add(1)
+    defer wg.Done()
+    doWork()
+}()
+wg.Wait()
+\`\`\`
+go vet analyzer waitgroup รายงานข้อความจริงอะไรที่นี่ และ race จริง ๆ คืออะไร?`,
     options: [
       "'WaitGroup.Add called from inside new goroutine' — wg.Wait() ใน parent อาจ return ก่อนที่ Add จะรันด้วยซ้ำ เพราะการ schedule ของ goroutine ไม่รับประกันว่าจะเกิดก่อน Wait",
       "'assignment copies lock value' — WaitGroup มี mutex อยู่ภายใน",

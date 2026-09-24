@@ -100,7 +100,7 @@ srv := &http.Server{
 	ReadHeaderTimeout: 5 * time.Second, // caps time to read just the headers
 	ReadTimeout:       10 * time.Second,
 	WriteTimeout:      10 * time.Second,
-	IdleTimeout:       120 * time.Second, // keep-alive connection
+	IdleTimeout:       120 * time.Second, // keep-alive connections
 }
 srv.ListenAndServe()
 ```
@@ -120,7 +120,7 @@ if !ok {
 	http.Error(w, "item not found", http.StatusNotFound)
 	return
 }
-w.Header().Set("Content-Type", "application/json") // header before WriteHeader
+w.Header().Set("Content-Type", "application/json") // must come before Encode
 json.NewEncoder(w).Encode(it)                       // Encode's first Write implies WriteHeader(200)
 ```
 
@@ -528,7 +528,15 @@ export const quizNetHttp = [
     explain: "Request เป็น concrete type เดียวที่ใช้ทุกที่ ดังนั้น pointer จึงเลี่ยงการ copy body/context ของมัน; ResponseWriter ต้องเป็น interface เพราะ implementation จริงของมันต่างกันระหว่าง connection จริงใน production กับ httptest.ResponseRecorder ใน test"
   },
   {
-    q: "```go\nimport _ \"net/http/pprof\"\n\nfunc main() {\n\thttp.HandleFunc(\"/hello\", helloHandler)\n\thttp.ListenAndServe(\":8080\", nil)\n}\n```\nโค้ดนี้เปิดเผยอะไร และเพราะอะไร?",
+    q: `\`\`\`go
+import _ "net/http/pprof"
+
+func main() {
+	http.HandleFunc("/hello", helloHandler)
+	http.ListenAndServe(":8080", nil)
+}
+\`\`\`
+โค้ดนี้เปิดเผยอะไร และเพราะอะไร?`,
     options: [
       "ไม่มีอะไรเพิ่ม — blank import มีผลแค่กับ tooling ในเครื่อง ไม่ใช่ server ที่กำลังรัน",
       "endpoint profiling /debug/pprof/* เพราะ pprof ลงทะเบียนมันบน http.DefaultServeMux ระหว่าง init() ซึ่ง ListenAndServe(addr, nil) ก็ serve mux ตัวเดียวกันนั้นด้วย",
@@ -539,7 +547,12 @@ export const quizNetHttp = [
     explain: "net/http/pprof ลงทะเบียน handler ของมันบน http.DefaultServeMux ที่ใช้ร่วมกันเป็น side effect ของการ import; ListenAndServe(addr, nil) serve mux global ตัวเดียวกันนั้น ดังนั้นทั้ง /hello และทุก route /debug/pprof/* จึงเข้าถึงได้จากสาธารณะ"
   },
   {
-    q: "```go\nmux := http.NewServeMux()\nmux.HandleFunc(\"GET /items/{id}\", h1)\nmux.HandleFunc(\"GET /items/special\", h2)\n```\nhandler ตัวไหนรัน GET request สำหรับ `/items/special`?",
+    q: `\`\`\`go
+mux := http.NewServeMux()
+mux.HandleFunc("GET /items/{id}", h1)
+mux.HandleFunc("GET /items/special", h2)
+\`\`\`
+handler ตัวไหนรัน GET request สำหรับ \`/items/special\`?`,
     options: [
       "h1 เพราะ pattern แบบ wildcard ถูก match ก่อน",
       "h2 เพราะ pattern แบบ literal ที่เจาะจงกว่าชนะ wildcard ที่ตำแหน่งเดียวกัน",
@@ -550,7 +563,11 @@ export const quizNetHttp = [
     explain: "ยืนยันแล้วจริงในเครื่อง: การขอ /items/special คืน response ของ h2 (\"literal special\") ในขณะที่ /items/42 ตกไปที่ handler wildcard ของ h1 — ServeMux เลือก pattern ที่เจาะจงกว่าเสมอ"
   },
   {
-    q: "```go\nclient := &http.Client{}\nresp, err := client.Get(\"https://example.com/slow\")\n```\nclient ตัวนี้ผิดตรงไหน และอะไรเกิดขึ้นได้บ้างจากมัน?",
+    q: `\`\`\`go
+client := &http.Client{}
+resp, err := client.Get("https://example.com/slow")
+\`\`\`
+client ตัวนี้ผิดตรงไหน และอะไรเกิดขึ้นได้บ้างจากมัน?`,
     options: [
       "ไม่มีอะไรผิด — http.Client{} ตั้งค่า timeout เริ่มต้นที่สมเหตุสมผลไว้แล้ว",
       "มันไม่ได้ตั้ง Timeout ไว้ (zero value หมายถึงไม่มี timeout) ดังนั้น server ที่ช้าหรือไม่ตอบสนองสามารถ block การเรียกนี้ไว้ตลอดไป",
@@ -561,7 +578,14 @@ export const quizNetHttp = [
     explain: "zero value ของ http.Client มี Timeout: 0 ซึ่งตามเอกสารหมายถึงไม่มี timeout เลย — ควรตั้ง Timeout แบบเจาะจงเสมอสำหรับ client ใดก็ตามที่คุยกับ network จริง"
   },
   {
-    q: "```go\nresp, err := client.Get(url)\ndefer resp.Body.Close()\nif err != nil {\n\treturn err\n}\n```\nเกิดอะไรขึ้นเมื่อ request นี้เชื่อมต่อไม่สำเร็จ?",
+    q: `\`\`\`go
+resp, err := client.Get(url)
+defer resp.Body.Close()
+if err != nil {
+	return err
+}
+\`\`\`
+เกิดอะไรขึ้นเมื่อ request นี้เชื่อมต่อไม่สำเร็จ?`,
     options: [
       "function คืน error ตามปกติ และ Close() เป็น no-op ที่ไม่มีอันตรายบน Body ที่เป็น nil",
       "resp เป็น nil เมื่อ err != nil ดังนั้น defer resp.Body.Close() จะ panic ด้วย nil pointer dereference ก่อนที่ error จะถูกคืนด้วยซ้ำ",
@@ -572,7 +596,16 @@ export const quizNetHttp = [
     explain: "เอกสารของ Client.Do ระบุว่า Response ใดก็ได้เป็น nil ได้เมื่อ err != nil; การ defer Body.Close() ก่อนเช็กจะ dereference pointer ที่เป็น nil — ยืนยันแล้วจริงในเครื่อง สิ่งนี้ panic ด้วย \"invalid memory address or nil pointer dereference\" และ analyzer httpresponse ของ go vet จับมันได้เป็น \"using resp before checking for errors\""
   },
   {
-    q: "```go\nresp, err := client.Get(url)\nif err != nil {\n\treturn err\n}\ndefer resp.Body.Close()\ndata, _ := io.ReadAll(resp.Body)\nprocessJSON(data)\n```\nโค้ดนี้ลืมเช็กอะไร และทำไมมันถึงสำคัญ?",
+    q: `\`\`\`go
+resp, err := client.Get(url)
+if err != nil {
+	return err
+}
+defer resp.Body.Close()
+data, _ := io.ReadAll(resp.Body)
+processJSON(data)
+\`\`\`
+โค้ดนี้ลืมเช็กอะไร และทำไมมันถึงสำคัญ?`,
     options: [
       "ไม่มีอะไรลืม — err == nil รับประกันแล้วว่า response สำเร็จและเป็น JSON ที่ถูกต้อง",
       "resp.StatusCode — Do ไม่ถือว่า response แบบ 4xx/5xx เป็น error ดังนั้น processJSON อาจรัน body ของหน้า error แทนข้อมูลจริง",

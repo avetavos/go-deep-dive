@@ -143,7 +143,14 @@ export const quizMethodsInterfaces = [
     explain: "Go เช็ก method set แบบ structural ที่ compile time ไม่มีการประกาศ, keyword, หรือขั้นตอนลงทะเบียนใด ๆ เลย — และก็ไม่จำเป็นต้องมีด้วย"
   },
   {
-    q: "```go\ntype Rectangle struct{ W, H float64 }\nfunc (r *Rectangle) Area() float64 { return r.W * r.H }\ntype Sizer interface{ Area() float64 }\n\nvar s Sizer = Rectangle{W: 4, H: 3}\n```\nโค้ดนี้ compile ผ่านไหม?",
+    q: `\`\`\`go
+type Rectangle struct{ W, H float64 }
+func (r *Rectangle) Area() float64 { return r.W * r.H }
+type Sizer interface{ Area() float64 }
+
+var s Sizer = Rectangle{W: 4, H: 3}
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       "ผ่าน — Rectangle มี method Area ดังนั้นมันตอบสนอง Sizer",
       "ไม่ผ่าน — Rectangle ไม่ implement Sizer เพราะ Area มี pointer receiver",
@@ -154,7 +161,18 @@ export const quizMethodsInterfaces = [
     explain: "Area มี pointer receiver ดังนั้นมีแค่ method set ของ *Rectangle เท่านั้นที่มีมัน การ assign Rectangle{} แบบ value ให้ตัวแปร Sizer จึง compile ไม่ผ่าน โดยข้อความระบุตรง ๆ ว่า method Area has pointer receiver"
   },
   {
-    q: "```go\ntype MyErr struct{ msg string }\nfunc (e *MyErr) Error() string { return e.msg }\n\nfunc f() error {\n    var p *MyErr\n    return p\n}\n\nfmt.Println(f() == nil)\n```\nโค้ดนี้ print อะไร และทำไม?",
+    q: `\`\`\`go
+type MyErr struct{ msg string }
+func (e *MyErr) Error() string { return e.msg }
+
+func f() error {
+    var p *MyErr
+    return p
+}
+
+fmt.Println(f() == nil)
+\`\`\`
+โค้ดนี้ print อะไร และทำไม?`,
     options: [
       "true — p เป็น nil ดังนั้น error ที่ return ก็เป็น nil ด้วย",
       "false — error interface เก็บ type descriptor ที่ไม่ nil ล้อมรอบ *MyErr ที่ nil",

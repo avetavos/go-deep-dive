@@ -352,7 +352,13 @@ export const quizModules = [
     explain: "go mod init <module-path> สร้างไฟล์ go.mod พร้อม module path ที่ระบุและ version ของ toolchain ปัจจุบันในบรรทัด go"
   },
   {
-    q: "```text\n$ go mod graph\nyourmodule github.com/foo/bar@v1.2.0\nyourmodule github.com/baz/qux@v2.0.0\ngithub.com/baz/qux@v2.0.0 github.com/foo/bar@v1.5.0\n```\nminimal version selection ใส่ version ไหนของ github.com/foo/bar ใน build?",
+    q: `\`\`\`text
+$ go mod graph
+yourmodule github.com/foo/bar@v1.2.0
+yourmodule github.com/baz/qux@v2.0.0
+github.com/baz/qux@v2.0.0 github.com/foo/bar@v1.5.0
+\`\`\`
+minimal version selection ใส่ version ไหนของ github.com/foo/bar ใน build?`,
     options: [
       "v1.2.0 เพราะเป็น direct requirement ของ module คุณเอง",
       "v1.5.0 เพราะเป็น version สูงสุดที่มีอะไรบางอย่างใน graph ขอ",
@@ -363,7 +369,11 @@ export const quizModules = [
     explain: "MVS เลือก version สูงสุดที่ถูกขอที่ไหนก็ตามใน dependency graph สำหรับแต่ละ module — ที่นี่ direct requirement ของคุณ (v1.2.0) ต่ำกว่าที่ baz/qux ต้องการ (v1.5.0) จึงเลือก v1.5.0 มันไม่มีทางกระโดดไป 'ล่าสุด' ที่ไม่มีใครขอจริง"
   },
   {
-    q: "library ที่คุณ publish มีสิ่งนี้ใน go.mod:\n```\nreplace github.com/foo/bar => ../local-fork-of-bar\n```\nจะเกิดอะไรขึ้นเมื่อคนอื่น import library ของคุณ?",
+    q: `library ที่คุณ publish มีสิ่งนี้ใน go.mod:
+\`\`\`
+replace github.com/foo/bar => ../local-fork-of-bar
+\`\`\`
+จะเกิดอะไรขึ้นเมื่อคนอื่น import library ของคุณ?`,
     options: [
       "build ของเขาก็ใช้ ../local-fork-of-bar เหมือนกัน",
       "build ของเขา fail ทันทีเพราะ path นั้นไม่มีอยู่จริงสำหรับเขา",
@@ -385,7 +395,10 @@ export const quizModules = [
     explain: "go mod tidy ปรับ go.mod/go.sum ให้ตรงกับสิ่งที่ source code ของคุณ import จริง — มันไม่ bump dependency ไป version ใหม่กว่าเองโดยอัตโนมัติ (go get -u ทำแบบนั้น)"
   },
   {
-    q: "```bash\ngo get golang.org/x/tools/cmd/stringer@latest\n```\nsetup script ใช้บรรทัดนี้เพื่อ install tool stringer สำหรับ code generation ผิดตรงไหน และวิธีแก้แบบ Go 1.24+ คืออะไร?",
+    q: `\`\`\`bash
+go get golang.org/x/tools/cmd/stringer@latest
+\`\`\`
+setup script ใช้บรรทัดนี้เพื่อ install tool stringer สำหรับ code generation ผิดตรงไหน และวิธีแก้แบบ Go 1.24+ คืออะไร?`,
     options: [
       "ไม่มีอะไรผิด — นี่คือวิธีที่ถูกต้องในการ install CLI tool",
       "มันเพิ่ม stringer เป็น dependency จริงใน block require ของ go.mod แทนที่จะ install binary เดี่ยว ๆ ใช้ go install stringer@latest แทน หรือ go get -tool ถ้าอยาก track version ใน git",

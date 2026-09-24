@@ -346,7 +346,14 @@ export const quizPackages = [
     explain: "gofmt itself groups and sorts a parenthesized import block; a single grouped block is the idiomatic form once you have more than one import."
   },
   {
-    q: "```go\nimport \"math/rand/v2\"\n\nfunc main() {\n    fmt.Println(v2.IntN(100))\n}\n```\nDoes this compile?",
+    q: `\`\`\`go
+import "math/rand/v2"
+
+func main() {
+    fmt.Println(v2.IntN(100))
+}
+\`\`\`
+Does this compile?`,
     options: [
       "Yes — v2 is the package's name",
       "No — undefined: v2",

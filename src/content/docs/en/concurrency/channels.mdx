@@ -430,7 +430,13 @@ export const quizChannels = [
     explain: "The arrow position mirrors data flow: <-chan T means \"data flows out of this channel\" (receive-only), while chan<- T means \"data flows into this channel\" (send-only)."
   },
   {
-    q: "```go\nfunc main() {\n    var ch chan int\n    ch <- 1\n}\n```\nWhat happens when this runs?",
+    q: `\`\`\`go
+func main() {
+    var ch chan int
+    ch <- 1
+}
+\`\`\`
+What happens when this runs?`,
     options: [
       "It compiles and runs, printing nothing",
       "It panics with \"send on closed channel\"",
@@ -441,7 +447,13 @@ export const quizChannels = [
     explain: "ch is declared but never make'd, so it is nil. A send on a nil channel blocks forever; since main is the only goroutine and it can never be unblocked, the runtime detects the whole-program deadlock and terminates with this fatal error rather than hanging silently."
   },
   {
-    q: "```go\nch := make(chan int, 1)\nclose(ch)\nv, ok := <-ch\nfmt.Println(v, ok)\n```\nWhat does this print?",
+    q: `\`\`\`go
+ch := make(chan int, 1)
+close(ch)
+v, ok := <-ch
+fmt.Println(v, ok)
+\`\`\`
+What does this print?`,
     options: [
       "0 false",
       "0 true",

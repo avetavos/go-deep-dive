@@ -343,7 +343,13 @@ export const quizContext = [
     explain: "context.WithValue keys are compared with ==, across the entire value chain shared by every package that touches this context. Two packages both using the plain string \"requestID\" as a key would silently collide; an unexported named type makes that impossible from outside the package."
   },
   {
-    q: "```go\nctx, cancel := context.WithCancelCause(context.Background())\ncancel(errQuotaExceeded)\nfmt.Println(ctx.Err())\nfmt.Println(context.Cause(ctx))\n```\nWhat does this print?",
+    q: `\`\`\`go
+ctx, cancel := context.WithCancelCause(context.Background())
+cancel(errQuotaExceeded)
+fmt.Println(ctx.Err())
+fmt.Println(context.Cause(ctx))
+\`\`\`
+What does this print?`,
     options: [
       "errQuotaExceeded then errQuotaExceeded",
       "context canceled then errQuotaExceeded",
@@ -354,7 +360,18 @@ export const quizContext = [
     explain: "ctx.Err() always returns the generic context.Canceled sentinel regardless of cause. context.Cause(ctx) is the separate call that returns the specific error passed to the CancelCauseFunc -- that split is the whole point of WithCancelCause."
   },
   {
-    q: "```go\ntype ctxKey string\n\nfunc requestID(ctx context.Context) string {\n    return ctx.Value(ctxKey(\"reqID\")).(string)\n}\n\nfunc main() {\n    fmt.Println(requestID(context.Background()))\n}\n```\nWhat happens when this runs?",
+    q: `\`\`\`go
+type ctxKey string
+
+func requestID(ctx context.Context) string {
+    return ctx.Value(ctxKey("reqID")).(string)
+}
+
+func main() {
+    fmt.Println(requestID(context.Background()))
+}
+\`\`\`
+What happens when this runs?`,
     options: [
       "Prints an empty string",
       "panic: interface conversion: interface {} is nil, not string",

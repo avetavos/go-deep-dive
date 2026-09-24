@@ -17,7 +17,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 ทุกบทก่อนหน้าในโมดูลนี้อยู่ภายใน Go runtime ทั้งหมด: memory model ปกครอง goroutine ของ Go, scheduler ย้าย goroutine ของ Go, garbage collector track ค่าของ Go cgo คือจุดเดียวที่โค้ด Go ก้าวออกจากทั้งสามอย่างนั้นโดยตั้งใจ — โปรแกรม Go เรียก function ของ C แล้วตลอดช่วงเวลาของ call นั้น การรับประกันของ memory model, งานบัญชีปกติของ scheduler และมุมมองของ garbage collector ต่อโลกทั้งหมดมีรอยต่ออยู่ การอ่านโค้ด cgo ให้เก่งคือการรู้ว่ารอยต่อนั้นอยู่ตรงไหนแน่ ๆ
 
 <Callout title="บทนี้รันใน Playground บนเบราว์เซอร์ไม่ได้">
-compile proxy บนเบราว์เซอร์ที่คอร์สนี้ใช้ build ทุก playground ด้วย `CGO_ENABLED=0` — ฝั่ง server ไม่มี C compiler เลย ทุก snippet ในบทนี้ที่มี `import "C"` จะแสดงเป็น ```go``` fence ธรรมดา ตามด้วย output จริงจากเครื่องนี้ (Go 1.26.5, darwin/arm64, Apple clang 17.0.0) ไม่ได้ผูกกับ `<Playground>` ที่รันได้ ส่วน `<Playground>` เดียวในบทนี้ที่อยู่ด้านล่าง เป็น pure Go ล้วน ๆ ไม่ต้องใช้ C compiler เลย
+compile proxy บนเบราว์เซอร์ที่คอร์สนี้ใช้ build ทุก playground ด้วย `CGO_ENABLED=0` — ฝั่ง server ไม่มี C compiler เลย ทุก snippet ในบทนี้ที่มี `import "C"` จะแสดงเป็น `go` fence ธรรมดา ตามด้วย output จริงจากเครื่องนี้ (Go 1.26.5, darwin/arm64, Apple clang 17.0.0) ไม่ได้ผูกกับ `<Playground>` ที่รันได้ ส่วน `<Playground>` เดียวในบทนี้ที่อยู่ด้านล่าง เป็น pure Go ล้วน ๆ ไม่ต้องใช้ C compiler เลย
 </Callout>
 
 ## `import "C"`, preamble และ `#cgo` directive
@@ -471,7 +471,14 @@ export const quizCgoAndFfi = [
     explain: "cgo จะถือว่า comment เป็น preamble ก็ต่อเมื่อมันอยู่ติดกับ `import \"C\"` ทันที ไม่มีอะไรคั่น -- บรรทัดว่างจะตัดความสัมพันธ์นี้ทิ้ง แล้ว comment นั้นก็เป็นแค่ comment ธรรมดา"
   },
   {
-    q: "```go\nfunc label(id int) string {\n    cs := C.CString(fmt.Sprintf(\"item-%d\", id))\n    C.free(unsafe.Pointer(cs))\n    return C.GoString(cs)\n}\n```\nโปรแกรมนี้ทำอะไรจริง ๆ ตอนรัน และเพราะอะไร?",
+    q: `\`\`\`go
+func label(id int) string {
+    cs := C.CString(fmt.Sprintf("item-%d", id))
+    C.free(unsafe.Pointer(cs))
+    return C.GoString(cs)
+}
+\`\`\`
+โปรแกรมนี้ทำอะไรจริง ๆ ตอนรัน และเพราะอะไร?`,
     options: [
       "compile ไม่ผ่านเพราะ C.free ถูกเรียกก่อน C.GoString",
       "panic ด้วย use-after-free error ทุกครั้ง",

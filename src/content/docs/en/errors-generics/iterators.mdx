@@ -426,7 +426,10 @@ export const quizIterators = [
     explain: "iter.Seq[V] is a function type that takes a yield callback. range-over-func calls that function, and the loop body becomes the yield callback."
   },
   {
-    q: "```go\nsort.Strings(maps.Keys(m))\n```\nDoes this compile?",
+    q: `\`\`\`go
+sort.Strings(maps.Keys(m))
+\`\`\`
+Does this compile?`,
     options: [
       "Yes, it sorts the map's keys in place",
       "No — maps.Keys returns iter.Seq[string], not []string",
@@ -437,7 +440,22 @@ export const quizIterators = [
     explain: "Since Go 1.23, maps.Keys returns an iter.Seq[K], not a slice. Verified on 1.26.5, this is a compile error: cannot use maps.Keys(m) (value of func type iter.Seq[string]) as []string value in argument to sort.Strings. Use slices.Sorted(maps.Keys(m)) instead."
   },
   {
-    q: "```go\nfunc Count(n int) iter.Seq[int] {\n    return func(yield func(int) bool) {\n        for i := 0; i < n; i++ {\n            yield(i)\n        }\n    }\n}\n\nfor v := range Count(5) {\n    if v == 2 {\n        break\n    }\n}\n```\nWhat happens when this runs?",
+    q: `\`\`\`go
+func Count(n int) iter.Seq[int] {
+    return func(yield func(int) bool) {
+        for i := 0; i < n; i++ {
+            yield(i)
+        }
+    }
+}
+
+for v := range Count(5) {
+    if v == 2 {
+        break
+    }
+}
+\`\`\`
+What happens when this runs?`,
     options: [
       "It prints 0, 1, 2 and stops cleanly",
       "It panics: range function continued iteration after function for loop body returned false",
@@ -448,7 +466,12 @@ export const quizIterators = [
     explain: "Count ignores yield's return value, so after the loop breaks (yield returns false), Count keeps calling yield anyway. The Go runtime detects this and panics — verified on 1.26.5. The fix is if !yield(i) { return }."
   },
   {
-    q: "```go\nseq := FromChannel(ch) // reads from a channel until it's closed\nfor v := range seq { /* ... */ }\nfor v := range seq { /* ... */ } // ranging again\n```\nWhat happens on the second range?",
+    q: `\`\`\`go
+seq := FromChannel(ch) // reads from a channel until it's closed
+for v := range seq { /* ... */ }
+for v := range seq { /* ... */ } // ranging again
+\`\`\`
+What happens on the second range?`,
     options: [
       "It panics: sequence already consumed",
       "It produces the same values again",

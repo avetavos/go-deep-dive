@@ -415,7 +415,11 @@ export const quizWrapping = [
     explain: "errors.Is เดินทั้ง chain — จาก error เป้าหมายไปจนถึงทุกอย่างที่มันครอบอยู่ข้างใน — เช็ก identity (หรือ custom Is method) ทีละขั้น ไม่ใช่เนื้อหา string"
   },
   {
-    q: "```go\nvar ve *VErr\nerrors.As(err, ve) // note: not &ve\n```\nโค้ดนี้จะเกิดอะไรขึ้นตอนรัน?",
+    q: `\`\`\`go
+var ve *VErr
+errors.As(err, ve) // note: not &ve
+\`\`\`
+โค้ดนี้จะเกิดอะไรขึ้นตอนรัน?`,
     options: [
       "คืน false เพราะ ve เป็น nil",
       "panic: errors: target must be a non-nil pointer",
@@ -426,7 +430,11 @@ export const quizWrapping = [
     explain: "errors.As ต้องการ address ของตัวแปร target เพื่อเขียนผลการ match ลงไป การส่ง ve เองทำให้ได้ nil *VErr ที่ไม่มีที่เก็บผล errors.As จึงถือว่าเป็น bug ของผู้เรียกและ panic — ตรวจสอบแล้วบน 1.26.5"
   },
   {
-    q: "```go\nmulti := fmt.Errorf(\"save failed: %w, %w\", ErrDisk, ErrNet)\nfmt.Println(errors.Unwrap(multi))\n```\nโค้ดนี้พิมพ์อะไร?",
+    q: `\`\`\`go
+multi := fmt.Errorf("save failed: %w, %w", ErrDisk, ErrNet)
+fmt.Println(errors.Unwrap(multi))
+\`\`\`
+โค้ดนี้พิมพ์อะไร?`,
     options: [
       "ErrDisk",
       "ErrNet",

@@ -83,8 +83,9 @@ func sum(nums ...int) int {
     return total
 }
 
-sum(1, 2, 3)        // individual args
-sum([]int{1,2,3}...) // spread a slice with ...
+sum(1, 2, 3)          // individual args
+sum(1, 2, 3, 4, 5)    // any number of args works
+sum([]int{1,2,3}...)  // spread a slice with ...
 ```
 
 Inside the function, `nums` is a `[]int` slice. Spreading a `nil` slice works too and is not a special case: `var none []int; sum(none...)` passes an empty slice, and the loop simply runs zero times, returning `0`. A `nil` slice behaves like a zero-length one everywhere it is read.
@@ -199,6 +200,7 @@ func saveFixed(f *os.File, data []byte) (err error) {
 Functions are first-class values in Go. You can assign them to variables, pass them as arguments, and return them from other functions:
 
 ```go
+// Function as a value in a variable
 double := func(n int) int { return n * 2 }
 fmt.Println(double(5)) // 10
 
@@ -213,14 +215,14 @@ A **closure** is a function that captures variables from its enclosing scope. Th
 func counter() func() int {
     n := 0
     return func() int {
-        n++
+        n++ // captures n from counter
         return n
     }
 }
 
 c := counter()
 fmt.Println(c()) // 1
-fmt.Println(c()) // 2
+fmt.Println(c()) // 2 — state is preserved inside the closure
 fmt.Println(c()) // 3
 ```
 
@@ -523,7 +525,17 @@ export const quizFunctions = [
     explain: "The ... suffix after a slice expression spreads its elements as individual variadic arguments; this also works with a nil slice, spreading zero arguments."
   },
   {
-    q: "```go\nfunc doWork() (err error) {\n    defer func() {\n        if err != nil {\n            err = fmt.Errorf(\"doWork: %w\", err)\n        }\n    }()\n    return errors.New(\"boom\")\n}\n```\nWhat does `fmt.Println(doWork())` print?",
+    q: `\`\`\`go
+func doWork() (err error) {
+    defer func() {
+        if err != nil {
+            err = fmt.Errorf("doWork: %w", err)
+        }
+    }()
+    return errors.New("boom")
+}
+\`\`\`
+What does \`fmt.Println(doWork())\` print?`,
     options: [
       "boom",
       "doWork: boom",
@@ -534,7 +546,14 @@ export const quizFunctions = [
     explain: "Because err is a named result, the deferred closure can rewrite it after the return statement sets it but before the function actually hands control back to the caller — the caller sees the wrapped error."
   },
   {
-    q: "```go\nfor i := 0; i < 3; i++ {\n    r := openResource(i)\n    defer r.Close()\n}\nfmt.Println(\"done opening\")\n```\nAt the moment \"done opening\" is printed, how many resources are still open?",
+    q: `\`\`\`go
+for i := 0; i < 3; i++ {
+    r := openResource(i)
+    defer r.Close()
+}
+fmt.Println("done opening")
+\`\`\`
+At the moment "done opening" is printed, how many resources are still open?`,
     options: [
       "0 — each was closed at the end of its iteration",
       "1 — only the most recent one is still open",

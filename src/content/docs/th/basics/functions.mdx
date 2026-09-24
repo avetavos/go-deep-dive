@@ -17,13 +17,14 @@ import SpotTheBug from '../../../../components/SpotTheBug.astro';
 Function ใน Go ประกาศด้วย keyword `func` ตามด้วยชื่อ, parameters, และ return types:
 
 ```go
-func add(x int, y int) int {
-    return x + y
+func add(a int, b int) int {
+    return a + b
 }
 
-// Two equivalent spellings of the same function — pick one style per function.
-func add(x, y int) int {
-    return x + y
+// Consecutive parameters of the same type can share a type annotation.
+// This is a second, equivalent spelling of the same function — pick one style per function.
+func add(a, b int) int {
+    return a + b
 }
 ```
 
@@ -45,6 +46,7 @@ result, err := divide(10, 3)
 if err != nil {
     log.Fatal(err)
 }
+fmt.Println(result)
 ```
 
 Pattern `(value, error)` ถือเป็น idiomatic Go — แทบทุก function ที่อาจล้มเหลวจะ return error เป็น value สุดท้าย
@@ -56,15 +58,15 @@ Return values สามารถตั้งชื่อได้ ทำให�
 ```go
 func bounds(nums []int) (lo, hi int) {
     lo, hi = nums[0], nums[0]
-    for _, n := range nums[1:] {
-        if n < lo {
-            lo = n
+    for _, v := range nums[1:] {
+        if v < lo {
+            lo = v
         }
-        if n > hi {
-            hi = n
+        if v > hi {
+            hi = v
         }
     }
-    return   // bare return: returns current lo, hi
+    return // bare return: returns current lo, hi
 }
 ```
 
@@ -83,11 +85,9 @@ func sum(nums ...int) int {
     return total
 }
 
-sum(1, 2, 3)       // individual args
-sum(1, 2, 3, 4, 5) // any number of args works
-
-existing := []int{1, 2, 3}
-sum(existing...)   // spread a slice with ...
+sum(1, 2, 3)          // individual args
+sum(1, 2, 3, 4, 5)    // any number of args works
+sum([]int{1,2,3}...)  // spread a slice with ...
 ```
 
 การ spread slice ที่เป็น `nil` ก็ใช้ได้เหมือนกันและไม่ใช่กรณีพิเศษ: `var none []int; sum(none...)` ส่ง slice ความยาวศูนย์เข้าไป loop วนศูนย์รอบ แล้ว return `0` slice ที่เป็น `nil` จะพฤติกรรมเหมือน slice ความยาวศูนย์ทุกที่ที่มันถูกอ่าน
@@ -97,14 +97,15 @@ sum(existing...)   // spread a slice with ...
 `defer` เลื่อนการเรียก function ออกไปจนกว่า function ที่ครอบอยู่จะ return เหมาะสำหรับ cleanup:
 
 ```go
-func readFile(path string) error {
-    f, err := os.Open(path)
+func readFile(name string) error {
+    f, err := os.Open(name)
     if err != nil {
         return err
     }
     defer f.Close() // runs when readFile returns
 
     // ... work with f ...
+    return nil
 }
 ```
 
@@ -202,7 +203,7 @@ Functions ใน Go เป็น first-class values — สามารถ assig
 
 ```go
 // Function as a value in a variable
-double := func(x int) int { return x * 2 }
+double := func(n int) int { return n * 2 }
 fmt.Println(double(5)) // 10
 
 // Function as a parameter
@@ -213,20 +214,21 @@ fmt.Println(apply(double, 3)) // 6
 **Closure** คือ function ที่ "จำ" ตัวแปรจาก enclosing scope:
 
 ```go
-func makeCounter() func() int {
-    count := 0
+func counter() func() int {
+    n := 0
     return func() int {
-        count++ // captures count from makeCounter
-        return count
+        n++ // captures n from counter
+        return n
     }
 }
 
-counter := makeCounter()
-fmt.Println(counter()) // 1
-fmt.Println(counter()) // 2 — state is preserved inside the closure
+c := counter()
+fmt.Println(c()) // 1
+fmt.Println(c()) // 2 — state is preserved inside the closure
+fmt.Println(c()) // 3
 ```
 
-แต่ละครั้งที่เรียก `makeCounter()` จะได้ `count` อิสระจากกัน counter สองตัวจึงไม่รบกวนกัน
+แต่ละครั้งที่เรียก `counter()` จะได้ `n` อิสระจากกัน counter สองตัวจึงไม่รบกวนกัน
 
 ## Closure บน Loop Variable: ก่อนและหลัง Go 1.22
 
@@ -525,7 +527,17 @@ export const quizFunctions = [
     explain: "suffix ... ต่อท้าย slice expression จะ spread element ของมันเป็น variadic argument แยกกัน วิธีนี้ใช้ได้แม้กับ nil slice ซึ่งจะ spread เป็นศูนย์ argument"
   },
   {
-    q: "```go\nfunc doWork() (err error) {\n    defer func() {\n        if err != nil {\n            err = fmt.Errorf(\"doWork: %w\", err)\n        }\n    }()\n    return errors.New(\"boom\")\n}\n```\n`fmt.Println(doWork())` print อะไร?",
+    q: `\`\`\`go
+func doWork() (err error) {
+    defer func() {
+        if err != nil {
+            err = fmt.Errorf("doWork: %w", err)
+        }
+    }()
+    return errors.New("boom")
+}
+\`\`\`
+\`fmt.Println(doWork())\` print อะไร?`,
     options: [
       "boom",
       "doWork: boom",
@@ -536,7 +548,14 @@ export const quizFunctions = [
     explain: "เพราะ err เป็น named result deferred closure แก้ค่ามันได้หลัง return statement กำหนดค่า แต่ก่อนที่ function จะคืน control ให้ caller จริง ๆ caller จึงเห็น error ที่ถูก wrap แล้ว"
   },
   {
-    q: "```go\nfor i := 0; i < 3; i++ {\n    r := openResource(i)\n    defer r.Close()\n}\nfmt.Println(\"done opening\")\n```\nตอนที่ print \"done opening\" มี resource กี่ตัวที่ยังเปิดอยู่?",
+    q: `\`\`\`go
+for i := 0; i < 3; i++ {
+    r := openResource(i)
+    defer r.Close()
+}
+fmt.Println("done opening")
+\`\`\`
+ตอนที่ print "done opening" มี resource กี่ตัวที่ยังเปิดอยู่?`,
     options: [
       "0 — แต่ละตัวถูกปิดตอนจบ iteration ของมัน",
       "1 — เหลือแค่ตัวล่าสุดที่ยังเปิดอยู่",

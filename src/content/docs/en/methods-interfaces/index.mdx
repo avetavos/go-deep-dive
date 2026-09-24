@@ -143,7 +143,14 @@ export const quizMethodsInterfaces = [
     explain: "Go checks the method set structurally at compile time. No declaration, keyword, or registration step exists — or is needed."
   },
   {
-    q: "```go\ntype Rectangle struct{ W, H float64 }\nfunc (r *Rectangle) Area() float64 { return r.W * r.H }\ntype Sizer interface{ Area() float64 }\n\nvar s Sizer = Rectangle{W: 4, H: 3}\n```\nDoes this compile?",
+    q: `\`\`\`go
+type Rectangle struct{ W, H float64 }
+func (r *Rectangle) Area() float64 { return r.W * r.H }
+type Sizer interface{ Area() float64 }
+
+var s Sizer = Rectangle{W: 4, H: 3}
+\`\`\`
+Does this compile?`,
     options: [
       "Yes — Rectangle has an Area method, so it satisfies Sizer",
       "No — Rectangle does not implement Sizer because Area has a pointer receiver",
@@ -154,7 +161,18 @@ export const quizMethodsInterfaces = [
     explain: "Area has a pointer receiver, so only *Rectangle's method set includes it. Assigning a value Rectangle{} to a Sizer variable fails to compile with a message naming exactly this: method Area has pointer receiver."
   },
   {
-    q: "```go\ntype MyErr struct{ msg string }\nfunc (e *MyErr) Error() string { return e.msg }\n\nfunc f() error {\n    var p *MyErr\n    return p\n}\n\nfmt.Println(f() == nil)\n```\nWhat does this print, and why?",
+    q: `\`\`\`go
+type MyErr struct{ msg string }
+func (e *MyErr) Error() string { return e.msg }
+
+func f() error {
+    var p *MyErr
+    return p
+}
+
+fmt.Println(f() == nil)
+\`\`\`
+What does this print, and why?`,
     options: [
       "true — p is nil, so the returned error is nil too",
       "false — the error interface holds a non-nil type descriptor around a nil *MyErr",

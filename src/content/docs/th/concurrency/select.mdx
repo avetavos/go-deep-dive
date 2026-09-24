@@ -389,7 +389,19 @@ export const quizSelect = [
     explain: "time.After return channel แบบ receive-only ที่ select รอพร้อมกับ case อื่นได้ — จุดสำคัญคือมันไม่ block ด้วยตัวเอง select ต่างหากที่เป็นตัวรอ"
   },
   {
-    q: "```go\na, b := make(chan int, 1), make(chan int, 1)\nclose(a)\nfor a != nil || b != nil {\n    select {\n    case _, ok := <-a:\n        if !ok { a = nil }\n    case v := <-b:\n        fmt.Println(v)\n    }\n}\n```\nอะไรกันไม่ให้ loop นี้ spin ตลอดไปบน channel a ที่ close แล้วและว่างเปล่า?",
+    q: `\`\`\`go
+a, b := make(chan int, 1), make(chan int, 1)
+close(a)
+for a != nil || b != nil {
+    select {
+    case _, ok := <-a:
+        if !ok { a = nil }
+    case v := <-b:
+        fmt.Println(v)
+    }
+}
+\`\`\`
+อะไรกันไม่ให้ loop นี้ spin ตลอดไปบน channel a ที่ close แล้วและว่างเปล่า?`,
     options: [
       "ไม่มีอะไรกัน — loop นี้ spin ตลอดไปเผา CPU",
       "การตั้ง a เป็น nil เมื่อ branch !ok ทำงาน จะปิดการใช้งาน case นั้นถาวร",
@@ -400,7 +412,18 @@ export const quizSelect = [
     explain: "case ของ nil channel ไม่มีวันพร้อมเลย ดังนั้นเมื่อ a ถูก nil-out แล้ว select จะพิจารณาได้แค่ case ของ b เท่านั้น (หรือ block ถ้า b ไม่พร้อมเช่นกัน) — นี่คือ nil-to-disable idiom มาตรฐาน"
   },
   {
-    q: "```go\nfor {\n    select {\n    case <-ctx.Done():\n        fmt.Println(\"stopping\")\n        break\n    case v := <-work:\n        process(v)\n    }\n}\n```\nสมมติว่า ctx ถูกยกเลิกไปแล้ว เกิดอะไรขึ้น?",
+    q: `\`\`\`go
+for {
+    select {
+    case <-ctx.Done():
+        fmt.Println("stopping")
+        break
+    case v := <-work:
+        process(v)
+    }
+}
+\`\`\`
+สมมติว่า ctx ถูกยกเลิกไปแล้ว เกิดอะไรขึ้น?`,
     options: [
       "loop print \"stopping\" ครั้งเดียวแล้ว exit เพราะ break ออกจาก for loop",
       "loop print \"stopping\" ซ้ำตลอดไป — break ออกได้แค่จาก select ไม่ใช่ for",
@@ -411,7 +434,12 @@ export const quizSelect = [
     explain: "break เล็งไปที่ for, switch, หรือ select ที่อยู่ในสุด — ตรงนี้คือ select case ของ ctx.Done() จะพร้อมตลอดไปเมื่อถูกยกเลิกแล้ว ทำให้ for loop กลับเข้า select ทันทีแล้วชน case เดิมซ้ำ ๆ ตลอดไป"
   },
   {
-    q: "```go\nfunc main() {\n    select {}\n}\n```\nเกิดอะไรขึ้นเมื่อรัน โดยไม่มี goroutine อื่นเริ่มไว้เลย?",
+    q: `\`\`\`go
+func main() {
+    select {}
+}
+\`\`\`
+เกิดอะไรขึ้นเมื่อรัน โดยไม่มี goroutine อื่นเริ่มไว้เลย?`,
     options: [
       "compile และ exit ทันทีโดยไม่มี output",
       "fatal error: all goroutines are asleep - deadlock!",

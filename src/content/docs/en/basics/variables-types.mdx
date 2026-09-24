@@ -395,7 +395,16 @@ export const quizVariables = [
     explain: ":= is only legal inside function bodies (including their nested blocks) — package-level declarations must use var."
   },
   {
-    q: "```go\nfunc run() error {\n    var err error\n    if v, err := step(); err != nil {\n        fmt.Println(v, err)\n    }\n    return err\n}\n```\nIf step() always returns a non-nil error, what does run() return?",
+    q: `\`\`\`go
+func run() error {
+    var err error
+    if v, err := step(); err != nil {
+        fmt.Println(v, err)
+    }
+    return err
+}
+\`\`\`
+If step() always returns a non-nil error, what does run() return?`,
     options: [
       "The error returned by step()",
       "nil, because the if statement's err shadows the outer one",
@@ -406,7 +415,12 @@ export const quizVariables = [
     explain: ":= inside the if only needs one new variable (v), so it happily declares a brand-new err scoped to the if block. The outer err is never touched, so run() returns nil even though step() failed.",
   },
   {
-    q: "```go\nvar small int8 = 127\nsmall++\nfmt.Println(small)\n```\nWhat does this print?",
+    q: `\`\`\`go
+var small int8 = 127
+small++
+fmt.Println(small)
+\`\`\`
+What does this print?`,
     options: [
       "128",
       "-128",
@@ -417,7 +431,11 @@ export const quizVariables = [
     explain: "int8's range is -128 to 127. Incrementing past 127 wraps silently to -128 — Go performs no runtime overflow check on ordinary arithmetic."
   },
   {
-    q: "```go\nconst big = 1 << 62\nvar v int32 = int32(big)\n```\nDoes this compile?",
+    q: `\`\`\`go
+const big = 1 << 62
+var v int32 = int32(big)
+\`\`\`
+Does this compile?`,
     options: [
       "Yes, v ends up 0 after truncation",
       "Yes, v ends up a wrapped negative number",

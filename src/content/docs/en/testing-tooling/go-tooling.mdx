@@ -421,7 +421,18 @@ export const quizGoTooling = [
     explain: "go run compiles to a temporary location, executes it, and cleans up — nothing is left on disk. go build writes a named binary you can run again later."
   },
   {
-    q: "```go\ntype Safe struct {\n    mu    sync.Mutex\n    count int\n}\nfunc process(s Safe) { // takes Safe by value\n    s.mu.Lock()\n    defer s.mu.Unlock()\n    s.count++\n}\n```\nWhich go vet analyzer flags this, and why?",
+    q: `\`\`\`go
+type Safe struct {
+    mu    sync.Mutex
+    count int
+}
+func process(s Safe) { // takes Safe by value
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    s.count++
+}
+\`\`\`
+Which go vet analyzer flags this, and why?`,
     options: [
       "printf — because count is printed incorrectly elsewhere",
       "copylocks — passing Safe by value copies the mutex, so process locks an independent copy that protects nothing",
@@ -432,7 +443,15 @@ export const quizGoTooling = [
     explain: "Every call to process(s) copies the whole struct, including the mutex's internal state. copylocks flags exactly this: 'passes lock by value'. It is a bug the moment the function signature takes Safe by value, regardless of whether it is called concurrently — the copy itself is already broken."
   },
   {
-    q: "```go\ngo func() {\n    wg.Add(1)\n    defer wg.Done()\n    doWork()\n}()\nwg.Wait()\n```\nWhat real go vet message does the waitgroup analyzer report here, and what is the actual race?",
+    q: `\`\`\`go
+go func() {
+    wg.Add(1)
+    defer wg.Done()
+    doWork()
+}()
+wg.Wait()
+\`\`\`
+What real go vet message does the waitgroup analyzer report here, and what is the actual race?`,
     options: [
       "'WaitGroup.Add called from inside new goroutine' — wg.Wait() in the parent can return before Add ever runs, since the goroutine's scheduling is not guaranteed to happen before Wait",
       "'assignment copies lock value' — WaitGroup contains a mutex internally",

@@ -354,7 +354,23 @@ export const quizGoroutines = [
     explain: "GOMAXPROCS sets the number of Ps — the scheduling contexts that let a goroutine actually execute Go code. It caps parallelism, not the total number of goroutines you can create, which is unbounded up to memory limits."
   },
   {
-    q: "```go\nfunc leaky() {\n    ch := make(chan int)\n    go func() {\n        <-ch\n    }()\n}\n\nfunc main() {\n    for i := 0; i < 5; i++ {\n        leaky()\n    }\n    time.Sleep(50 * time.Millisecond)\n    fmt.Println(runtime.NumGoroutine())\n}\n```\nWhat happens to the 5 goroutines started inside leaky?",
+    q: `\`\`\`go
+func leaky() {
+    ch := make(chan int)
+    go func() {
+        <-ch
+    }()
+}
+
+func main() {
+    for i := 0; i < 5; i++ {
+        leaky()
+    }
+    time.Sleep(50 * time.Millisecond)
+    fmt.Println(runtime.NumGoroutine())
+}
+\`\`\`
+What happens to the 5 goroutines started inside leaky?`,
     options: [
       "Each one runs to completion because ch is buffered by default",
       "They all leak — ch has no sender and is never closed, so each receive blocks forever",
@@ -365,7 +381,18 @@ export const quizGoroutines = [
     explain: "ch is unbuffered and nothing ever sends on it or closes it, so all five receives block permanently. The GC cannot reclaim a goroutine that is still runnable/blocked — that is precisely what makes this a leak rather than an ordinary freed allocation."
   },
   {
-    q: "```go\nfunc main() {\n    defer func() {\n        if r := recover(); r != nil {\n            fmt.Println(\"recovered:\", r)\n        }\n    }()\n    go func() { panic(\"boom\") }()\n    time.Sleep(100 * time.Millisecond)\n}\n```\nDoes the deferred recover() in main catch the panic?",
+    q: `\`\`\`go
+func main() {
+    defer func() {
+        if r := recover(); r != nil {
+            fmt.Println("recovered:", r)
+        }
+    }()
+    go func() { panic("boom") }()
+    time.Sleep(100 * time.Millisecond)
+}
+\`\`\`
+Does the deferred recover() in main catch the panic?`,
     options: [
       "Yes — recover() catches any panic anywhere in the program",
       "No — recover only catches a panic in the same goroutine where it is deferred, so the process crashes",

@@ -446,7 +446,16 @@ export const quizGenerics = [
     explain: "[T Number] ประกาศ T เป็น type parameter; Number คือ constraint ที่จำกัดว่า concrete type ใดสามารถแทน T ได้ที่แต่ละ call site"
   },
   {
-    q: "```go\ntype Number interface {\n    ~int | ~float64\n}\n\nfunc main() {\n    var x Number\n}\n```\nโค้ดนี้ compile ผ่านไหม?",
+    q: `\`\`\`go
+type Number interface {
+    ~int | ~float64
+}
+
+func main() {
+    var x Number
+}
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       "ผ่าน x เป็น interface value ที่เริ่มต้นด้วย nil",
       "ไม่ผ่าน — cannot use type Number outside a type constraint",
@@ -457,7 +466,14 @@ export const quizGenerics = [
     explain: "constraint interface ที่มี type term คั่นด้วย | หรือ ~ มีไว้อธิบาย constraint ตอน compile time เท่านั้น — ใช้ข้างใน [T Constraint] ได้ แต่ห้ามใช้เป็น type ของตัวแปรธรรมดา ตรวจสอบแล้วบน 1.26.5 ว่านี่คือข้อความที่ compiler ฟ้องจริง ๆ"
   },
   {
-    q: "```go\ntype Stack[T any] struct{ items []T }\n\nfunc main() {\n    var s Stack\n}\n```\nจะเกิดอะไรขึ้น?",
+    q: `\`\`\`go
+type Stack[T any] struct{ items []T }
+
+func main() {
+    var s Stack
+}
+\`\`\`
+จะเกิดอะไรขึ้น?`,
     options: [
       "s เป็น Stack[any] โดย default",
       "compile error: cannot use generic type Stack[T any] without instantiation",

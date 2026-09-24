@@ -179,7 +179,12 @@ export const quizIndex = [
     explain: "Go compile ตรงไปเป็น native machine code binary ที่ได้ไม่ต้องติดตั้ง runtime แยกเพื่อรัน — ต่างจากไฟล์ bytecode ของ JVM หรือ interpreted script"
   },
   {
-    q: "```go\nvar a int = 3\nvar b float64 = 1.5\nfmt.Println(a + b)\n```\nโค้ดนี้ compile ผ่านไหม?",
+    q: `\`\`\`go
+var a int = 3
+var b float64 = 1.5
+fmt.Println(a + b)
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       "ผ่าน print 4.5",
       "ผ่าน print 4 (b ถูก truncate เป็น int)",
@@ -190,7 +195,17 @@ export const quizIndex = [
     explain: "Go ไม่มี implicit numeric conversion แม้แต่ตอนเรียก variadic function อย่าง fmt.Println ก็ตาม a กับ b ต้องถูกแปลงให้เป็น type เดียวกันอย่างชัดเจนก่อน เช่น float64(a) + b ถึงจะบวกกันได้"
   },
   {
-    q: "```go\ntype Config struct {\n    OnReady func()\n}\n\nfunc main() {\n    c := Config{}\n    c.OnReady()\n}\n```\nโค้ดนี้จะเกิดอะไรขึ้นตอนรัน?",
+    q: `\`\`\`go
+type Config struct {
+    OnReady func()
+}
+
+func main() {
+    c := Config{}
+    c.OnReady()
+}
+\`\`\`
+โค้ดนี้จะเกิดอะไรขึ้นตอนรัน?`,
     options: [
       "ไม่ print อะไรและจบโปรแกรมปกติ",
       "panic: nil pointer dereference",

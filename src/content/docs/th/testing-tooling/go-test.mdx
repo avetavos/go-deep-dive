@@ -639,7 +639,18 @@ export const quizGoTest = [
     explain: "compiler จำ _test.go จากชื่อไฟล์ แล้วไม่รวมไฟล์เหล่านี้ใน build ปกติ (ที่ไม่ใช่ test)"
   },
   {
-    q: "```go\nfunc TestGroup(t *testing.T) {\n    for _, name := range []string{\"a\", \"b\"} {\n        t.Run(name, func(t *testing.T) {\n            t.Parallel()\n            t.Log(name)\n        })\n    }\n    t.Log(\"loop done\")\n}\n```\n\"loop done\" พิมพ์ตอนไหนเทียบกับสองบรรทัด t.Log(name)?",
+    q: `\`\`\`go
+func TestGroup(t *testing.T) {
+    for _, name := range []string{"a", "b"} {
+        t.Run(name, func(t *testing.T) {
+            t.Parallel()
+            t.Log(name)
+        })
+    }
+    t.Log("loop done")
+}
+\`\`\`
+"loop done" พิมพ์ตอนไหนเทียบกับสองบรรทัด t.Log(name)?`,
     options: [
       "หลังจากทั้งสอง subtest พิมพ์ชื่อของตัวเองไปแล้ว",
       "ก่อนที่ subtest ทั้งสองจะกลับมารัน — parent ถึงจุดจบของ loop ขณะ subtest ยังถูกหยุดอยู่",
@@ -672,7 +683,17 @@ export const quizGoTest = [
     explain: "race detector รายงานเฉพาะ race ที่เกิดขึ้นจริงบน path และการสลับ goroutine ที่ถูกใช้ระหว่างรันครั้งนั้น มันพิสูจน์ไม่ได้ว่าไม่มี race ที่ test suite ของคุณไม่เคยไปกระตุ้นให้เกิด"
   },
   {
-    q: "```go\nfunc assertPositive(t *testing.T, n int) {\n    if n <= 0 {\n        t.Fatalf(\"got %d\", n)\n    }\n}\nfunc TestX(t *testing.T) {\n    assertPositive(t, -1) // line 8\n}\n```\nรายงาน error ชี้ไปเลขบรรทัดไหน และแก้ด้วยบรรทัดเดียวอะไรที่เปลี่ยนสิ่งนั้น?",
+    q: `\`\`\`go
+func assertPositive(t *testing.T, n int) {
+    if n <= 0 {
+        t.Fatalf("got %d", n)
+    }
+}
+func TestX(t *testing.T) {
+    assertPositive(t, -1) // line 8
+}
+\`\`\`
+รายงาน error ชี้ไปเลขบรรทัดไหน และแก้ด้วยบรรทัดเดียวอะไรที่เปลี่ยนสิ่งนั้น?`,
     options: [
       "ชี้ไปบรรทัด 8 (call site) อยู่แล้ว — ไม่ต้องแก้",
       "ชี้ไปบรรทัด t.Fatalf ข้างใน assertPositive; เพิ่ม t.Helper() เป็นบรรทัดแรกใน assertPositive ทำให้มันชี้ไปบรรทัด 8 แทน",

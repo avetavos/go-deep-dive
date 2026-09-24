@@ -305,7 +305,22 @@ export const quizInterfaces = [
     explain: "การตอบสนอง interface ของ Go เป็นแบบ structural: type ไม่ต้องประกาศอะไรเลย แค่มี method set ที่ถูกต้อง นี่คือสิ่งที่ทำให้ type ใน package หนึ่งตอบสนอง interface ใน package อื่นได้โดยไม่มีฝ่ายไหน import อีกฝ่าย"
   },
   {
-    q: "```go\ntype MyErr struct{ msg string }\nfunc (e *MyErr) Error() string { return e.msg }\n\nfunc f(fail bool) error {\n    var p *MyErr\n    if fail {\n        p = &MyErr{msg: \"boom\"}\n    }\n    return p\n}\n\nerr := f(false)\nfmt.Println(err == nil)\n```\nโค้ดนี้ print อะไร?",
+    q: `\`\`\`go
+type MyErr struct{ msg string }
+func (e *MyErr) Error() string { return e.msg }
+
+func f(fail bool) error {
+    var p *MyErr
+    if fail {
+        p = &MyErr{msg: "boom"}
+    }
+    return p
+}
+
+err := f(false)
+fmt.Println(err == nil)
+\`\`\`
+โค้ดนี้ print อะไร?`,
     options: [
       "true — p เป็น nil ดังนั้น error ที่ return ก็เป็น nil",
       "false — interface เก็บ type descriptor ที่ไม่ nil ล้อมรอบ *MyErr ที่ nil",
@@ -316,7 +331,13 @@ export const quizInterfaces = [
     explain: "err คือ (type: *MyErr, data: nil) ไม่ใช่ (nil, nil) interface จะ == nil ก็ต่อเมื่อทั้ง type และ data เป็น nil ดังนั้น typed nil pointer นี้ทำให้ comparison เป็น false — กับดักคลาสสิกของโค้ดที่ AI สร้าง"
   },
   {
-    q: "```go\nvar a, b any\na = []int{1, 2}\nb = []int{1, 2}\nfmt.Println(a == b)\n```\nจะเกิดอะไรขึ้นตอนรัน?",
+    q: `\`\`\`go
+var a, b any
+a = []int{1, 2}
+b = []int{1, 2}
+fmt.Println(a == b)
+\`\`\`
+จะเกิดอะไรขึ้นตอนรัน?`,
     options: [
       "print true — slices มี elements เท่ากัน",
       "print false — slice header ต่างกัน",

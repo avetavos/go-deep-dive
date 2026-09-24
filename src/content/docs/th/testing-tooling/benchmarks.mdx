@@ -348,7 +348,16 @@ export const quizBenchmarks = [
     explain: "-benchmem เปิดคอลัมน์ B/op และ allocs/op ให้ทุก benchmark ในการรันนั้น; b.ReportAllocs() ทำแบบเดียวกันแต่เฉพาะ benchmark function เดียว"
   },
   {
-    q: "```go\nvar sink int\nfunc BenchmarkCompute(b *testing.B) {\n    for i := 0; i < b.N; i++ {\n        r := Compute(42)\n        _ = r\n    }\n}\n```\nทำไมผลลัพธ์ของ benchmark นี้ถึงเชื่อถือไม่ได้เทียบกับการ assign ให้ `sink`?",
+    q: `\`\`\`go
+var sink int
+func BenchmarkCompute(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        r := Compute(42)
+        _ = r
+    }
+}
+\`\`\`
+ทำไมผลลัพธ์ของ benchmark นี้ถึงเชื่อถือไม่ได้เทียบกับการ assign ให้ \`sink\`?`,
     options: [
       "ไม่ได้เชื่อถือไม่ได้ — `_ = r` ปลอดภัยเท่ากับ sink idiom",
       "compiler ที่ optimize สามารถพิสูจน์ได้ตามกฎหมายว่าค่า r ไม่มีใครสังเกต แล้วลบการเรียก Compute ทิ้งได้ เพราะมีแค่ sink idiom (หรือ keep-alive ในตัวของ b.Loop) เท่านั้นที่กันสิ่งนี้",
@@ -381,7 +390,15 @@ export const quizBenchmarks = [
     explain: "b.Loop() reset timer ให้อัตโนมัติ keep ค่าใน loop body ให้ alive กัน dead-code elimination และตั้งแต่ Go 1.26 ไม่ขวางการ inline อีกต่อไป — จึงไม่เหลือเหตุผลให้เลือกรูปแบบ classic ในโค้ดใหม่"
   },
   {
-    q: "```go\nfunc BenchmarkSort(b *testing.B) {\n    for b.Loop() {\n        data := makeRandomSlice(10000) // fresh 10,000-element slice\n        sort.Ints(data)\n    }\n}\n```\nbenchmark นี้วัดอะไรจริง ๆ?",
+    q: `\`\`\`go
+func BenchmarkSort(b *testing.B) {
+    for b.Loop() {
+        data := makeRandomSlice(10000) // fresh 10,000-element slice
+        sort.Ints(data)
+    }
+}
+\`\`\`
+benchmark นี้วัดอะไรจริง ๆ?`,
     options: [
       "เฉพาะ sort.Ints บน slice ขนาด 10,000 element ตามที่ตั้งใจ",
       "ต้นทุนการ allocate และสุ่มค่าของ makeRandomSlice รวมกับ sort.Ints เพราะ setup อยู่ข้างใน loop ที่ถูกวัด",

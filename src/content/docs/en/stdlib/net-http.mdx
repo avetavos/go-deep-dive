@@ -528,7 +528,15 @@ export const quizNetHttp = [
     explain: "Request is one concrete type used everywhere, so a pointer avoids copying its body/context; ResponseWriter needs to be an interface precisely because its real implementation differs between production connections and httptest.ResponseRecorder in tests."
   },
   {
-    q: "```go\nimport _ \"net/http/pprof\"\n\nfunc main() {\n\thttp.HandleFunc(\"/hello\", helloHandler)\n\thttp.ListenAndServe(\":8080\", nil)\n}\n```\nWhat does this expose, and why?",
+    q: `\`\`\`go
+import _ "net/http/pprof"
+
+func main() {
+	http.HandleFunc("/hello", helloHandler)
+	http.ListenAndServe(":8080", nil)
+}
+\`\`\`
+What does this expose, and why?`,
     options: [
       "Nothing extra -- the blank import only affects local tooling, not the running server",
       "The /debug/pprof/* profiling endpoints, because pprof registers them on http.DefaultServeMux during init(), which ListenAndServe(addr, nil) also serves",
@@ -539,7 +547,12 @@ export const quizNetHttp = [
     explain: "net/http/pprof registers its handlers on the shared http.DefaultServeMux as an import side effect; ListenAndServe(addr, nil) serves that same global mux, so both /hello and every /debug/pprof/* route become publicly reachable."
   },
   {
-    q: "```go\nmux := http.NewServeMux()\nmux.HandleFunc(\"GET /items/{id}\", h1)\nmux.HandleFunc(\"GET /items/special\", h2)\n```\nWhich handler runs a GET request for `/items/special`?",
+    q: `\`\`\`go
+mux := http.NewServeMux()
+mux.HandleFunc("GET /items/{id}", h1)
+mux.HandleFunc("GET /items/special", h2)
+\`\`\`
+Which handler runs a GET request for \`/items/special\`?`,
     options: [
       "h1, because wildcard patterns are matched first",
       "h2, because a more specific literal pattern beats a wildcard at the same position",
@@ -550,7 +563,11 @@ export const quizNetHttp = [
     explain: "Verified locally: requesting /items/special returns h2's response (\"literal special\"), while /items/42 falls through to h1's wildcard handler -- ServeMux always prefers the more specific pattern."
   },
   {
-    q: "```go\nclient := &http.Client{}\nresp, err := client.Get(\"https://example.com/slow\")\n```\nWhat is wrong with this client, and what can happen as a result?",
+    q: `\`\`\`go
+client := &http.Client{}
+resp, err := client.Get("https://example.com/slow")
+\`\`\`
+What is wrong with this client, and what can happen as a result?`,
     options: [
       "Nothing -- http.Client{} is already configured with a sensible default timeout",
       "It has no Timeout set (the zero value means no timeout), so a slow or unresponsive server can block this call forever",
@@ -561,7 +578,14 @@ export const quizNetHttp = [
     explain: "http.Client's zero value has Timeout: 0, which per the documentation means no timeout at all -- always set an explicit Timeout for any client that talks to a real network."
   },
   {
-    q: "```go\nresp, err := client.Get(url)\ndefer resp.Body.Close()\nif err != nil {\n\treturn err\n}\n```\nWhat happens when this request fails to connect?",
+    q: `\`\`\`go
+resp, err := client.Get(url)
+defer resp.Body.Close()
+if err != nil {
+	return err
+}
+\`\`\`
+What happens when this request fails to connect?`,
     options: [
       "The function returns the error normally, and Close() is a harmless no-op on a nil Body",
       "resp is nil when err != nil, so defer resp.Body.Close() panics with a nil pointer dereference before the error is ever returned",
@@ -572,7 +596,16 @@ export const quizNetHttp = [
     explain: "Client.Do's documentation states any Response can be nil when err != nil; deferring Body.Close() before the check dereferences a nil pointer -- verified locally, this panics with \"invalid memory address or nil pointer dereference\", and go vet's httpresponse analyzer flags it as \"using resp before checking for errors\"."
   },
   {
-    q: "```go\nresp, err := client.Get(url)\nif err != nil {\n\treturn err\n}\ndefer resp.Body.Close()\ndata, _ := io.ReadAll(resp.Body)\nprocessJSON(data)\n```\nWhat did this code forget to check, and why does it matter?",
+    q: `\`\`\`go
+resp, err := client.Get(url)
+if err != nil {
+	return err
+}
+defer resp.Body.Close()
+data, _ := io.ReadAll(resp.Body)
+processJSON(data)
+\`\`\`
+What did this code forget to check, and why does it matter?`,
     options: [
       "Nothing -- err == nil already guarantees a successful, well-formed JSON response",
       "resp.StatusCode -- Do does not treat a 4xx/5xx response as an error, so processJSON may run on an error page's body instead of real data",

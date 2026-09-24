@@ -430,7 +430,13 @@ export const quizChannels = [
     explain: "ตำแหน่งลูกศรสะท้อนทิศทางข้อมูล: <-chan T แปลว่า \"ข้อมูลไหลออกจาก channel นี้\" (receive-only) ส่วน chan<- T แปลว่า \"ข้อมูลไหลเข้า channel นี้\" (send-only)"
   },
   {
-    q: "```go\nfunc main() {\n    var ch chan int\n    ch <- 1\n}\n```\nเกิดอะไรขึ้นเมื่อรัน?",
+    q: `\`\`\`go
+func main() {
+    var ch chan int
+    ch <- 1
+}
+\`\`\`
+เกิดอะไรขึ้นเมื่อรัน?`,
     options: [
       "compile และรันผ่าน ไม่ print อะไรเลย",
       "panic ด้วย \"send on closed channel\"",
@@ -441,7 +447,13 @@ export const quizChannels = [
     explain: "ch ถูกประกาศแต่ไม่เคยถูก make ดังนั้นมันเป็น nil การ send บน nil channel จะ block ตลอดไป เนื่องจาก main เป็น goroutine เดียวและไม่มีทาง unblock ได้เลย runtime จึงตรวจจับว่าทั้ง program deadlock แล้วจบด้วย fatal error นี้แทนที่จะ hang เงียบ ๆ"
   },
   {
-    q: "```go\nch := make(chan int, 1)\nclose(ch)\nv, ok := <-ch\nfmt.Println(v, ok)\n```\nโค้ดนี้ print อะไร?",
+    q: `\`\`\`go
+ch := make(chan int, 1)
+close(ch)
+v, ok := <-ch
+fmt.Println(v, ok)
+\`\`\`
+โค้ดนี้ print อะไร?`,
     options: [
       "0 false",
       "0 true",

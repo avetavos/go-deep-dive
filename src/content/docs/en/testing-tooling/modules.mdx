@@ -352,7 +352,13 @@ export const quizModules = [
     explain: "go mod init <module-path> creates a go.mod file with the given module path and the current toolchain's version on the go line."
   },
   {
-    q: "```text\n$ go mod graph\nyourmodule github.com/foo/bar@v1.2.0\nyourmodule github.com/baz/qux@v2.0.0\ngithub.com/baz/qux@v2.0.0 github.com/foo/bar@v1.5.0\n```\nWhich version of github.com/foo/bar does minimal version selection put in the build?",
+    q: `\`\`\`text
+$ go mod graph
+yourmodule github.com/foo/bar@v1.2.0
+yourmodule github.com/baz/qux@v2.0.0
+github.com/baz/qux@v2.0.0 github.com/foo/bar@v1.5.0
+\`\`\`
+Which version of github.com/foo/bar does minimal version selection put in the build?`,
     options: [
       "v1.2.0, because it is your module's own direct requirement",
       "v1.5.0, because it is the highest version requested by anything in the graph",
@@ -363,7 +369,11 @@ export const quizModules = [
     explain: "MVS takes the maximum version requested anywhere in the dependency graph for each module — here, your direct requirement (v1.2.0) is lower than what baz/qux needs (v1.5.0), so v1.5.0 is selected. It never jumps to a newer 'latest' that nothing actually asked for."
   },
   {
-    q: "A library you publish has this in its go.mod:\n```\nreplace github.com/foo/bar => ../local-fork-of-bar\n```\nWhat happens when someone else imports your library?",
+    q: `A library you publish has this in its go.mod:
+\`\`\`
+replace github.com/foo/bar => ../local-fork-of-bar
+\`\`\`
+What happens when someone else imports your library?`,
     options: [
       "Their build also uses ../local-fork-of-bar",
       "Their build fails immediately because the path does not exist for them",
@@ -385,7 +395,10 @@ export const quizModules = [
     explain: "go mod tidy reconciles go.mod/go.sum with what your source code actually imports — it does not bump dependencies to newer versions on its own (go get -u does that)."
   },
   {
-    q: "```bash\ngo get golang.org/x/tools/cmd/stringer@latest\n```\nA setup script uses this to install the stringer code-generation tool. What is wrong, and what is the Go 1.24+ fix?",
+    q: `\`\`\`bash
+go get golang.org/x/tools/cmd/stringer@latest
+\`\`\`
+A setup script uses this to install the stringer code-generation tool. What is wrong, and what is the Go 1.24+ fix?`,
     options: [
       "Nothing is wrong — this is the correct way to install a CLI tool",
       "It adds stringer as a real dependency in go.mod's require block instead of installing a standalone binary; use go install stringer@latest, or go get -tool for a version tracked in git",

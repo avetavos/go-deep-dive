@@ -426,7 +426,10 @@ export const quizIterators = [
     explain: "iter.Seq[V] คือ function type ที่รับ callback yield range-over-func เรียก function นั้น และ loop body กลายเป็น callback yield"
   },
   {
-    q: "```go\nsort.Strings(maps.Keys(m))\n```\nโค้ดนี้ compile ผ่านไหม?",
+    q: `\`\`\`go
+sort.Strings(maps.Keys(m))
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       "ผ่าน มัน sort key ของ map ให้ in place",
       "ไม่ผ่าน — maps.Keys คืน iter.Seq[string] ไม่ใช่ []string",
@@ -437,7 +440,22 @@ export const quizIterators = [
     explain: "ตั้งแต่ Go 1.23 maps.Keys คืน iter.Seq[K] ไม่ใช่ slice ตรวจสอบแล้วบน 1.26.5 นี่คือ compile error: cannot use maps.Keys(m) (value of func type iter.Seq[string]) as []string value in argument to sort.Strings ใช้ slices.Sorted(maps.Keys(m)) แทน"
   },
   {
-    q: "```go\nfunc Count(n int) iter.Seq[int] {\n    return func(yield func(int) bool) {\n        for i := 0; i < n; i++ {\n            yield(i)\n        }\n    }\n}\n\nfor v := range Count(5) {\n    if v == 2 {\n        break\n    }\n}\n```\nจะเกิดอะไรขึ้นเมื่อโค้ดนี้รัน?",
+    q: `\`\`\`go
+func Count(n int) iter.Seq[int] {
+    return func(yield func(int) bool) {
+        for i := 0; i < n; i++ {
+            yield(i)
+        }
+    }
+}
+
+for v := range Count(5) {
+    if v == 2 {
+        break
+    }
+}
+\`\`\`
+จะเกิดอะไรขึ้นเมื่อโค้ดนี้รัน?`,
     options: [
       "พิมพ์ 0, 1, 2 แล้วหยุดปกติ",
       "panic: range function continued iteration after function for loop body returned false",
@@ -448,7 +466,12 @@ export const quizIterators = [
     explain: "Count เพิกเฉยต่อค่าที่ yield คืนมา ดังนั้นหลัง loop break (yield คืน false) Count ก็ยังเรียก yield ต่อไป Go runtime ตรวจจับสิ่งนี้และ panic — ตรวจสอบแล้วบน 1.26.5 ทางแก้คือ if !yield(i) { return }"
   },
   {
-    q: "```go\nseq := FromChannel(ch) // reads from a channel until it's closed\nfor v := range seq { /* ... */ }\nfor v := range seq { /* ... */ } // ranging again\n```\nจะเกิดอะไรขึ้นตอน range ครั้งที่สอง?",
+    q: `\`\`\`go
+seq := FromChannel(ch) // reads from a channel until it's closed
+for v := range seq { /* ... */ }
+for v := range seq { /* ... */ } // ranging again
+\`\`\`
+จะเกิดอะไรขึ้นตอน range ครั้งที่สอง?`,
     options: [
       "panic: sequence already consumed",
       "ให้ค่าเดิมซ้ำอีกครั้ง",

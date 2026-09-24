@@ -19,17 +19,20 @@ Go มีสองวิธีในการประกาศตัวแป�
 **`var` declaration** — รูปแบบเต็ม สามารถใช้ได้ทั้งใน package level และใน function:
 
 ```go
-var name string          // declared with zero value
-var age  int = 30        // declared with a value and explicit type
-var pi       = 3.14159   // declared with a value; Go infers the type
+var name string          // zero value: ""
+var age  int             // zero value: 0
+var active bool          // zero value: false
+var count int = 10       // explicit initial value
 ```
 
 **Short declaration `:=`** — ใช้ได้เฉพาะใน function เหมาะสำหรับใช้งานทั่วไป:
 
 ```go
-name := "gopher"   // Go infers the type as string
-age  := 30         // Go infers the type as int
-pi   := 3.14159    // Go infers the type as float64
+func main() {
+    name := "Alice"      // string
+    score := 98.6        // float64
+    done := false        // bool
+}
 ```
 
 `:=` ต้องมีตัวแปรใหม่อย่างน้อยหนึ่งตัวทางซ้าย ถ้าทุกตัวมีอยู่แล้วต้องใช้ `=` กฎ "ต้องมีตัวใหม่อย่างน้อยหนึ่งตัว" นี่เองที่ทำให้เกิด shadowing โดยไม่ตั้งใจได้ง่าย — ดูหัวข้อด้านล่าง
@@ -59,14 +62,14 @@ pi   := 3.14159    // Go infers the type as float64
 Go มี numeric types ที่หลากหลายพร้อมขนาดที่ชัดเจน ส่วน `int`/`uint` ที่ไม่ระบุขนาดจะเท่ากับ word size ของ platform (32 หรือ 64 bit ขึ้นกับ `GOARCH` ไม่ใช่ OS):
 
 ```go
-var i   int     // size depends on platform (32 or 64 bit)
-var i64 int64   // always a 64-bit signed integer
-var u   uint32  // 32-bit unsigned integer
-var f   float64 // double precision floating point
-var b   bool    // true or false
-var s   string  // a sequence of UTF-8 bytes
-var r   rune    // Unicode code point (int32)
-var bt  byte    // raw byte (uint8)
+var i   int     = -100      // platform-sized signed integer
+var u   uint    = 100       // platform-sized unsigned integer
+var i32 int32   = 2_147_483_647
+var f64 float64 = 3.14159
+var b   byte    = 255       // alias for uint8
+var r   rune    = 'A'       // alias for int32; holds a Unicode code point
+var s   string  = "hello"
+var ok  bool    = true
 ```
 
 ใช้ `int` เป็น default สำหรับ integers ยกเว้นมีเหตุผลเฉพาะที่ต้องใช้ขนาดอื่น
@@ -123,12 +126,16 @@ const (
 Go ไม่มี implicit type conversion คุณต้องแปลงอย่างชัดเจนด้วย `T(value)`:
 
 ```go
-var x int     = 10
-var y float64 = float64(x) + 0.5   // x must be converted first
-var z int     = int(y)              // truncates the decimal, does not round
+var x int = 7
+var y float64 = 2.5
 
-s := strconv.Itoa(x)    // int → string
-n, _ := strconv.Atoi(s) // string → int (error ignored with _)
+// sum := x + y  // compile error: mismatched types int and float64
+sum := float64(x) + y   // explicit conversion: 9.5
+
+var n int = int(sum)     // truncates: 9
+
+s := strconv.Itoa(n)       // int → string
+back, _ := strconv.Atoi(s) // string → int (error ignored with _)
 ```
 
 ## Integer Overflow และ `uint` Underflow
@@ -390,7 +397,16 @@ export const quizVariables = [
     explain: ":= ใช้ได้เฉพาะภายใน function body (รวม block ที่ซ้อนอยู่ข้างใน) เท่านั้น — การประกาศระดับ package ต้องใช้ var"
   },
   {
-    q: "```go\nfunc run() error {\n    var err error\n    if v, err := step(); err != nil {\n        fmt.Println(v, err)\n    }\n    return err\n}\n```\nถ้า step() คืนค่า error ที่ไม่เป็น nil เสมอ run() จะ return อะไร?",
+    q: `\`\`\`go
+func run() error {
+    var err error
+    if v, err := step(); err != nil {
+        fmt.Println(v, err)
+    }
+    return err
+}
+\`\`\`
+ถ้า step() คืนค่า error ที่ไม่เป็น nil เสมอ run() จะ return อะไร?`,
     options: [
       "error ที่ step() คืนมา",
       "nil เพราะ err ใน if shadow ตัวนอก",
@@ -401,7 +417,12 @@ export const quizVariables = [
     explain: ":= ใน if ต้องการแค่ตัวแปรใหม่หนึ่งตัว (v) มันจึงประกาศ err ตัวใหม่ที่ scope อยู่แค่ใน if block err ตัวนอกไม่เคยถูกแตะต้อง ดังนั้น run() คืน nil แม้ step() จะล้มเหลวจริง"
   },
   {
-    q: "```go\nvar small int8 = 127\nsmall++\nfmt.Println(small)\n```\nโค้ดนี้ print อะไร?",
+    q: `\`\`\`go
+var small int8 = 127
+small++
+fmt.Println(small)
+\`\`\`
+โค้ดนี้ print อะไร?`,
     options: [
       "128",
       "-128",
@@ -412,7 +433,11 @@ export const quizVariables = [
     explain: "int8 มีช่วง -128 ถึง 127 การเพิ่มค่าเกิน 127 จะ wrap เงียบ ๆ กลับไปเป็น -128 — Go ไม่มี runtime overflow check บนเลขคณิตปกติ"
   },
   {
-    q: "```go\nconst big = 1 << 62\nvar v int32 = int32(big)\n```\nโค้ดนี้ compile ผ่านไหม?",
+    q: `\`\`\`go
+const big = 1 << 62
+var v int32 = int32(big)
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       "ผ่าน v จะได้ 0 หลังถูก truncate",
       "ผ่าน v จะได้เลขลบที่ wrap มา",

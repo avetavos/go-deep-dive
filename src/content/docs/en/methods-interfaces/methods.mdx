@@ -337,7 +337,16 @@ export const quizMethods = [
     explain: "*T's method set contains every method declared on T, both value and pointer receivers. T's method set only contains the value-receiver ones."
   },
   {
-    q: "```go\ntype Counter struct{ n int }\nfunc (c *Counter) Inc() { c.n++ }\n\nfunc main() {\n    m := map[string]Counter{\"a\": {}}\n    m[\"a\"].Inc()\n}\n```\nDoes this compile?",
+    q: `\`\`\`go
+type Counter struct{ n int }
+func (c *Counter) Inc() { c.n++ }
+
+func main() {
+    m := map[string]Counter{"a": {}}
+    m["a"].Inc()
+}
+\`\`\`
+Does this compile?`,
     options: [
       "Yes, and it increments the stored Counter",
       "Yes, but the increment is silently lost",
@@ -348,7 +357,18 @@ export const quizMethods = [
     explain: "Map values are not addressable, so Go cannot form &m[\"a\"] to call the pointer-receiver method. The real compiler error is exactly `cannot call pointer method Inc on Counter`."
   },
   {
-    q: "```go\ntype Safe struct {\n    mu    sync.Mutex\n    count int\n}\nfunc (s Safe) Inc() {\n    s.mu.Lock()\n    defer s.mu.Unlock()\n    s.count++\n}\n```\nWhat does `go vet` report?",
+    q: `\`\`\`go
+type Safe struct {
+    mu    sync.Mutex
+    count int
+}
+func (s Safe) Inc() {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    s.count++
+}
+\`\`\`
+What does \`go vet\` report?`,
     options: [
       "Nothing — this compiles and runs correctly under load",
       "Inc passes lock by value: command-line-arguments.Safe contains sync.Mutex",
@@ -370,7 +390,13 @@ export const quizMethods = [
     explain: "Any named type declared in your own package can have methods, regardless of its underlying type. Only types from other packages, plus pointer types and interface types, are off-limits."
   },
   {
-    q: "```go\nc := &Counter{}\ninc := c.Inc\nc = &Counter{}\ninc()\n```\nWhich Counter does `inc()` increment?",
+    q: `\`\`\`go
+c := &Counter{}
+inc := c.Inc
+c = &Counter{}
+inc()
+\`\`\`
+Which Counter does \`inc()\` increment?`,
     options: [
       "The new Counter assigned on the third line",
       "The original Counter that c pointed to when inc was created",

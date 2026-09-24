@@ -17,7 +17,7 @@ import SpotTheBug from '../../../../components/SpotTheBug.astro';
 ใน Go ทุก source file ต้องเริ่มต้นด้วย `package` declaration Package คือหน่วยของการจัดระเบียบ code ที่ Go ใช้ควบคุม scope และ visibility
 
 ```go
-package main   // declares this file belongs to package main
+package main
 ```
 
 Package name ปกติจะสั้น, lowercase, และตรงกับชื่อ directory (เช่น directory `strings` → `package strings`)
@@ -30,7 +30,7 @@ Program ที่ executable ต้องมี **`package main`** และ fun
 package main
 
 func main() {
-    // program starts here
+    // execution starts here
 }
 ```
 
@@ -44,7 +44,7 @@ Package อื่น ๆ (เช่น library) ไม่มี `func main` แ�
 // single import
 import "fmt"
 
-// grouped import (preferred when importing multiple packages)
+// grouped import — preferred
 import (
     "fmt"
     "strings"
@@ -74,6 +74,18 @@ Go ควบคุม visibility ด้วยตัวพิมพ์ของ�
 |---|---|---|
 | ขึ้นต้นด้วยตัวพิมพ์ใหญ่ | `fmt.Println`, `http.Handler` | **Exported** — ใช้ได้จาก package อื่น |
 | ขึ้นต้นด้วยตัวพิมพ์เล็ก | `myHelper`, `internalMap` | **Unexported** — ใช้ได้เฉพาะใน package นั้น |
+
+ตัวอย่างเช่น:
+
+```go
+package mathutil
+
+// Add is exported — other packages can call mathutil.Add
+func Add(a, b int) int { return a + b }
+
+// helper is unexported — invisible outside this package
+func helper() {}
+```
 
 กฎนี้ใช้กับ functions, types, variables, constants, และ struct fields ทั้งหมด
 
@@ -341,7 +353,14 @@ export const quizPackages = [
     explain: "gofmt เองจะจัดกลุ่มและเรียง import block ที่อยู่ในวงเล็บให้ grouped block เดียวจึงเป็นรูปแบบ idiomatic เมื่อมี import มากกว่าหนึ่งตัว"
   },
   {
-    q: "```go\nimport \"math/rand/v2\"\n\nfunc main() {\n    fmt.Println(v2.IntN(100))\n}\n```\nโค้ดนี้ compile ผ่านไหม?",
+    q: `\`\`\`go
+import "math/rand/v2"
+
+func main() {
+    fmt.Println(v2.IntN(100))
+}
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       "ผ่าน — v2 คือชื่อ package",
       "ไม่ผ่าน — undefined: v2",

@@ -314,7 +314,24 @@ export const quizErrorValues = [
     explain: "nil คือ zero value ของ error interface ตาม convention แล้ว error เป็น nil หมายถึงการเรียกสำเร็จและค่า return ตัวอื่นใช้ได้จริง"
   },
   {
-    q: "```go\ntype MyError struct{ msg string }\nfunc (e *MyError) Error() string { return e.msg }\n\nfunc mightFail(fail bool) error {\n    var e *MyError\n    if fail {\n        e = &MyError{msg: \"boom\"}\n    }\n    return e\n}\n\nfunc main() {\n    err := mightFail(false)\n    fmt.Println(err == nil)\n}\n```\nโค้ดนี้พิมพ์อะไร?",
+    q: `\`\`\`go
+type MyError struct{ msg string }
+func (e *MyError) Error() string { return e.msg }
+
+func mightFail(fail bool) error {
+    var e *MyError
+    if fail {
+        e = &MyError{msg: "boom"}
+    }
+    return e
+}
+
+func main() {
+    err := mightFail(false)
+    fmt.Println(err == nil)
+}
+\`\`\`
+โค้ดนี้พิมพ์อะไร?`,
     options: [
       "true",
       "false",
@@ -325,7 +342,16 @@ export const quizErrorValues = [
     explain: "mightFail คืนตัวแปร e ที่มี type เป็น *MyError ตรง ๆ แม้ e จะเป็น nil pointer ก็ตาม error interface ที่ return กลับมามี concrete type (*MyError) เสมอ จึงไม่ใช่ nil interface — err == nil ได้ false"
   },
   {
-    q: "```go\nfunc run() error {\n    var err error\n    if v, err := step(); err != nil {\n        fmt.Println(\"inner saw:\", v, err)\n    }\n    return err\n}\n```\nสมมติ step() คืน error ที่ไม่ใช่ nil, run() จะ return อะไร?",
+    q: `\`\`\`go
+func run() error {
+    var err error
+    if v, err := step(); err != nil {
+        fmt.Println("inner saw:", v, err)
+    }
+    return err
+}
+\`\`\`
+สมมติ step() คืน error ที่ไม่ใช่ nil, run() จะ return อะไร?`,
     options: [
       "error ที่ step() คืนมา",
       "nil",

@@ -639,7 +639,18 @@ export const quizGoTest = [
     explain: "The compiler recognizes _test.go by name and excludes those files from normal (non-test) builds."
   },
   {
-    q: "```go\nfunc TestGroup(t *testing.T) {\n    for _, name := range []string{\"a\", \"b\"} {\n        t.Run(name, func(t *testing.T) {\n            t.Parallel()\n            t.Log(name)\n        })\n    }\n    t.Log(\"loop done\")\n}\n```\nWhen does \"loop done\" print relative to the two t.Log(name) lines?",
+    q: `\`\`\`go
+func TestGroup(t *testing.T) {
+    for _, name := range []string{"a", "b"} {
+        t.Run(name, func(t *testing.T) {
+            t.Parallel()
+            t.Log(name)
+        })
+    }
+    t.Log("loop done")
+}
+\`\`\`
+When does "loop done" print relative to the two t.Log(name) lines?`,
     options: [
       "After both subtests have already printed their name",
       "Before either subtest resumes — the parent reaches the end of the loop while the subtests are still paused",
@@ -672,7 +683,17 @@ export const quizGoTest = [
     explain: "The race detector only reports races that actually occur on the paths and goroutine interleavings exercised during that run — it cannot prove the absence of races your test suite never triggers."
   },
   {
-    q: "```go\nfunc assertPositive(t *testing.T, n int) {\n    if n <= 0 {\n        t.Fatalf(\"got %d\", n)\n    }\n}\nfunc TestX(t *testing.T) {\n    assertPositive(t, -1) // line 8\n}\n```\nWhat line number does the failure report point to, and what one-line fix changes that?",
+    q: `\`\`\`go
+func assertPositive(t *testing.T, n int) {
+    if n <= 0 {
+        t.Fatalf("got %d", n)
+    }
+}
+func TestX(t *testing.T) {
+    assertPositive(t, -1) // line 8
+}
+\`\`\`
+What line number does the failure report point to, and what one-line fix changes that?`,
     options: [
       "It already points to line 8 (the call site) — no fix needed",
       "It points to the t.Fatalf line inside assertPositive; adding t.Helper() as the first line of assertPositive makes it point to line 8 instead",

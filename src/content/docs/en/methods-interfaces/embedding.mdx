@@ -405,7 +405,19 @@ export const quizEmbedding = [
     explain: "Both forms reach the same field. The short form is available because there is no shallower field or method also named Name; the long form always works regardless."
   },
   {
-    q: "```go\ntype Named struct{ Name string }\nfunc (n *Named) Hello() string { return \"hi \" + n.Name }\n\ntype Employee struct {\n    *Named\n    Dept string\n}\n\ne := Employee{Dept: \"eng\"}\nfmt.Println(e.Hello())\n```\nWhat happens?",
+    q: `\`\`\`go
+type Named struct{ Name string }
+func (n *Named) Hello() string { return "hi " + n.Name }
+
+type Employee struct {
+    *Named
+    Dept string
+}
+
+e := Employee{Dept: "eng"}
+fmt.Println(e.Hello())
+\`\`\`
+What happens?`,
     options: [
       "Prints `hi ` — Name defaults to an empty string",
       "panic: runtime error: invalid memory address or nil pointer dereference",
@@ -416,7 +428,13 @@ export const quizEmbedding = [
     explain: "Employee embeds *Named by pointer, and its zero value leaves that pointer nil — nothing in the literal assigns it. Calling the promoted Hello dereferences the nil *Named to read n.Name, which panics exactly with this message."
   },
   {
-    q: "```go\ntype Cache struct {\n    sync.Mutex\n    data map[string]string\n}\n```\nWhat is the problem with embedding `sync.Mutex` directly like this?",
+    q: `\`\`\`go
+type Cache struct {
+    sync.Mutex
+    data map[string]string
+}
+\`\`\`
+What is the problem with embedding \`sync.Mutex\` directly like this?`,
     options: [
       "It does not compile — sync.Mutex cannot be embedded",
       "Lock and Unlock are promoted into Cache's exported method set, so any external caller can lock/unlock it directly",
@@ -427,7 +445,19 @@ export const quizEmbedding = [
     explain: "Embedding promotes Lock/Unlock to Cache's own public API. A named, unexported field (mu sync.Mutex) keeps the lock private to Cache's own methods, preventing callers from locking around a Cache method that also locks internally."
   },
   {
-    q: "```go\ntype Named struct{ Name string }\nfunc (n *Named) Hello() string { return \"hi \" + n.Name }\ntype Sayer interface{ Hello() string }\n\ntype Employee struct {\n    Named // embedded by value\n    Dept  string\n}\n\nvar _ Sayer = Employee{}\n```\nDoes this compile?",
+    q: `\`\`\`go
+type Named struct{ Name string }
+func (n *Named) Hello() string { return "hi " + n.Name }
+type Sayer interface{ Hello() string }
+
+type Employee struct {
+    Named // embedded by value
+    Dept  string
+}
+
+var _ Sayer = Employee{}
+\`\`\`
+Does this compile?`,
     options: [
       "Yes — Employee always gets every method of Named, promoted",
       "No — Employee (value) does not implement Sayer; Hello has a pointer receiver and Named is embedded by value",

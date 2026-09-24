@@ -124,7 +124,21 @@ export const quizErrorsGenericsOverview = [
     explain: "Errors in Go are ordinary values, not a separate control-flow channel. The caller receives the error alongside the result and decides explicitly what to do with it."
   },
   {
-    q: "```go\ntype MyError struct{ msg string }\nfunc (e *MyError) Error() string { return e.msg }\n\nfunc mightFail(fail bool) error {\n    var e *MyError\n    if fail {\n        e = &MyError{msg: \"boom\"}\n    }\n    return e\n}\n\nfmt.Println(mightFail(false) == nil)\n```\nWhat does this print?",
+    q: `\`\`\`go
+type MyError struct{ msg string }
+func (e *MyError) Error() string { return e.msg }
+
+func mightFail(fail bool) error {
+    var e *MyError
+    if fail {
+        e = &MyError{msg: "boom"}
+    }
+    return e
+}
+
+fmt.Println(mightFail(false) == nil)
+\`\`\`
+What does this print?`,
     options: [
       "true",
       "false",
@@ -135,7 +149,11 @@ export const quizErrorsGenericsOverview = [
     explain: "mightFail returns the *MyError-typed variable directly, so even when it's a nil pointer, the returned error interface has a concrete type — making it a non-nil interface. Verified on 1.26.5: this prints false. Covered in full in Error Values."
   },
   {
-    q: "```go\nvar ve *VErr\nerrors.As(err, ve) // not &ve\n```\nWhat happens?",
+    q: `\`\`\`go
+var ve *VErr
+errors.As(err, ve) // not &ve
+\`\`\`
+What happens?`,
     options: [
       "errors.As returns false",
       "It panics: errors: target must be a non-nil pointer",

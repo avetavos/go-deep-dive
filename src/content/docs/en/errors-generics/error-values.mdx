@@ -314,7 +314,24 @@ export const quizErrorValues = [
     explain: "nil is the zero value of the error interface. By convention, a nil error means the call succeeded and the other return values are valid."
   },
   {
-    q: "```go\ntype MyError struct{ msg string }\nfunc (e *MyError) Error() string { return e.msg }\n\nfunc mightFail(fail bool) error {\n    var e *MyError\n    if fail {\n        e = &MyError{msg: \"boom\"}\n    }\n    return e\n}\n\nfunc main() {\n    err := mightFail(false)\n    fmt.Println(err == nil)\n}\n```\nWhat does this print?",
+    q: `\`\`\`go
+type MyError struct{ msg string }
+func (e *MyError) Error() string { return e.msg }
+
+func mightFail(fail bool) error {
+    var e *MyError
+    if fail {
+        e = &MyError{msg: "boom"}
+    }
+    return e
+}
+
+func main() {
+    err := mightFail(false)
+    fmt.Println(err == nil)
+}
+\`\`\`
+What does this print?`,
     options: [
       "true",
       "false",
@@ -325,7 +342,16 @@ export const quizErrorValues = [
     explain: "mightFail returns the *MyError-typed variable e directly. Even when e is a nil pointer, the returned error interface has a concrete type (*MyError), so it is not a nil interface — err == nil is false."
   },
   {
-    q: "```go\nfunc run() error {\n    var err error\n    if v, err := step(); err != nil {\n        fmt.Println(\"inner saw:\", v, err)\n    }\n    return err\n}\n```\nAssuming step() returns a non-nil error, what does run() return?",
+    q: `\`\`\`go
+func run() error {
+    var err error
+    if v, err := step(); err != nil {
+        fmt.Println("inner saw:", v, err)
+    }
+    return err
+}
+\`\`\`
+Assuming step() returns a non-nil error, what does run() return?`,
     options: [
       "The error returned by step()",
       "nil",

@@ -415,7 +415,11 @@ export const quizWrapping = [
     explain: "errors.Is walks the whole chain — the target error, then everything it wraps in turn — checking identity (or a custom Is method) at each step, not string content."
   },
   {
-    q: "```go\nvar ve *VErr\nerrors.As(err, ve) // note: not &ve\n```\nWhat happens when this runs?",
+    q: `\`\`\`go
+var ve *VErr
+errors.As(err, ve) // note: not &ve
+\`\`\`
+What happens when this runs?`,
     options: [
       "It returns false, since ve is nil",
       "It panics: errors: target must be a non-nil pointer",
@@ -426,7 +430,11 @@ export const quizWrapping = [
     explain: "errors.As needs the address of the target variable so it can write a match into it. Passing ve itself hands over a nil *VErr with nowhere to store the result, which errors.As treats as a caller bug and panics on — verified on 1.26.5."
   },
   {
-    q: "```go\nmulti := fmt.Errorf(\"save failed: %w, %w\", ErrDisk, ErrNet)\nfmt.Println(errors.Unwrap(multi))\n```\nWhat does this print?",
+    q: `\`\`\`go
+multi := fmt.Errorf("save failed: %w, %w", ErrDisk, ErrNet)
+fmt.Println(errors.Unwrap(multi))
+\`\`\`
+What does this print?`,
     options: [
       "ErrDisk",
       "ErrNet",

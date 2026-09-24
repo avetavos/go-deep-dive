@@ -405,7 +405,19 @@ export const quizEmbedding = [
     explain: "ทั้งสอง form ไปถึง field เดียวกัน short form ใช้ได้เพราะไม่มี field หรือ method ที่ depth ตื้นกว่าชื่อ Name เหมือนกัน ส่วน long form ใช้ได้เสมอไม่ว่ากรณีไหน"
   },
   {
-    q: "```go\ntype Named struct{ Name string }\nfunc (n *Named) Hello() string { return \"hi \" + n.Name }\n\ntype Employee struct {\n    *Named\n    Dept string\n}\n\ne := Employee{Dept: \"eng\"}\nfmt.Println(e.Hello())\n```\nเกิดอะไรขึ้น?",
+    q: `\`\`\`go
+type Named struct{ Name string }
+func (n *Named) Hello() string { return "hi " + n.Name }
+
+type Employee struct {
+    *Named
+    Dept string
+}
+
+e := Employee{Dept: "eng"}
+fmt.Println(e.Hello())
+\`\`\`
+เกิดอะไรขึ้น?`,
     options: [
       "print `hi ` — Name เป็นค่า default เป็น empty string",
       "panic: runtime error: invalid memory address or nil pointer dereference",
@@ -416,7 +428,13 @@ export const quizEmbedding = [
     explain: "Employee embed *Named แบบ pointer และ zero value ของมันปล่อย pointer นั้นเป็น nil — ไม่มีอะไรใน literal assign มัน การเรียก promoted Hello dereference *Named ที่ nil เพื่ออ่าน n.Name ซึ่ง panic ด้วยข้อความนี้เป๊ะ ๆ"
   },
   {
-    q: "```go\ntype Cache struct {\n    sync.Mutex\n    data map[string]string\n}\n```\nปัญหาของการ embed `sync.Mutex` ตรง ๆ แบบนี้คืออะไร?",
+    q: `\`\`\`go
+type Cache struct {
+    sync.Mutex
+    data map[string]string
+}
+\`\`\`
+ปัญหาของการ embed \`sync.Mutex\` ตรง ๆ แบบนี้คืออะไร?`,
     options: [
       "compile ไม่ผ่าน — sync.Mutex embed ไม่ได้",
       "Lock และ Unlock ถูก promote เข้าไปใน exported method set ของ Cache ดังนั้น caller ภายนอกใดก็ lock/unlock มันตรง ๆ ได้",
@@ -427,7 +445,19 @@ export const quizEmbedding = [
     explain: "embedding promote Lock/Unlock เข้าไปใน public API ของ Cache เอง named, unexported field (mu sync.Mutex) เก็บ lock ให้เป็นส่วนตัวของ methods ของ Cache เท่านั้น ป้องกัน caller lock คร่อม method ของ Cache ที่ lock ภายในเองอีกที"
   },
   {
-    q: "```go\ntype Named struct{ Name string }\nfunc (n *Named) Hello() string { return \"hi \" + n.Name }\ntype Sayer interface{ Hello() string }\n\ntype Employee struct {\n    Named // embedded by value\n    Dept  string\n}\n\nvar _ Sayer = Employee{}\n```\nโค้ดนี้ compile ผ่านไหม?",
+    q: `\`\`\`go
+type Named struct{ Name string }
+func (n *Named) Hello() string { return "hi " + n.Name }
+type Sayer interface{ Hello() string }
+
+type Employee struct {
+    Named // embedded by value
+    Dept  string
+}
+
+var _ Sayer = Employee{}
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       "ผ่าน — Employee ได้ทุก method ของ Named แบบ promote เสมอ",
       "ไม่ผ่าน — Employee (value) ไม่ implement Sayer; Hello มี pointer receiver และ Named ถูก embed แบบ value",

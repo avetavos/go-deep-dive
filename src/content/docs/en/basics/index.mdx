@@ -179,7 +179,12 @@ export const quizIndex = [
     explain: "Go compiles directly to native machine code. The resulting binary needs no separate runtime installed to execute — unlike a JVM bytecode file or an interpreted script."
   },
   {
-    q: "```go\nvar a int = 3\nvar b float64 = 1.5\nfmt.Println(a + b)\n```\nDoes this compile?",
+    q: `\`\`\`go
+var a int = 3
+var b float64 = 1.5
+fmt.Println(a + b)
+\`\`\`
+Does this compile?`,
     options: [
       "Yes, printing 4.5",
       "Yes, printing 4 (b truncated to an int)",
@@ -190,7 +195,17 @@ export const quizIndex = [
     explain: "Go performs no implicit numeric conversion, even in a call to a variadic function like fmt.Println. a and b must be brought to the same type explicitly, e.g. float64(a) + b, before they can be added."
   },
   {
-    q: "```go\ntype Config struct {\n    OnReady func()\n}\n\nfunc main() {\n    c := Config{}\n    c.OnReady()\n}\n```\nWhat happens when this runs?",
+    q: `\`\`\`go
+type Config struct {
+    OnReady func()
+}
+
+func main() {
+    c := Config{}
+    c.OnReady()
+}
+\`\`\`
+What happens when this runs?`,
     options: [
       "It prints nothing and exits cleanly",
       "It panics: nil pointer dereference",

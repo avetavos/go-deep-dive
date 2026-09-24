@@ -389,7 +389,19 @@ export const quizSelect = [
     explain: "time.After returns a receive-only channel that select can wait on alongside other cases — the whole point is that it does not block by itself, select does the waiting."
   },
   {
-    q: "```go\na, b := make(chan int, 1), make(chan int, 1)\nclose(a)\nfor a != nil || b != nil {\n    select {\n    case _, ok := <-a:\n        if !ok { a = nil }\n    case v := <-b:\n        fmt.Println(v)\n    }\n}\n```\nWhat keeps this loop from spinning forever on the closed, empty channel a?",
+    q: `\`\`\`go
+a, b := make(chan int, 1), make(chan int, 1)
+close(a)
+for a != nil || b != nil {
+    select {
+    case _, ok := <-a:
+        if !ok { a = nil }
+    case v := <-b:
+        fmt.Println(v)
+    }
+}
+\`\`\`
+What keeps this loop from spinning forever on the closed, empty channel a?`,
     options: [
       "Nothing — this spins forever burning CPU",
       "Setting a to nil once its !ok branch fires permanently disables that case",
@@ -400,7 +412,18 @@ export const quizSelect = [
     explain: "A nil channel's case is never ready, so once a is nil'd out, select can only ever consider b's case (or block if b never becomes ready) — this is the standard nil-to-disable idiom."
   },
   {
-    q: "```go\nfor {\n    select {\n    case <-ctx.Done():\n        fmt.Println(\"stopping\")\n        break\n    case v := <-work:\n        process(v)\n    }\n}\n```\nAssuming ctx is already cancelled, what happens?",
+    q: `\`\`\`go
+for {
+    select {
+    case <-ctx.Done():
+        fmt.Println("stopping")
+        break
+    case v := <-work:
+        process(v)
+    }
+}
+\`\`\`
+Assuming ctx is already cancelled, what happens?`,
     options: [
       "The loop prints \"stopping\" once and exits, because break exits the for loop",
       "The loop prints \"stopping\" repeatedly forever — break only exits the select, not the for",
@@ -411,7 +434,12 @@ export const quizSelect = [
     explain: "break targets the innermost for, switch, or select — here that is the select. ctx.Done()'s case stays permanently ready once cancelled, so the for loop immediately re-enters select and hits the same case again, forever."
   },
   {
-    q: "```go\nfunc main() {\n    select {}\n}\n```\nWhat happens when this runs, with no other goroutines started?",
+    q: `\`\`\`go
+func main() {
+    select {}
+}
+\`\`\`
+What happens when this runs, with no other goroutines started?`,
     options: [
       "It compiles and exits immediately with no output",
       "fatal error: all goroutines are asleep - deadlock!",

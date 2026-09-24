@@ -14,21 +14,25 @@ import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## if — พร้อม Init Statement
 
-`if` statement ใน Go คล้ายกับภาษาอื่น แต่มีความสามารถพิเศษ: สามารถมี **init statement** ก่อน condition ได้ ตัวแปรที่ประกาศใน init statement มี scope แค่ภายใน `if` block นั้น:
+`if` statement ใน Go คล้ายกับภาษาอื่น แต่ parenthesis รอบ condition ถูกตัดออก — ส่วน brace ต้องมีเสมอ:
 
 ```go
-// standard form
-if x > 10 {
-    fmt.Println("big")
-}
-
-// with init statement — err is scoped only to the if/else block
-if err := doSomething(); err != nil {
-    fmt.Println("error:", err)
+if x > 0 {
+    fmt.Println("positive")
 }
 ```
 
-Pattern นี้ใช้บ่อยมากกับ error handling ใน Go เพราะ scope ของ `err` ถูกจำกัดให้แคบที่สุด
+Go เพิ่ม **init statement** คั่นด้วย semicolon ก่อน condition ตัวแปรที่ประกาศใน init statement มี scope ครอบทั้ง `if/else` block:
+
+```go
+if err := doWork(); err != nil {
+    fmt.Println("error:", err)
+    return
+}
+// err is not in scope here
+```
+
+Pattern นี้ใช้บ่อยมากกับ operation ที่ return `(value, error)` — มันทำให้ตัวแปร error อยู่ใกล้กับจุดตรวจสอบและไม่ทำให้ scope ข้างนอกรก
 
 ## for — Loop Keyword เดียวของ Go
 
@@ -66,18 +70,17 @@ for {
 `for range` ใช้สำหรับ iterate ผ่าน collections:
 
 ```go
-// range over slice: yields index and value
-nums := []int{10, 20, 30}
-for i, v := range nums {
+fruits := []string{"apple", "banana", "cherry"}
+for i, v := range fruits {
     fmt.Println(i, v)
 }
 
-// only need the value: use _ for the index
-for _, v := range nums {
+// Discard the index with _
+for _, v := range fruits {
     fmt.Println(v)
 }
 
-// range over string: yields rune (Unicode code point), not byte
+// Range over a string yields runes (Unicode code points), not bytes
 for i, r := range "Go!" {
     fmt.Printf("%d: %c\n", i, r)
 }
@@ -482,7 +485,17 @@ export const quizControlFlow = [
     explain: "range บน string จะ decode UTF-8 แล้วคืนค่าเป็น rune โดย i คือ byte offset ที่ rune แต่ละตัวเริ่มต้น — ไม่ใช่การเดินทีละ byte"
   },
   {
-    q: "```go\nfor i := 0; i < 3; i++ {\n    switch i {\n    case 1:\n        break\n    default:\n        fmt.Println(\"processing\", i)\n    }\n}\n```\nโค้ดนี้ print อะไร?",
+    q: `\`\`\`go
+for i := 0; i < 3; i++ {
+    switch i {
+    case 1:
+        break
+    default:
+        fmt.Println("processing", i)
+    }
+}
+\`\`\`
+โค้ดนี้ print อะไร?`,
     options: [
       "processing 0",
       "processing 0 แล้วตามด้วย processing 2",
@@ -493,7 +506,16 @@ export const quizControlFlow = [
     explain: "break ออกจากแค่ switch ไม่ใช่ for ตอน i == 1 มันชน break แล้วไม่ทำอะไรต่อ จากนั้น loop ก็ทำงานต่อปกติไปที่ i == 2"
   },
   {
-    q: "```go\ns := []int{1, 2, 3}\nfor i, v := range s {\n    if i == 0 {\n        s = append(s, 4)\n    }\n    fmt.Println(i, v)\n}\n```\nโค้ดนี้ print กี่บรรทัด?",
+    q: `\`\`\`go
+s := []int{1, 2, 3}
+for i, v := range s {
+    if i == 0 {
+        s = append(s, 4)
+    }
+    fmt.Println(i, v)
+}
+\`\`\`
+โค้ดนี้ print กี่บรรทัด?`,
     options: [
       "3 — range กำหนดความยาว loop ไว้แล้วก่อน append",
       "4 — element ที่ append เข้าไปก็ถูกเยี่ยมด้วย",

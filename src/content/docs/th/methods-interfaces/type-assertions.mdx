@@ -351,7 +351,13 @@ export const quizTypeAssertions = [
     explain: "comma-ok form ไม่มีทาง panic เมื่อ fail มันคืน zero value ของ T และ false ทำให้ caller branch ตาม ok ได้โดยไม่ต้อง recover()"
   },
   {
-    q: "```go\nvar s Shape // nil interface\nc, ok := s.(Circle)\nfmt.Println(c, ok)\n_ = s.(Circle)\n```\nเกิดอะไรขึ้น?",
+    q: `\`\`\`go
+var s Shape // nil interface
+c, ok := s.(Circle)
+fmt.Println(c, ok)
+_ = s.(Circle)
+\`\`\`
+เกิดอะไรขึ้น?`,
     options: [
       "print `{0} false` แล้ว single-value assertion panic: interface conversion: main.Shape is nil, not main.Circle",
       "print `{0} true` แล้วโปรแกรมจบปกติ",
@@ -362,7 +368,15 @@ export const quizTypeAssertions = [
     explain: "comma-ok form ปลอดภัยเสมอ แม้บน nil interface — มันแค่รายงาน ok == false มีแค่ single-value form เท่านั้นที่ panic และข้อความระบุว่า interface เป็น nil อย่างเจาะจง ไม่ใช่ระบุ concrete type ที่ผิด"
   },
   {
-    q: "```go\ntype Shape interface{ Area() float64 }\ntype Circle struct{ Radius float64 }\nfunc (c *Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }\n\nvar s Shape = &Circle{Radius: 2}\n_, ok := s.(Circle)\n```\nโค้ดนี้ compile ผ่านไหม และถ้าผ่าน `ok` เป็นอะไร?",
+    q: `\`\`\`go
+type Shape interface{ Area() float64 }
+type Circle struct{ Radius float64 }
+func (c *Circle) Area() float64 { return 3.14 * c.Radius * c.Radius }
+
+var s Shape = &Circle{Radius: 2}
+_, ok := s.(Circle)
+\`\`\`
+โค้ดนี้ compile ผ่านไหม และถ้าผ่าน \`ok\` เป็นอะไร?`,
     options: [
       "compile ผ่าน; ok เป็น true — Circle และ *Circle ใช้แทนกันได้",
       "compile ผ่าน; ok เป็น false — s เก็บ *Circle ไม่ใช่ Circle",
@@ -373,7 +387,11 @@ export const quizTypeAssertions = [
     explain: "Area มี pointer receiver ดังนั้น method set ของ Circle ไม่เคยมี Area เลย — Circle ไม่มีทางตอบสนอง Shape และ compiler ปฏิเสธ assertion นี้แบบ static แทนที่จะรอ runtime check ที่ไม่มีทางสำเร็จอยู่แล้ว"
   },
   {
-    q: "```go\nvar nf NotFoundError // not a pointer\nerrors.As(err, nf)\n```\nจะเกิดอะไรขึ้นตอนรัน?",
+    q: `\`\`\`go
+var nf NotFoundError // not a pointer
+errors.As(err, nf)
+\`\`\`
+จะเกิดอะไรขึ้นตอนรัน?`,
     options: [
       "คืน false — nf ไม่ตรงกับ type ของ err",
       "คืน true ถ้า err wrap NotFoundError อยู่ที่ไหนสักแห่งใน chain",

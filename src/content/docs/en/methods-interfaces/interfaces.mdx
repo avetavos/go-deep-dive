@@ -305,7 +305,22 @@ export const quizInterfaces = [
     explain: "Go interface satisfaction is structural: a type needs no declaration at all, only the right method set. This is what lets a type in one package satisfy an interface in another without either importing the other."
   },
   {
-    q: "```go\ntype MyErr struct{ msg string }\nfunc (e *MyErr) Error() string { return e.msg }\n\nfunc f(fail bool) error {\n    var p *MyErr\n    if fail {\n        p = &MyErr{msg: \"boom\"}\n    }\n    return p\n}\n\nerr := f(false)\nfmt.Println(err == nil)\n```\nWhat does this print?",
+    q: `\`\`\`go
+type MyErr struct{ msg string }
+func (e *MyErr) Error() string { return e.msg }
+
+func f(fail bool) error {
+    var p *MyErr
+    if fail {
+        p = &MyErr{msg: "boom"}
+    }
+    return p
+}
+
+err := f(false)
+fmt.Println(err == nil)
+\`\`\`
+What does this print?`,
     options: [
       "true — p is nil, so the returned error is nil",
       "false — the interface holds a non-nil type descriptor around a nil *MyErr",
@@ -316,7 +331,13 @@ export const quizInterfaces = [
     explain: "err is (type: *MyErr, data: nil), not (nil, nil). An interface is only == nil when both the type and the data are nil, so this typed nil pointer makes the comparison false — a classic AI-generated-code trap."
   },
   {
-    q: "```go\nvar a, b any\na = []int{1, 2}\nb = []int{1, 2}\nfmt.Println(a == b)\n```\nWhat happens when this runs?",
+    q: `\`\`\`go
+var a, b any
+a = []int{1, 2}
+b = []int{1, 2}
+fmt.Println(a == b)
+\`\`\`
+What happens when this runs?`,
     options: [
       "Prints true — the slices have equal elements",
       "Prints false — different slice headers",

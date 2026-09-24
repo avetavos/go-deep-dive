@@ -483,7 +483,17 @@ export const quizControlFlow = [
     explain: "range over a string decodes UTF-8 and yields runes, with i as the byte offset where each rune starts — not a byte-by-byte walk."
   },
   {
-    q: "```go\nfor i := 0; i < 3; i++ {\n    switch i {\n    case 1:\n        break\n    default:\n        fmt.Println(\"processing\", i)\n    }\n}\n```\nWhat does this print?",
+    q: `\`\`\`go
+for i := 0; i < 3; i++ {
+    switch i {
+    case 1:
+        break
+    default:
+        fmt.Println("processing", i)
+    }
+}
+\`\`\`
+What does this print?`,
     options: [
       "processing 0",
       "processing 0 then processing 2",
@@ -494,7 +504,16 @@ export const quizControlFlow = [
     explain: "break only exits the switch, not the for. i == 1 hits break and does nothing else, then the loop continues normally to i == 2.",
   },
   {
-    q: "```go\ns := []int{1, 2, 3}\nfor i, v := range s {\n    if i == 0 {\n        s = append(s, 4)\n    }\n    fmt.Println(i, v)\n}\n```\nHow many lines does this print?",
+    q: `\`\`\`go
+s := []int{1, 2, 3}
+for i, v := range s {
+    if i == 0 {
+        s = append(s, 4)
+    }
+    fmt.Println(i, v)
+}
+\`\`\`
+How many lines does this print?`,
     options: [
       "3 — range already fixed the loop length before the append",
       "4 — the appended element gets visited too",

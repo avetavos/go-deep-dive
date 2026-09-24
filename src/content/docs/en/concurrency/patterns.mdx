@@ -527,7 +527,16 @@ export const quizPatterns = [
     explain: "The sender is stuck forever with nothing that will ever receive -- that is a leak, not a whole-program deadlock (other goroutines may still be running fine). Giving the sender a ctx.Done() case, or guaranteeing the consumer always drains to close, are the two standard fixes."
   },
   {
-    q: "```go\nfunc worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {\n    defer wg.Done()\n    for j := range jobs {\n        out <- j * 2\n    }\n    close(out)\n}\n```\nThree of these workers share the same out channel. What goes wrong?",
+    q: `\`\`\`go
+func worker(jobs <-chan int, out chan<- int, wg *sync.WaitGroup) {
+    defer wg.Done()
+    for j := range jobs {
+        out <- j * 2
+    }
+    close(out)
+}
+\`\`\`
+Three of these workers share the same out channel. What goes wrong?`,
     options: [
       "Nothing -- close is idempotent, so multiple calls are harmless",
       "Every worker's close(out) races with the others, and the second one to run panics with \"close of closed channel\"",
@@ -538,7 +547,19 @@ export const quizPatterns = [
     explain: "close is not idempotent, and out is shared: the first worker to finish closes it successfully, and any other worker that also finishes and calls close(out) again panics -- exactly the bug the fan-in merge in this lesson is careful to avoid with a single dedicated closer goroutine."
   },
   {
-    q: "```go\nresults := make([]int, 6)\nvar wg sync.WaitGroup\nfor i := 0; i < 6; i++ {\n    wg.Add(1)\n    go func(i int) {\n        defer wg.Done()\n        results[i] = i * i\n    }(i)\n}\nwg.Wait()\n```\nWhy does `go run -race` report no race here, despite 6 goroutines writing to the same slice concurrently?",
+    q: `\`\`\`go
+results := make([]int, 6)
+var wg sync.WaitGroup
+for i := 0; i < 6; i++ {
+    wg.Add(1)
+    go func(i int) {
+        defer wg.Done()
+        results[i] = i * i
+    }(i)
+}
+wg.Wait()
+\`\`\`
+Why does \`go run -race\` report no race here, despite 6 goroutines writing to the same slice concurrently?`,
     options: [
       "go run -race does not check slice writes, only map writes",
       "Each goroutine writes to a different index -- different memory locations, so there is no overlapping access",

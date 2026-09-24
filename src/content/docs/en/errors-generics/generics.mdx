@@ -446,7 +446,16 @@ export const quizGenerics = [
     explain: "[T Number] declares T as a type parameter; Number is the constraint that limits which concrete types may be substituted for T at each call site."
   },
   {
-    q: "```go\ntype Number interface {\n    ~int | ~float64\n}\n\nfunc main() {\n    var x Number\n}\n```\nDoes this compile?",
+    q: `\`\`\`go
+type Number interface {
+    ~int | ~float64
+}
+
+func main() {
+    var x Number
+}
+\`\`\`
+Does this compile?`,
     options: [
       "Yes, x is an interface value that starts out nil",
       "No — cannot use type Number outside a type constraint",
@@ -457,7 +466,14 @@ export const quizGenerics = [
     explain: "A constraint interface with | or ~ type terms only exists to describe compile-time constraints — it can be used inside [T Constraint], but never as the type of an ordinary variable. Verified on 1.26.5, this is exactly the compiler's message."
   },
   {
-    q: "```go\ntype Stack[T any] struct{ items []T }\n\nfunc main() {\n    var s Stack\n}\n```\nWhat happens?",
+    q: `\`\`\`go
+type Stack[T any] struct{ items []T }
+
+func main() {
+    var s Stack
+}
+\`\`\`
+What happens?`,
     options: [
       "s is a Stack[any] by default",
       "Compile error: cannot use generic type Stack[T any] without instantiation",

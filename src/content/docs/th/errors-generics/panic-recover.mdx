@@ -368,7 +368,20 @@ export const quizPanicRecover = [
     explain: "recover() จะดักจับ panic ได้ก็ต่อเมื่อเรียกโดยตรงข้างใน deferred function เท่านั้น ที่อื่นทั้งหมด รวมถึงโค้ดปกติที่ไม่มี panic เกิดขึ้น มันจะคืน nil เฉย ๆ"
   },
   {
-    q: "```go\nfunc tryRecover() any {\n    return recover()\n}\n\nfunc riskyOp() {\n    defer func() {\n        r := tryRecover()\n        fmt.Println(\"recovered:\", r)\n    }()\n    panic(\"boom\")\n}\n```\nเมื่อ riskyOp() ทำงาน จะเกิดอะไรขึ้น?",
+    q: `\`\`\`go
+func tryRecover() any {
+    return recover()
+}
+
+func riskyOp() {
+    defer func() {
+        r := tryRecover()
+        fmt.Println("recovered:", r)
+    }()
+    panic("boom")
+}
+\`\`\`
+เมื่อ riskyOp() ทำงาน จะเกิดอะไรขึ้น?`,
     options: [
       "พิมพ์ \"recovered: boom\" แล้ว return ปกติ",
       "พิมพ์ \"recovered: <nil>\" แล้วโปรแกรมก็ยัง crash ด้วย panic: boom",
@@ -379,7 +392,16 @@ export const quizPanicRecover = [
     explain: "recover() ต้องถูกเรียกตรง ๆ ข้างใน deferred function เพื่อดักจับ panic ที่นี่มันถูกเรียกห่างออกไปหนึ่งชั้น ข้างใน tryRecover จึงคืน nil และ panic เดิมก็ยังคลายต่อไป — ตรวจสอบแล้วบน 1.26.5: Println ทำงานจริง แล้ว process ก็ยัง crash"
   },
   {
-    q: "```go\nfunc main() {\n    go func() {\n        panic(\"boom in goroutine\")\n    }()\n    time.Sleep(100 * time.Millisecond)\n    fmt.Println(\"done\")\n}\n```\nจะเกิดอะไรขึ้น?",
+    q: `\`\`\`go
+func main() {
+    go func() {
+        panic("boom in goroutine")
+    }()
+    time.Sleep(100 * time.Millisecond)
+    fmt.Println("done")
+}
+\`\`\`
+จะเกิดอะไรขึ้น?`,
     options: [
       "พิมพ์ \"done\" แล้ว panic ของ goroutine ถูกเพิกเฉย",
       "ทั้ง process crash; \"done\" ไม่ถูกพิมพ์เลย",

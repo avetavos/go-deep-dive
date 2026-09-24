@@ -17,7 +17,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 Every earlier lesson in this module stayed inside the Go runtime: the memory model governs Go goroutines, the scheduler moves Go goroutines, the garbage collector tracks Go values. Cgo is the one place Go code deliberately steps outside all three — a Go program calls a C function, and for the length of that call the memory model's guarantees, the scheduler's usual bookkeeping, and the garbage collector's view of the world all have a seam in them. Reading cgo code well means knowing exactly where that seam is.
 
 <Callout title="This lesson cannot run in the browser Playground">
-The browser compile proxy this course uses builds every playground with `CGO_ENABLED=0` — no C compiler is available server-side. Every snippet in this lesson that has `import "C"` is shown as a plain ```go``` fence followed by its real output from this machine (Go 1.26.5, darwin/arm64, Apple clang 17.0.0), not wired to a runnable `<Playground>`. The one `<Playground>` in this lesson, further down, is pure Go and needs no C compiler at all.
+The browser compile proxy this course uses builds every playground with `CGO_ENABLED=0` — no C compiler is available server-side. Every snippet in this lesson that has `import "C"` is shown as a plain `go` fence followed by its real output from this machine (Go 1.26.5, darwin/arm64, Apple clang 17.0.0), not wired to a runnable `<Playground>`. The one `<Playground>` in this lesson, further down, is pure Go and needs no C compiler at all.
 </Callout>
 
 ## `import "C"`, the preamble, and `#cgo` directives
@@ -471,7 +471,14 @@ export const quizCgoAndFfi = [
     explain: "cgo only treats a comment as the preamble when it directly precedes `import \"C\"` with nothing in between -- a blank line breaks the association and the comment is just an ordinary comment."
   },
   {
-    q: "```go\nfunc label(id int) string {\n    cs := C.CString(fmt.Sprintf(\"item-%d\", id))\n    C.free(unsafe.Pointer(cs))\n    return C.GoString(cs)\n}\n```\nWhat does this program actually do when run, and why?",
+    q: `\`\`\`go
+func label(id int) string {
+    cs := C.CString(fmt.Sprintf("item-%d", id))
+    C.free(unsafe.Pointer(cs))
+    return C.GoString(cs)
+}
+\`\`\`
+What does this program actually do when run, and why?`,
     options: [
       "It fails to compile because C.free is called before C.GoString",
       "It panics with a use-after-free error every time",
